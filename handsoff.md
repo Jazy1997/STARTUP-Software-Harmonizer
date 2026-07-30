@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-07-30 (sessione 2)
+> Ultimo aggiornamento: 2026-07-30 (sessione 3)
 
 ---
 
@@ -33,8 +33,9 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 **Fase: M0 "Fondamenta" in corso — scaffolding iniziale completato e verificato localmente su Windows.**
 
-Fatto e verificato in questa sessione:
-- Repository git inizializzato (nessun remote configurato ancora).
+Fatto e verificato:
+- Repository git inizializzato. **Remote configurato**: `origin` = https://github.com/Jazy1997/STARTUP-Software-Harmonizer.git, branch `main`, primo commit pushato (`f85d357`) con `--force` sovrascrivendo un upload manuale precedente (4 file soli, senza src/submodule/CI). Repo pubblico.
+- Il push ha incluso `.github/workflows/build.yml`, che ha `on: push`: questo ha **automaticamente avviato una run di GitHub Actions** al primo push (non era l'intenzione — l'utente aveva chiesto di evitare la build in questo passaggio). Run lasciata proseguire su richiesta dell'utente: https://github.com/Jazy1997/STARTUP-Software-Harmonizer/actions/runs/30536034297 — verificarne l'esito alla prossima sessione, in particolare il target **AU su macOS**, mai testato finora.
 - JUCE 8.0.15 aggiunto come **submodule** in `libs/JUCE` (pin esatto sul tag, non su un branch mobile).
 - `CMakeLists.txt` root con `juce_add_plugin`, tre formati richiesti: **VST3, AU (Music Effect / `kAudioUnitType_MusicEffect`), Standalone**.
 - Plugin stub compilato con successo su Windows (MSVC 19.51 / VS 18 Community) per i target **VST3** e **Standalone** (Release x64).
