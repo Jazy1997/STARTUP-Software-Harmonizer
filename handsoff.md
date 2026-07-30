@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-07-30 (sessione 3)
+> Ultimo aggiornamento: 2026-07-30 (sessione 5)
 
 ---
 
@@ -31,42 +31,52 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 "Fondamenta" in corso — scaffolding iniziale completato e verificato localmente su Windows.**
+**Fase: M0 sostanzialmente chiuso in locale; in parallelo prosegue un vertical slice DSP (M1/M2/M3 semplificati) su richiesta esplicita dell'utente. Dentro questo vertical slice, la PresetLibrary (parte di M2, FR-01..10) e' ora completa e funzionale.**
 
 Fatto e verificato:
-- Repository git inizializzato. **Remote configurato**: `origin` = https://github.com/Jazy1997/STARTUP-Software-Harmonizer.git, branch `main`, primo commit pushato (`f85d357`) con `--force` sovrascrivendo un upload manuale precedente (4 file soli, senza src/submodule/CI). Repo pubblico.
-- Il push ha incluso `.github/workflows/build.yml`, che ha `on: push`: questo ha **automaticamente avviato una run di GitHub Actions** al primo push (non era l'intenzione — l'utente aveva chiesto di evitare la build in questo passaggio). Run lasciata proseguire su richiesta dell'utente: https://github.com/Jazy1997/STARTUP-Software-Harmonizer/actions/runs/30536034297 — verificarne l'esito alla prossima sessione, in particolare il target **AU su macOS**, mai testato finora.
-- JUCE 8.0.15 aggiunto come **submodule** in `libs/JUCE` (pin esatto sul tag, non su un branch mobile).
-- `CMakeLists.txt` root con `juce_add_plugin`, tre formati richiesti: **VST3, AU (Music Effect / `kAudioUnitType_MusicEffect`), Standalone**.
-- Plugin stub compilato con successo su Windows (MSVC 19.51 / VS 18 Community) per i target **VST3** e **Standalone** (Release x64).
-- `pluginval --strictness-level 10` eseguito sul VST3 compilato → **SUCCESS** (criterio di uscita di M0 soddisfatto per questo formato/piattaforma).
-- `CLAUDE.md` alla radice con le 11 regole dell'Appendice §15.
-- Workflow CI (`.github/workflows/build.yml`) scritto per Windows + macOS, con gate `pluginval` strictness 10 su VST3 (entrambe le piattaforme) e AU (solo macOS) — **non ancora eseguito**, perché non esiste un remote GitHub a cui fare push.
+- Repository git con remote **origin** = https://github.com/Jazy1997/STARTUP-Software-Harmonizer.git, branch `main`, storia pushata. Repo pubblico. CI del primo push verde su Windows e macOS incluso AU (run https://github.com/Jazy1997/STARTUP-Software-Harmonizer/actions/runs/30536034297).
+- JUCE 8.0.15 + **Cycfi Q** (pitch detection) + **Signalsmith Stretch** (pitch shifting interinale, tag `1.1.0`) come submodule, tutte licenze permissive.
+- Catena audio end-to-end: `PluginProcessor` → downmix mono → `PitchDetector` (Cycfi Q) → snapshot di `harmony::PresetLibrary` → `harmony::HarmonyEngine::getOffsets` (puro calcolo, stateless) → `VoicePool`/`Voice` (fino a 8 voci continue, ciascuna con un `PitchShifter` dietro interfaccia astratta) → somma pesata dry/wet.
+- **PresetLibrary reale (nuovo, sessione 5)** — `src/harmony/PresetLibrary.{h,cpp}`:
+  - Lista ordinata di preset (7 di fabbrica all'avvio), CRUD completo: add/duplicate/rename/remove, `movePreset` per il riordino (FR-06/07: la posizione, 1-based via `getCcValue`, e' gia' concettualmente il futuro valore CC).
+  - ID stabile `juce::Uuid` per preset, indipendente dalla posizione (FR-10). Tetto tecnico 128 preset (FR-02).
+  - **CSV import/export** (`src/harmony/CsvIo.{h,cpp}`, FR-03): intestazione con i 12 gradi + 8 righe (voci) x 12 colonne, cella vuota = stringa vuota, `0` = zero. Verificato andata/ritorno.
+  - **Serializzazione nello stato del plugin** (FR-08): `PresetLibrary::toValueTree()`/`loadFromValueTree()`, incorporata in `getStateInformation`/`setStateInformation` insieme ai parametri APVTS — un progetto salvato porta con se' la propria copia della libreria.
+  - **Libreria globale su disco** (FR-09): `PresetLibrary::saveAsGlobal()`/`loadGlobal()`, file XML in `%APPDATA%\Harmonizer\GlobalPresetLibrary.xml` (o equivalente utente su macOS), operazioni esplicite via bottoni UI, mai automatiche.
+  - **Swap thread-safe verso l'audio thread** (PRD §9.4): la libreria vive dietro `std::shared_ptr<const PresetLibrary>` scambiato sotto `juce::SpinLock` (`HarmonizerAudioProcessor::getPresetLibrary()`/`editPresetLibrary()`), con un singolo "slot retired" per tenere in vita la versione precedente finche' non arriva la modifica successiva. E' un compromesso pragmatico (non hazard-pointer/epoch-based reclamation rigorosa) — vedi §5 per i limiti noti.
+  - `presetIndex` e' ora `AudioParameterInt` 1..128 (non piu' `AudioParameterChoice`): le choices fisse di APVTS non reggono una lista che cambia dimensione a runtime; il valore 1-based coincide gia' col futuro CC posizionale, e valori oltre la libreria attuale vengono ignorati (stesso comportamento di FR-30).
+  - Editor: ComboBox preset sincronizzata via polling (`juce::Timer`, 15 Hz, non un `ComboBoxAttachment`), text editor per rinominare, bottoni Add/Duplicate/Delete/Up/Down/Import CSV/Export CSV/Load Global/Save As Global.
+- Build locale Windows verificata: **VST3 compila** (incluso tutto il codice sopra) **ed e' verde su `pluginval --strictness-level 10`**. `COPY_PLUGIN_AFTER_BUILD` e' di nuovo `TRUE` su richiesta dell'utente — su questa macchina, senza shell elevata, il solo passo di copia post-build fallisce con "Permission denied" (atteso, documentato in `CMakeLists.txt`); l'artefatto compilato resta comunque valido in `build/Harmonizer_artefacts/Release/VST3`.
 
-Non ancora fatto:
-- **AU non è compilabile né validabile su questa macchina** (Windows): il formato è macOS-only. Va verificato in CI su `macos-latest` al primo push, o su un Mac reale.
-- Nessuna licenza JUCE acquistata (si sta sviluppando sotto i termini gratuiti/di valutazione; da chiudere prima della release commerciale).
-- Nessun certificato di firma/notarizzazione avviato (macOS Developer ID, Windows code signing).
-- Nessun remote git configurato — la CI scritta non gira finché non si crea un repo su GitHub (o altro host) e si fa push.
+Non ancora fatto / semplificazioni consapevoli di questo vertical slice (da NON scambiare per requisiti soddisfatti):
+- **VoicePool e' "continuo", non a frase**: nessun `PhraseScheduler`, nessun trigger su onset, nessun congelamento del voicing, nessun furto di frase (FR-43..53).
+- **Formanti**: nessuna correzione (FR-39..42).
+- **Fix/Move, Stability, Glide**: non implementati — il pitch shifter interinale (Signalsmith) e' sempre in modalita' equivalente a "Move" implicito.
+- **MIDI CC, modalita' Play, licensing**: tutti placeholder/non iniziati (M4/M6). Il riordino preset in UI usa bottoni Su/Giu', non drag&drop vero (quello e' UI di M5).
+- **Preset armonici**: 7 di fabbrica generati algoritmicamente — solo **Min** e' verificato contro il prototipo (vedi §5). Gli altri 6 sono standard jazz generici, da sostituire via import CSV quando disponibili i dati reali.
+- **Swap della libreria**: sicuro nel caso normale, non in ogni possibile intreccio di timing estremo (vedi sopra e §5).
+- **AU non compilabile ne' testabile su questa macchina** (Windows) — verificato in CI su macOS.
+- Nessuna licenza JUCE acquistata, nessun certificato di firma avviato.
 
-Contenuto attuale della cartella di progetto (esclusi `build/`, `libs/JUCE/` interni e `tools/` — vedi `.gitignore`):
+Contenuto attuale della cartella di progetto (esclusi `build/`, `libs/*` interni e `tools/` — vedi `.gitignore`):
 ```
 SVILUPPO SOFTWARE/
 ├── .github/workflows/build.yml
-├── .gitignore
-├── .gitmodules
+├── .gitignore / .gitmodules
 ├── CLAUDE.md
 ├── CMakeLists.txt
 ├── PRD-Harmonizer-v1.md
 ├── handsoff.md
-├── libs/JUCE/            (submodule, tag 8.0.15)
+├── libs/{JUCE, q, signalsmith-stretch}/   (submodule)
 └── src/
-    ├── PluginProcessor.{h,cpp}
-    └── PluginEditor.{h,cpp}
+    ├── PluginProcessor.{h,cpp}, PluginEditor.{h,cpp}
+    ├── dsp/PitchDetector.{h,cpp}, PitchShifter.h, SpectralShifter.{h,cpp}
+    ├── harmony/HarmonyPreset.h, HarmonyEngine.{h,cpp}, PresetLibrary.{h,cpp}, CsvIo.{h,cpp}
+    └── voices/Voice.{h,cpp}, VoicePool.{h,cpp}
 ```
 
-Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prosecuzione tecnica di M0):
-- Nome del prodotto, marchio, dominio — non deciso. **Nuova conseguenza pratica**: `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` sono placeholder (`"TBD"`, `Hzso`/`Hmz1`) e vanno confermati prima della beta — cambiarli dopo la release rompe la compatibilità come il tipo AU.
+Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prosecuzione tecnica):
+- Nome del prodotto, marchio, dominio — non deciso. `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` restano placeholder da confermare prima della beta.
 - Tipo di licenza JUCE in funzione del fatturato previsto — non deciso.
 - Backend di licensing — `[DECISION]` entro M5, non ancora aperta.
 - Numero esatto di posizioni del controllo Stability — `[DECISION]` entro M1.
@@ -96,6 +106,43 @@ Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prose
 | `.github/workflows/build.yml` | creato | CI Windows+macOS, gate pluginval strictness 10 — non ancora eseguita (nessun remote) |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 3 (push su GitHub):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `handsoff.md` | aggiornato | Registrato remote, force-push, run CI avviata inavvertitamente |
+
+**Sessione 4 (vertical slice DSP):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `.gitmodules` + `libs/q` | creato | Submodule Cycfi Q (+ submodule annidato `infra`) |
+| `.gitmodules` + `libs/signalsmith-stretch` | creato | Submodule Signalsmith Stretch, tag `1.1.0` |
+| `src/harmony/HarmonyPreset.h` | creato | Tipi `Cell`/`Table`/`Preset` (12×8, `null` vs `0`) |
+| `src/harmony/HarmonyEngine.{h,cpp}` | creato | 7 preset di fabbrica generati algoritmicamente, `degreeOf`/`getOffsets` |
+| `src/dsp/PitchDetector.{h,cpp}` | creato | Wrapper Cycfi Q, pimpl con `unique_ptr` |
+| `src/dsp/PitchShifter.h` | creato | Interfaccia astratta (FR-62) + factory `createDefaultPitchShifter()` |
+| `src/dsp/SpectralShifter.{h,cpp}` | creato | Implementazione interinale su Signalsmith Stretch |
+| `src/voices/Voice.{h,cpp}` | creato | Una voce = un `PitchShifter` + scratch buffer |
+| `src/voices/VoicePool.{h,cpp}` | creato | Somma fino a 8 voci continue (non a frase) |
+| `src/PluginProcessor.{h,cpp}` | modificato | Da dry passthrough a catena completa + APVTS (5 parametri) + save/restore stato |
+| `src/PluginEditor.{h,cpp}` | modificato | ComboBox root/preset, slider voci/dry/wet con attachment APVTS |
+| `CMakeLists.txt` | modificato | Nuovi sorgenti, include dir per q/infra/signalsmith-stretch, `COPY_PLUGIN_AFTER_BUILD FALSE` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
+**Sessione 5 (PresetLibrary):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/harmony/HarmonyPreset.h` | modificato | `Preset` ora ha `juce::Uuid id` (FR-10); `name` diventato `juce::String` |
+| `src/harmony/HarmonyEngine.{h,cpp}` | riscritto | Diventa puro calcolo stateless (namespace di funzioni), non possiede piu' la lista preset |
+| `src/harmony/PresetLibrary.{h,cpp}` | creato | Lista ordinata, CRUD, CC posizionale, ValueTree (FR-08), libreria globale su disco (FR-09) |
+| `src/harmony/CsvIo.{h,cpp}` | creato | Import/export CSV della tabella 12x8 (FR-03) |
+| `src/PluginProcessor.{h,cpp}` | modificato | Swap thread-safe `shared_ptr<const PresetLibrary>`, `presetIndex` da Choice a Int 1..128, stato serializzato include la libreria |
+| `src/PluginEditor.{h,cpp}` | modificato | ComboBox preset dinamica (Timer, no ComboBoxAttachment), text editor rinomina, bottoni gestione libreria |
+| `CMakeLists.txt` | modificato | Nuovi sorgenti `PresetLibrary.cpp`/`CsvIo.cpp`; `COPY_PLUGIN_AFTER_BUILD` rimesso `TRUE` su richiesta utente |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrascritta) a ogni sessione futura.
 
 ---
@@ -122,6 +169,29 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 
 Nessuna modifica al PRD.
 
+**Sessione 3 — push su GitHub:**
+- Controllato il contenuto della repo remota (4 file caricati manualmente dall'utente via web UI) prima di sovrascrivere.
+- Aggiunto remote `origin`, rinominato branch locale `master` → `main`, force-push del commit M0 completo.
+- Push del workflow CI ha avviato automaticamente una run di GitHub Actions (effetto collaterale non richiesto, discusso con l'utente e lasciato proseguire).
+
+**Sessione 4 — vertical slice DSP end-to-end:**
+- Verificata l'esito della run CI della sessione precedente (Windows + macOS entrambe verdi, incluso AU).
+- Aggiunti come submodule: **Cycfi Q** (`libs/q`, con submodule annidato `infra` inizializzato via `git submodule update --init --recursive`) e **Signalsmith Stretch** (`libs/signalsmith-stretch`, tag `1.1.0`). Verificate le licenze (Boost License / MIT) prima di integrarle.
+- Studiata l'API pubblica di entrambe le librerie leggendo header e doc/esempi nel repository stesso (non assunta a memoria), in particolare: `cycfi::q::pitch_detector` (costruttore con range di frequenza + soglia in dB, `operator()` per-sample, `get_frequency()`/`periodicity()`), `q::pitch` per la conversione Hz→MIDI, e `SignalsmithStretch::process()` (STFT, richiede buffer in/out distinti, latenza riportata via `inputLatency()`/`outputLatency()`).
+- Progettato e implementato un algoritmo di generazione dei preset di fabbrica ("drop voicing" ciclico sui toni dell'accordo) **verificato per calcolo diretto** contro l'unico dato di prototipo presente nel PRD (preset Min, d=2 → [-2,-4,-7,-11,null×4]): l'algoritmo riproduce esattamente quei valori. Gli altri 6 preset (Maj, Dom, Sus, Half Dim, Dim, Aug7) usano tonalita' standard di jazz con lo stesso algoritmo, **non verificate sul prototipo reale** — da sostituire con import CSV (FR-03) quando l'utente avra' i dati originali.
+- Implementata la catena completa (vedi §2) e i parametri APVTS.
+- Aggiornato `CMakeLists.txt` con i nuovi sorgenti e gli include path delle librerie header-only.
+- Compilazione, debug e validazione locale (vedi §5 per gli errori incontrati e come sono stati risolti).
+
+**Sessione 5 — PresetLibrary reale (scelta dall'utente tra 4 direzioni proposte):**
+- Chiesto esplicitamente all'utente quale area sviluppare dopo il vertical slice (PresetLibrary / qualita' pitch shifting / motore a frasi / MIDI CC): scelta la PresetLibrary.
+- Riattivato `COPY_PLUGIN_AFTER_BUILD TRUE` su richiesta diretta dell'utente, documentando nel commento CMake che serve una shell elevata su Windows perche' funzioni.
+- Analizzato il requisito FR-05/FR-35 (CC posizionale + parametro discreto automatizzabile) e riconosciuto che confligge con l'uso di `AudioParameterChoice` se la libreria puo' cambiare dimensione a runtime (le "choices" di un parametro APVTS sono fisse). Risolto passando a `AudioParameterInt` 1..128, che modella gia' correttamente la semantica "posizione = valore" richiesta da FR-05.
+- Riconosciuto e affrontato esplicitamente il problema di **thread-safety** descritto (ma non risolto in dettaglio) dal PRD §9.4: mutare la libreria da UI mentre l'audio thread la legge e' una race condition reale. Implementato uno schema a snapshot immutabili (`shared_ptr<const PresetLibrary>`) scambiati sotto `SpinLock`, con un singolo slot "retired" per evitare la distruzione sull'audio thread nel caso normale — vedi §2 per il limite noto di questo compromesso.
+- Riprogettata la separazione dei moduli per rispecchiare l'albero di file del PRD §9.3: `HarmonyEngine` (calcolo puro) + `PresetLibrary` (stato/CRUD/CC) + `CsvIo` (I/O) invece di un'unica classe.
+- Costruito l'editor con sincronizzazione a polling (Timer 15Hz) invece di un `ComboBoxAttachment`, dato che quest'ultimo assume un parametro con scelte statiche.
+- Compilazione, debug (vedi sotto) e validazione pluginval.
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -129,7 +199,17 @@ Nessuna modifica al PRD.
 **Sessione 2:**
 - Primo tentativo di aggiungere JUCE come submodule con `git submodule add --branch 8.0.15 --depth 1 ...` è fallito: git non riesce a fare shallow-clone diretto di un **tag** trattandolo come branch (`'origin/8.0.15' is not a commit and a branch '8.0.15' cannot be created from it`). Risolto clonando il submodule per intero (senza `--depth`/`--branch`) e poi facendo `git checkout 8.0.15` dentro il submodule. Costo: clone completo di JUCE invece che shallow, ma nessun impatto pratico (spazio disco abbondante).
 - Ho impostato per errore `git config user.email` in locale nel repo appena creato (per permettere ai commit di funzionare, dato che non c'era un'identità git globale). Questo viola la regola di non toccare mai la git config. Rimediato subito con `git config --unset user.email` prima di procedere; per committare userò i flag `-c user.name=... -c user.email=...` per-comando, senza persistere nulla.
-- **AU non compilabile né validabile su questa macchina**: è previsto e non un fallimento — il formato Audio Unit richiede macOS/Xcode. Resta da verificare in CI su `macos-latest` o su hardware Apple reale al primo push.
+- **AU non compilabile né validabile su questa macchina**: è previsto e non un fallimento — il formato Audio Unit richiede macOS/Xcode. **Aggiornamento sessione 3**: verificato con successo in CI su `macos-latest`, incluso AU.
+
+**Sessione 4:**
+- **Errore di compilazione (pimpl con `std::optional<Impl>`)**: `PitchDetector` nascondeva `cycfi::q::pitch_detector` dietro un tipo `Impl` forward-dichiarato, tenuto in `std::optional<Impl>`. MSVC ha fallito con una serie di errori `C2139`/`C2079` (`Impl` incompleto non valido per `__is_trivially_destructible` ecc.) in ogni TU diversa da `PitchDetector.cpp`. Causa: a differenza di `std::unique_ptr<T>`, `std::optional<T>` istanzia i type-trait di `T` ovunque il tipo contenitore venga usato, non solo dove il costruttore/distruttore sono definiti — quindi non supporta tipi incompleti come member, anche con distruttore dichiarato esplicitamente e definito nel `.cpp`. Corretto sostituendo con `std::unique_ptr<Impl>` (il pattern pimpl standard, che invece funziona correttamente con tipi incompleti).
+- **Copia automatica del VST3 fallita** (`COPY_PLUGIN_AFTER_BUILD TRUE`): il post-build step di JUCE prova a copiare in `C:\Program Files\Common Files\VST3`, che richiede permessi di amministratore non disponibili in questo ambiente ("Permission denied"). Non e' un bug del codice: e' il comportamento normale su Windows senza privilegi elevati (documentato nella CMake API di JUCE stessa). Risolto disattivando `COPY_PLUGIN_AFTER_BUILD` e documentando in `CMakeLists.txt`/qui come caricare il plugin in un host puntando alla cartella di build (vedi §6).
+- Dopo questi due fix, build VST3 e `pluginval --strictness-level 10` sono verdi con la catena DSP reale.
+
+**Sessione 5:**
+- **Falso "exit code 0"**: la prima build dopo aver aggiunto `PresetLibrary`/`CsvIo` sembrava riuscita (notifica di completamento con exit code 0), ma conteneva in realta' una ventina di errori di compilazione reali (`juce::ValueTree` non trovato). Causa: avevo incanalato l'output della build in `| tail -N`, e in una pipeline bash l'exit code riportato e' quello dell'**ultimo** comando (`tail`, sempre 0), non quello di `cmake --build` — quindi il fallimento vero passava inosservato. Corretto aggiungendo `set -o pipefail` prima dei comandi di build/validazione successivi, cosi' l'exit code della pipeline riflette il primo comando che fallisce. **Lezione da applicare sempre in questo progetto**: mai fidarsi dell'exit code di un comando incanalato in `tail`/`head`/`grep` senza `pipefail`, controllare comunque il contenuto del log per errori.
+- **Errore reale**: `juce::ValueTree` non e' dichiarato includendo solo `<juce_core/juce_core.h>` — `ValueTree` vive nel modulo separato `juce_data_structures`, non in `juce_core`. `PluginProcessor.cpp` aveva gia' funzionato perche' include `juce_audio_processors.h`, che dipende transitivamente da `juce_data_structures`; `PresetLibrary.h`, includendo solo `HarmonyPreset.h` (-> `juce_core`), non ce l'aveva. Risolto aggiungendo `#include <juce_data_structures/juce_data_structures.h>` a `PresetLibrary.h`.
+- Dopo questi due fix, build VST3 e `pluginval --strictness-level 10` sono di nuovo verdi, con la `PresetLibrary` completa inclusa.
 
 Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora affrontati:
 - **Qualità del PSOLA proprietario** non ancora validata all'ascolto (previsto a fine M1). È il rischio più alto per il prodotto: se non regge, serve valutare ZTX PRO di Zynaptiq (costo/trattativa commerciale).
@@ -141,17 +221,24 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-Completare **M0 — Fondamenta** (PRD §12). Rimasto da fare rispetto al criterio di uscita ("build automatica su ogni push, pluginval verde su plugin vuoto"):
+**Immediato — testare in Ableton Live (l'utente ha detto che non puo' ancora farlo in questa sessione, lo fara' in seguito):**
+1. Aprire Ableton Live → Preferences → Plug-Ins → aggiungere come cartella VST3 custom:
+   `SVILUPPO SOFTWARE/build/Harmonizer_artefacts/Release/VST3` (contiene `Harmonizer.vst3`), **oppure** ricompilare da una shell con permessi di amministratore cosi' `COPY_PLUGIN_AFTER_BUILD` copi automaticamente in `C:\Program Files\Common Files\VST3`.
+2. Caricare "Harmonizer" su una traccia audio con sorgente monofonica; provare anche i bottoni della libreria preset (Add/Duplicate/Delete/Up/Down/Import/Export/Load Global/Save As Global) per verificarne l'usabilita' reale, non solo l'armonizzazione.
+3. Ricordare che solo il preset **Min** e' verificato contro il prototipo — gli altri 6 sono standard jazz generici.
 
-1. **Committare** lo stato attuale (repo git locale, nessun commit ancora fatto).
-2. **Creare un repository remoto** (GitHub) e fare push, così la CI in `.github/workflows/build.yml` può effettivamente girare.
-3. **Verificare il build su macOS in CI** (target AU incluso) — non verificabile su questa macchina Windows.
-4. **Verificare `pluginval` strictness 10 anche in CI** per Windows e macOS (in locale è già verde su VST3/Windows).
-5. Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows) — i tempi burocratici possono superare le settimane, vanno iniziate subito.
-6. Decidere la licenza JUCE (Indie vs commerciale, in base al fatturato previsto) prima che il progetto avanzi oltre lo scaffolding.
+**Prossima area di sviluppo — da ridiscutere con l'utente**, tra le direzioni gia' proposte in sessione 4 e non ancora scelte:
+- **Qualita' del pitch shifting (M1)**: Fix/Move per voce, Glide, controllo Stability con `setLatencySamples` dichiarato correttamente (FR-21..23, FR-54..58) — rischio piu' alto secondo il PRD, ma resta comunque il motore Signalsmith interinale finche' non si passa al PSOLA proprietario.
+- **Motore a frasi (M3)**: `PhraseScheduler` reale (trigger su onset, congelamento voicing, furto) al posto delle voci "continue" attuali (FR-43..53).
+- **Controllo MIDI CC (M4)**: router dei 3 CC, modalita' Play, override vs automazione host.
+- **Formanti** (FR-39..42): non ancora affrontate in nessuna direzione proposta finora.
+- Sostituire `SpectralShifter` con `PsolaShifter` proprietario dietro la stessa interfaccia (FR-62) — indipendente dalle altre scelte, ma e' un lavoro DSP sostanzioso a se stante.
 
-**Dopo la chiusura di M0**, passare a **M1 — Detection e shifting** (PRD §12): integrazione Cycfi Q, `PsolaShifter`, `Glide`, Fix/Move, controllo Stability con latenza dichiarata via `setLatencySamples`.
+**A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
+- Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).
+- Decidere la licenza JUCE (Indie vs commerciale, in base al fatturato previsto).
 
-**Prerequisiti/questioni ancora aperte:**
-- Nome prodotto/azienda non deciso: `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` sono placeholder da confermare prima della beta.
-- Nessun accesso a un Mac verificato in questa sessione: da chiarire come/dove verrà validato il target AU (CI cloud macOS vs hardware reale).
+**Questioni ancora aperte:**
+- Nome prodotto/azienda non deciso: `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` restano placeholder.
+- Solo un preset (Min) e' verificato contro il prototipo reale — gli altri 6 sono standard jazz generici, da correggere quando l'utente fornira' i dati veri (ora importabili via CSV).
+- Commit/push di questa sessione: da confermare con l'utente prima di procedere (vedi cronologia — non ancora fatto a fine sessione 5, verificare lo stato di `git status` all'inizio della prossima sessione).

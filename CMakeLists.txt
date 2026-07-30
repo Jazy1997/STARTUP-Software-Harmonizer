@@ -20,6 +20,14 @@ juce_add_plugin(Harmonizer
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    # TRUE: copia il plugin compilato nelle cartelle di default dell'host dopo
+    # ogni build (su Windows: VST3 in "C:\Program Files\Common Files\VST3", AU
+    # in ~/Library/Audio/Plug-Ins/Components su macOS). Su Windows questa
+    # cartella richiede permessi di amministratore: se il build gira in una
+    # shell non elevata, il passo di copia fallisce con "Permission denied"
+    # (il resto della build/l'artefatto in build/Harmonizer_artefacts restano
+    # comunque validi). Per farla funzionare, lanciare la build da una shell
+    # con privilegi di amministratore.
     COPY_PLUGIN_AFTER_BUILD TRUE
     PLUGIN_MANUFACTURER_CODE Hzso
     PLUGIN_CODE Hmz1
@@ -35,6 +43,13 @@ target_sources(Harmonizer
     PRIVATE
         src/PluginProcessor.cpp
         src/PluginEditor.cpp
+        src/dsp/PitchDetector.cpp
+        src/dsp/SpectralShifter.cpp
+        src/harmony/HarmonyEngine.cpp
+        src/harmony/PresetLibrary.cpp
+        src/harmony/CsvIo.cpp
+        src/voices/Voice.cpp
+        src/voices/VoicePool.cpp
 )
 
 target_compile_definitions(Harmonizer
@@ -44,6 +59,15 @@ target_compile_definitions(Harmonizer
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
+)
+
+# Cycfi Q (pitch detection, Boost License) e Signalsmith Stretch (pitch
+# shifting interinale, MIT) sono header-only: bastano gli include path.
+target_include_directories(Harmonizer
+    PRIVATE
+        libs/q/q_lib/include
+        libs/q/infra/include
+        libs/signalsmith-stretch
 )
 
 target_link_libraries(Harmonizer
