@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-07-30 (sessione 6)
+> Ultimo aggiornamento: 2026-07-30 (sessione 7)
 
 ---
 
@@ -31,7 +31,16 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 sostanzialmente chiuso in locale; in parallelo prosegue un vertical slice DSP (M1/M2/M3 semplificati) su richiesta esplicita dell'utente. PresetLibrary (M2, FR-01..10) e Fix/Move+Glide+Stability (M1, FR-21..23/54..58/17) sono ora completi e funzionali dentro questo vertical slice.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e ora anche il motore a frasi (M3, FR-43..53) sono completi e funzionali.**
+
+**Novita' sessione 7 — motore a frasi (M3):**
+- **Rilevamento onset** (FR-43, nuovo `src/dsp/OnsetDetector.{h,cpp}`): inviluppo di picco (`cycfi::q::peak_envelope_follower`) + `cycfi::q::onset_gate` (soglia di livello O pendenza rapida, per catturare anche attacchi morbidi). Un EVENTO di onset e' il fronte di salita del gate; pattern d'uso copiato esattamente dalla documentazione di Cycfi Q in `noise_gate.hpp`.
+- **`Phrase`** (nuovo `src/voices/Phrase.h`): dati di una frase — offset congelati (FR-46) + quali slot fisici occupa + un contatore d'eta' (per FR-52) + un flag `isLive`.
+- **`VoicePool` generalizzato**: da 8 slot fissi a un pool generico di N slot fisici (default/tetto tecnico 32), con lo stesso schema di swap Stability di prima ma ora parametrizzato sul numero di slot.
+- **`PhraseScheduler`** (nuovo, orchestratore): ad ogni onset crea una nuova frase, congelandone gli offset correnti; alloca fino a 8 slot fisici (uno per voce armonica non muta) dal pool, **rubando per intero la frase piu' vecchia** (FR-52) se il pool e' esaurito. **Risoluzione della tensione FR-17/FR-46** (segnalata dal PRD come `[DECISION]` da validare all'ascolto, mai fatto qui): solo la frase piu' recente resta "viva" e segue in tempo reale i cambi di preset/fondamentale finche' la nota che l'ha generata continua a suonare (FR-17); nel momento in cui arriva un nuovo onset, quella frase smette di essere "viva" e resta congelata per sempre a quello che era il suo ultimo voicing (FR-46). Tutte le frasi si liberano insieme quando il segnale in ingresso torna silenzioso.
+- **Furto senza dissolvenza dedicata**: quando uno slot rubato viene riassegnato a una nuova frase, il `Glide` gia' presente in `Voice` fornisce naturalmente la transizione morbida richiesta da FR-52 (>= 20ms, di default 30ms) — nessuna dissolvenza/crossfade separata da costruire.
+- Nuovo parametro `maxSimultaneousVoices` (FR-51, 1..32, default 32): tetto REGOLABILE A COSTO ZERO senza riallocare, perche' i 32 slot fisici sono sempre pre-allocati e il parametro si limita a restringere quanti sono utilizzabili.
+- Editor: slider "Voice Cap" + label "Active" (FR-53, aggiornata dal timer esistente).
 
 **Novita' sessione 6 — qualita' pitch shifting (M1):**
 - **Fix/Move per voce** (FR-21/22/23): `enum class ShiftMode { move, fix }` in `Voice`, settabile indipendentemente per ciascuna delle 8 voci (8 parametri APVTS `voiceFix1..8`, bool). Move (default) = rapporto fisso rispetto all'ingresso, comportamento naturale dello shifter. Fix = la voce insegue una nota ASSOLUTA (nota quantizzata + offset), ricalcolando il rapporto di shift **ogni blocco** sulla base del pitch continuo rilevato — verificato che questo e' sicuro perche' `SignalsmithStretch::setTransposeSemitones` non alloca mai (letto il sorgente: assegna due float e azzera un puntatore a funzione gia' nullo).
@@ -55,15 +64,16 @@ Fatto e verificato:
 - Build locale Windows verificata: **VST3 compila** (incluso tutto il codice sopra) **ed e' verde su `pluginval --strictness-level 10`**. `COPY_PLUGIN_AFTER_BUILD` e' di nuovo `TRUE` su richiesta dell'utente — su questa macchina, senza shell elevata, il solo passo di copia post-build fallisce con "Permission denied" (atteso, documentato in `CMakeLists.txt`); l'artefatto compilato resta comunque valido in `build/Harmonizer_artefacts/Release/VST3`.
 
 Non ancora fatto / semplificazioni consapevoli di questo vertical slice (da NON scambiare per requisiti soddisfatti):
-- **VoicePool e' "continuo", non a frase**: nessun `PhraseScheduler`, nessun trigger su onset, nessun congelamento del voicing, nessun furto di frase (FR-43..53).
+- **Pattern ritmico** (FR-47..50, `[V1.1]`): non implementato, correttamente fuori scope per v1.0. Conseguenza pratica: tutte le voci di una frase entrano "in sync" al trigger (nessun offset temporale tra voci) — questo rende FR-46 osservabile solo nel caso "chord change mentre una frase e' gia' congelata da un onset successivo", MAI nel caso "voce ancora in coda non ancora suonata" (che richiederebbe il pattern con ritardi reali). Quando il pattern editor arrivera', la logica di congelamento in `PhraseScheduler` va rivista per questo caso aggiuntivo.
+- **Risoluzione FR-17/FR-46 non validata all'ascolto**: e' un'interpretazione mia (unica frase "viva" = quella piu' recente, tutte le altre congelate), consistente con la lettera del PRD ma esplicitamente segnalata come `[DECISION]` da verificare — l'utente dovrebbe ascoltarla e confermare che il comportamento sia musicalmente sensato.
 - **Formanti**: nessuna correzione (FR-39..42).
 - **Latenza minima ben oltre il target del PRD**: anche Stability "Fast" (30ms) e' molto piu' della soglia <=15ms richiesta — limite intrinseco del motore STFT interinale (Signalsmith), non raggiungibile prima del PSOLA proprietario.
-- **Swap Stability**: sicuro nel caso normale (stesso compromesso pragmatico della PresetLibrary: nessuna garanzia assoluta in ogni intreccio di timing estremo, niente hazard-pointer/epoch-based reclamation rigorosa).
+- **Swap Stability e furto di frase**: sicuri nel caso normale (stesso compromesso pragmatico della PresetLibrary: nessuna garanzia assoluta in ogni intreccio di timing estremo, niente hazard-pointer/epoch-based reclamation rigorosa).
 - **MIDI CC, modalita' Play, licensing**: tutti placeholder/non iniziati (M4/M6). Il riordino preset in UI usa bottoni Su/Giu', non drag&drop vero (quello e' UI di M5).
 - **Preset armonici**: 7 di fabbrica generati algoritmicamente — solo **Min** e' verificato contro il prototipo (vedi §5). Gli altri 6 sono standard jazz generici, da sostituire via import CSV quando disponibili i dati reali.
 - **AU non compilabile ne' testabile su questa macchina** (Windows) — verificato in CI su macOS.
 - Nessuna licenza JUCE acquistata, nessun certificato di firma avviato.
-- **Non ancora testato per davvero in Ableton in questa sessione** (solo verificato via pluginval) — l'utente ha chiuso Ableton per sbloccare la build, non ha ancora riprovato il caricamento del nuovo VST3.
+- **Non ancora testato per davvero in Ableton** dalla sessione 6 in poi (solo verificato via pluginval) — l'utente non ha ancora potuto riprovare il caricamento del VST3 aggiornato.
 
 Contenuto attuale della cartella di progetto (esclusi `build/`, `libs/*` interni e `tools/` — vedi `.gitignore`):
 ```
@@ -77,9 +87,9 @@ SVILUPPO SOFTWARE/
 ├── libs/{JUCE, q, signalsmith-stretch}/   (submodule)
 └── src/
     ├── PluginProcessor.{h,cpp}, PluginEditor.{h,cpp}
-    ├── dsp/PitchDetector.{h,cpp}, PitchShifter.h, SpectralShifter.{h,cpp}, Glide.h
+    ├── dsp/PitchDetector.{h,cpp}, PitchShifter.h, SpectralShifter.{h,cpp}, Glide.h, OnsetDetector.{h,cpp}
     ├── harmony/HarmonyPreset.h, HarmonyEngine.{h,cpp}, PresetLibrary.{h,cpp}, CsvIo.{h,cpp}
-    └── voices/Voice.{h,cpp}, VoicePool.{h,cpp}
+    └── voices/Voice.{h,cpp}, VoicePool.{h,cpp}, Phrase.h, PhraseScheduler.{h,cpp}
 ```
 
 Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prosecuzione tecnica):
@@ -163,6 +173,19 @@ Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prose
 | `src/PluginEditor.{h,cpp}` | modificato | ComboBox Stability, slider Glide, 8 ToggleButton Fix/Move |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 7 (motore a frasi, M3):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/dsp/OnsetDetector.{h,cpp}` | creato | Inviluppo di picco + onset_gate (Cycfi Q); evento = fronte di salita (FR-43) |
+| `src/voices/Phrase.h` | creato | Dati di una frase: offset congelati, slot assegnati, eta', flag isLive |
+| `src/voices/VoicePool.{h,cpp}` | riscritto | Da 8 slot fissi a pool generico di N slot fisici (default 32) |
+| `src/voices/PhraseScheduler.{h,cpp}` | creato | Trigger onset, congelamento (FR-46), live-update solo frase piu' recente (FR-17), furto (FR-51/52) |
+| `src/PluginProcessor.{h,cpp}` | modificato | Usa `PhraseScheduler` invece di `VoicePool` diretto; nuovo parametro `maxSimultaneousVoices`; wiring onset detection |
+| `src/PluginEditor.{h,cpp}` | modificato | Slider "Voice Cap", label "Active" (FR-53) |
+| `CMakeLists.txt` | modificato | Nuovi sorgenti `OnsetDetector.cpp`, `PhraseScheduler.cpp` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrascritta) a ogni sessione futura.
 
 ---
@@ -219,6 +242,16 @@ Nessuna modifica al PRD.
 - L'utente ha chiuso Ableton Live per errore di sequenza (l'avevamo lasciato aperto con il vecchio VST3 caricato) causando un fallimento di link (`LNK1104`, file bloccato) al primo tentativo di ricompilare: risolto chiudendo Ableton e ricompilando.
 - Dopo il fix del link, build e `pluginval --strictness-level 10` verdi con Fix/Move, Glide e Stability inclusi.
 
+**Sessione 7 — motore a frasi, scelta dall'utente tra le direzioni proposte (dopo una domanda di status su M0):**
+- Chiesto lo stato di M0 prima di procedere: confermato tecnicamente completo (CMake, 3 target, CI, pluginval), con solo decisioni non tecniche in sospeso (licenza JUCE, certificati, nome prodotto).
+- Chiesto di nuovo quale area sviluppare: scelto "Motore a frasi (M3)".
+- Studiata l'API di `q::onset_gate`/`q::noise_gate` (Cycfi Q) leggendo la documentazione inline in `noise_gate.hpp`, che mostra esplicitamente il pattern d'uso raccomandato (inviluppo -> gate): seguito alla lettera invece di indovinare i parametri.
+- **Decisione di design centrale**: interpretato il modello a frase come "una ricetta di offset congelati applicata in continuo al segnale live in ingresso" (non un frammento audio a durata fissa) — dedotto dall'esempio del PRD sulle 16 frasi simultanee generate da una linea di ottavi su un pattern di 2 misure, che ha senso solo se le frasi restano vive finche' non vengono rubate o il segnale tace, non per una durata fissa breve.
+- Risolta esplicitamente (con una scelta motivata, non ancora validata all'ascolto) la tensione FR-17/FR-46 segnalata come `[DECISION]` nel PRD: solo la frase piu' recente resta "viva". Vedi §2 e Phrase.h per il dettaglio.
+- Riutilizzato il `Glide` gia' esistente (da sessione 6) per risolvere la "dissolvenza di almeno 20ms" richiesta da FR-52 sul furto di frase, evitando di costruire un sistema di crossfade/slot di riserva separato.
+- Generalizzato `VoicePool` da 8 slot fissi a un pool di N slot riutilizzabile sia dalle 8 "colonne armoniche" di ogni frase sia dal meccanismo di furto.
+- Build e `pluginval --strictness-level 10` verdi al primo tentativo (nessun errore di compilazione in questa sessione).
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -241,34 +274,37 @@ Nessuna modifica al PRD.
 **Sessione 6:**
 - **LNK1104 al primo tentativo di ricompilare**: "impossibile aprire il file Harmonizer.vst3" durante il link. Causa: Ableton Live aveva ancora il VST3 della sessione precedente caricato/aperto, e Windows blocca la sovrascrittura di un file (dll) in uso da un altro processo. Non un bug — chiesto all'utente di chiudere Ableton, poi ricompilato con successo. **Lezione per le prossime sessioni**: se un link fallisce con LNK1104/1103 su un file .vst3/.dll, prima ipotesi da controllare e' "un host ha ancora il plugin caricato", non un errore di codice.
 
+**Sessione 7:**
+- Nessun errore incontrato: build e pluginval verdi al primo tentativo, nonostante la riscrittura sostanziale di VoicePool e i due nuovi file (OnsetDetector, PhraseScheduler). Probabilmente dovuto ad aver progettato con cura la sincronizzazione dei thread PRIMA di scrivere codice (stesso schema gia' rodato in sessione 5/6), invece di scoprirla per tentativi.
+
 Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora affrontati:
 - **Qualità del PSOLA proprietario** non ancora validata all'ascolto (previsto a fine M1). È il rischio più alto per il prodotto: se non regge, serve valutare ZTX PRO di Zynaptiq (costo/trattativa commerciale).
 - **Tipo di plugin AU** deve essere Music Effect (`aumf`) fin da M0: è una decisione strutturale irreversibile dopo il rilascio (PRD §4.1).
-- **Contraddizione potenziale FR-17 / FR-46**: FR-17 richiede che le voci in suono si ricalcolino subito su cambio accordo/fondamentale; FR-46 richiede che una frase in coda congeli il voicing al trigger. Il PRD stesso segnala di verificarne la coerenza musicale in M2 e allineare le regole se necessario.
+- **FR-17 / FR-46**: implementate entrambe in sessione 7 con una risoluzione esplicita (solo la frase piu' recente segue dal vivo il preset) — **da validare all'ascolto**, come il PRD stesso richiedeva. Non ancora fatto: l'utente non ha ancora potuto testare in Ableton.
 - **Sviluppatore singolo alle prime armi con C++** su un progetto di ~50 settimane — mitigato nel piano con milestone brevi e CI dal giorno uno.
 
 ---
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Immediato — testare in Ableton Live (non ancora rifatto in questa sessione dopo l'ultima build):**
-1. Ableton era stato chiuso per sbloccare la build: riaprirlo e ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza.
-2. Provare in particolare le novita' di questa sessione: alternare Fix/Move su alcune voci con vibrato/bending in ingresso (la differenza dovrebbe essere udibile), cambiare Stability (l'effetto sulla latenza/qualita' e su eventuali click al cambio), provare Glide cambiando accordo su una nota tenuta.
-3. Ricordare i limiti noti: latenza minima ~30ms (motore interinale, non i <=15ms target), solo preset Min verificato contro il prototipo.
+**Immediato — testare in Ableton Live (l'utente non ha ancora potuto, da due sessioni):**
+1. Ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza.
+2. Provare in particolare il motore a frasi (novita' di questa sessione): suonare una linea veloce di note diverse e verificare che si sentano piu' armonizzazioni sovrapposte (FR-45), che cambiare accordo mentre si tiene una nota aggiorni dal vivo la voce (FR-17), e che cambiare accordo DOPO essere passati a una nuova nota NON alteri retroattivamente la frase precedente (FR-46). Provare anche ad abbassare "Voice Cap" a un valore piccolo (es. 4) e suonare rapidamente per sentire il furto di frase in azione.
+3. Continuare a provare anche le novita' di sessione 6 (Fix/Move con vibrato, cambio Stability) se non gia' fatto.
+4. Ricordare i limiti noti: latenza minima ~30ms, solo preset Min verificato, pattern ritmico non implementato (tutte le voci di una frase entrano in sync), risoluzione FR-17/FR-46 non ancora validata all'ascolto.
 
-**Prossima area di sviluppo — da ridiscutere con l'utente**, tra le direzioni gia' proposte (Formanti aggiunta in sessione 6) e non ancora scelte:
-- **Motore a frasi (M3)**: `PhraseScheduler` reale (trigger su onset, congelamento voicing, furto) al posto delle voci "continue" attuali (FR-43..53).
+**Prossima area di sviluppo — da ridiscutere con l'utente**, tra le direzioni proposte e non ancora scelte:
 - **Controllo MIDI CC (M4)**: router dei 3 CC, modalita' Play, override vs automazione host.
 - **Formanti** (FR-39..42): correzione automatica in funzione dello shift, knob Spread, offset per voce.
-- Sostituire `SpectralShifter` con `PsolaShifter` proprietario dietro la stessa interfaccia (FR-62) — indipendente dalle altre scelte, ma e' un lavoro DSP sostanzioso a se stante; risolverebbe anche il problema della latenza minima troppo alta.
+- **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
+- Sostituire `SpectralShifter` con `PsolaShifter` proprietario dietro la stessa interfaccia (FR-62) — lavoro DSP sostanzioso a se stante; risolverebbe anche la latenza minima troppo alta.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).
 - Decidere la licenza JUCE (Indie vs commerciale, in base al fatturato previsto).
 
-**Da confermare con l'utente:** commit/push del lavoro di questa sessione (Fix/Move, Glide, Stability) — non ancora fatto a fine sessione 6, verificare `git status` all'inizio della prossima.
-
 **Questioni ancora aperte:**
 - Nome prodotto/azienda non deciso: `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` restano placeholder.
 - Solo un preset (Min) e' verificato contro il prototipo reale — gli altri 6 sono standard jazz generici, da correggere quando l'utente fornira' i dati veri (ora importabili via CSV).
-- Commit/push di questa sessione: da confermare con l'utente prima di procedere (vedi cronologia — non ancora fatto a fine sessione 5, verificare lo stato di `git status` all'inizio della prossima sessione).
+- Risoluzione FR-17/FR-46 (sessione 7) da validare all'ascolto appena possibile.
+- Commit/push di questa sessione: da confermare con l'utente prima di procedere — verificare `git status` all'inizio della prossima sessione.

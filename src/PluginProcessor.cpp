@@ -10,6 +10,7 @@ namespace ParamIDs
     static const juce::String wetLevel { "wetLevel" };
     static const juce::String stabilityLevel { "stabilityLevel" };
     static const juce::String glideTimeMs { "glideTimeMs" };
+    static const juce::String maxSimultaneousVoices { "maxSimultaneousVoices" };
 
     static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
 }
@@ -66,6 +67,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
         params.push_back (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::voiceFix (v), 1 }, "Voice " + juce::String (v + 1) + " Fix", false));
 
+    // FR-51: tetto configurabile di voci simultanee TRA TUTTE le frasi attive
+    // (non le 8 voci di un singolo preset — quello e' "Num Voices" sopra).
+    // Il range e' 1..hardSlotCapacity: qui il tetto tecnico coincide col
+    // default (32), vedi PhraseScheduler.h.
+    params.push_back (std::make_unique<juce::AudioParameterInt> (
+        juce::ParameterID { ParamIDs::maxSimultaneousVoices, 1 }, "Max Simultaneous Voices",
+        1, HarmonizerAudioProcessor::hardVoiceSlotCapacity, HarmonizerAudioProcessor::hardVoiceSlotCapacity));
+
     return { params.begin(), params.end() };
 }
 
@@ -91,14 +100,15 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     voicesMixScratch.setSize (1, scratchSize, false, false, true);
 
     pitchDetector.prepare (sampleRate);
+    onsetDetector.prepare (sampleRate);
 
     if (auto* stabilityParam = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::stabilityLevel)))
         lastKnownStabilityLevel = stabilityParam->getIndex();
-    voicePool.prepare (sampleRate, scratchSize, lastKnownStabilityLevel);
+    phraseScheduler.prepare (hardVoiceSlotCapacity, sampleRate, scratchSize, lastKnownStabilityLevel);
 
     // SpectralShifter (motore interinale) ha una latenza reale non banale
     // (STFT): dichiararla e' necessario perche' l'host possa compensarla.
-    setLatencySamples (voicePool.getLatencySamples());
+    setLatencySamples (phraseScheduler.getLatencySamples());
 
     // Controlla i cambi di Stability (message thread, FR-56) e ripulisce gli
     // shifter ritirati dallo swap precedente (PRD §9.4) — mai sull'audio thread.
@@ -118,14 +128,14 @@ void HarmonizerAudioProcessor::timerCallback()
         if (currentLevel != lastKnownStabilityLevel)
         {
             // Costruzione (con allocazione) dei nuovi shifter: message thread.
-            voicePool.requestStabilityChange (currentLevel);
+            phraseScheduler.requestStabilityChange (currentLevel);
             lastKnownStabilityLevel = currentLevel;
         }
     }
 
     // Distrugge gli shifter ritirati dallo scambio precedente: mai sull'audio
     // thread (PRD §9.4).
-    voicePool.collectGarbage();
+    phraseScheduler.collectGarbage();
 }
 
 bool HarmonizerAudioProcessor::canApplyStabilityChangeNow() const
@@ -195,20 +205,27 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         std::fill (mono, mono + numSamples, 0.0f);
     }
 
+    bool onsetDetectedThisBlock = false;
     for (int i = 0; i < numSamples; ++i)
+    {
         pitchDetector.pushSample (mono[i]);
+        if (onsetDetector.pushSample (mono[i]))
+            onsetDetectedThisBlock = true;
+    }
 
     const int rootPitchClass = (int) *apvts.getRawParameterValue (ParamIDs::rootNote);
     const int numActiveVoices = (int) *apvts.getRawParameterValue (ParamIDs::numVoices);
+    const int voiceCap = (int) *apvts.getRawParameterValue (ParamIDs::maxSimultaneousVoices);
     const float dryLevel = *apvts.getRawParameterValue (ParamIDs::dryLevel);
     const float wetLevel = *apvts.getRawParameterValue (ParamIDs::wetLevel);
     const float glideMs = *apvts.getRawParameterValue (ParamIDs::glideTimeMs);
 
-    voicePool.setGlideTimeMs (glideMs);
+    phraseScheduler.setGlideTimeMs (glideMs);
+    phraseScheduler.setVoiceCap (voiceCap);
     for (int v = 0; v < harmony::numVoices; ++v)
     {
         const bool isFix = *apvts.getRawParameterValue (ParamIDs::voiceFix (v)) >= 0.5f;
-        voicePool.setVoiceMode (v, isFix ? ShiftMode::fix : ShiftMode::move);
+        phraseScheduler.setVoiceMode (v, isFix ? ShiftMode::fix : ShiftMode::move);
     }
 
     // Snapshot immutabile: sicuro da leggere sull'audio thread (vedi header).
@@ -221,20 +238,20 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     std::array<harmony::Cell, harmony::numVoices> offsets {};
     int quantizedPlayedNote = 0;
     const float continuousInputMidiNote = pitchDetector.getMidiNote();
-    if (pitchDetector.hasStableSignal())
+    const bool inputIsStable = pitchDetector.hasStableSignal();
+    if (inputIsStable)
     {
         quantizedPlayedNote = juce::roundToInt (continuousInputMidiNote);
         offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
     }
-    // Altrimenti offsets resta tutto nullopt: silenzio sulle voci finche' non
-    // c'e' un pitch stabile (placeholder per il fade morbido di FR-20).
 
     voicesMixScratch.setSize (1, numSamples, false, false, true);
-    const bool appliedStabilityChange = voicePool.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
-        offsets, numActiveVoices, quantizedPlayedNote, continuousInputMidiNote, canApplyStabilityChangeNow());
+    const bool appliedStabilityChange = phraseScheduler.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
+        onsetDetectedThisBlock, inputIsStable, quantizedPlayedNote, continuousInputMidiNote,
+        offsets, numActiveVoices, canApplyStabilityChangeNow());
 
     if (appliedStabilityChange)
-        setLatencySamples (voicePool.getLatencySamples());
+        setLatencySamples (phraseScheduler.getLatencySamples());
 
     const auto* voicesMix = voicesMixScratch.getReadPointer (0);
 

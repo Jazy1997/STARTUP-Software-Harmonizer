@@ -33,7 +33,9 @@ private:
     juce::Slider dryLevelSlider;
     juce::Slider wetLevelSlider;
     juce::Slider glideTimeSlider;
+    juce::Slider maxVoicesSlider; // FR-51: tetto voci simultanee tra tutte le frasi
     juce::TextEditor presetNameEditor;
+    juce::Label activeVoicesValueLabel; // FR-53: aggiornata dal timer, non un parametro
 
     // FR-23: Fix/Move per singola voce — un bottone a due stati per voce.
     std::array<juce::ToggleButton, harmony::numVoices> voiceFixButtons;
@@ -57,6 +59,8 @@ private:
     juce::Label stabilityLabel  { {}, "Stability" };
     juce::Label glideLabel      { {}, "Glide ms" };
     juce::Label fixMoveLabel    { {}, "Fix/Move" };
+    juce::Label maxVoicesLabel  { {}, "Voice Cap" };
+    juce::Label activeVoicesLabel { {}, "Active" };
 
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -68,6 +72,7 @@ private:
     std::unique_ptr<SliderAttachment> dryLevelAttachment;
     std::unique_ptr<SliderAttachment> wetLevelAttachment;
     std::unique_ptr<SliderAttachment> glideTimeAttachment;
+    std::unique_ptr<SliderAttachment> maxVoicesAttachment;
     std::array<std::unique_ptr<ButtonAttachment>, harmony::numVoices> voiceFixAttachments;
 
     // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare

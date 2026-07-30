@@ -3,9 +3,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "dsp/PitchDetector.h"
+#include "dsp/OnsetDetector.h"
 #include "harmony/HarmonyEngine.h"
 #include "harmony/PresetLibrary.h"
-#include "voices/VoicePool.h"
+#include "voices/PhraseScheduler.h"
 
 #include <functional>
 #include <memory>
@@ -42,6 +43,11 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Tetto tecnico di voci fisiche pre-allocate (FR-51): il parametro
+    // "Max Simultaneous Voices" regola quante di queste sono effettivamente
+    // utilizzabili (1..hardVoiceSlotCapacity), senza mai riallocare.
+    static constexpr int hardVoiceSlotCapacity = 32;
+
     juce::AudioProcessorValueTreeState apvts;
 
     // Snapshot immutabile, utilizzabile da qualunque thread (audio incluso):
@@ -61,6 +67,9 @@ public:
     // modifiche rare guidate dall'utente, non per hot-path a blocco.
     void editPresetLibrary (const std::function<void (harmony::PresetLibrary&)>& mutator);
 
+    // FR-53: numero di voci fisiche attualmente in uso tra tutte le frasi.
+    int getNumActiveVoices() const noexcept { return phraseScheduler.getNumActiveVoices(); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -72,7 +81,8 @@ private:
     std::shared_ptr<const harmony::PresetLibrary> retiredPresetLibrary; // solo message thread
 
     PitchDetector pitchDetector;
-    VoicePool voicePool;
+    OnsetDetector onsetDetector;
+    PhraseScheduler phraseScheduler;
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
 
     // Buffer di lavoro mono, dimensionati sul caso peggiore in prepareToPlay

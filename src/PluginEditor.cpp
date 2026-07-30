@@ -69,6 +69,11 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     setupSlider (dryLevelSlider, dryLevelLabel, *this);
     setupSlider (wetLevelSlider, wetLevelLabel, *this);
     setupSlider (glideTimeSlider, glideLabel, *this);
+    setupSlider (maxVoicesSlider, maxVoicesLabel, *this);
+
+    activeVoicesLabel.attachToComponent (&activeVoicesValueLabel, true);
+    addAndMakeVisible (activeVoicesLabel);
+    addAndMakeVisible (activeVoicesValueLabel);
 
     rootNoteAttachment   = std::make_unique<ComboAttachment>  (apvtsRef, "rootNote",      rootNoteBox);
     stabilityAttachment  = std::make_unique<ComboAttachment>  (apvtsRef, "stabilityLevel", stabilityBox);
@@ -76,6 +81,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     dryLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "dryLevel",      dryLevelSlider);
     wetLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",      wetLevelSlider);
     glideTimeAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "glideTimeMs",   glideTimeSlider);
+    maxVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "maxSimultaneousVoices", maxVoicesSlider);
 
     addAndMakeVisible (fixMoveLabel);
     for (int v = 0; v < harmony::numVoices; ++v)
@@ -222,8 +228,8 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (460, 560, 1200, 900);
-    setSize (500, 600);
+    setResizeLimits (460, 620, 1200, 900);
+    setSize (500, 660);
 
     startTimerHz (15);
 }
@@ -268,6 +274,8 @@ void HarmonizerAudioProcessorEditor::resized()
     layoutRow (wetLevelSlider);
     layoutRow (stabilityBox);
     layoutRow (glideTimeSlider);
+    layoutRow (maxVoicesSlider);
+    layoutRow (activeVoicesValueLabel);
 
     area.removeFromTop (gap);
 
@@ -293,6 +301,8 @@ void HarmonizerAudioProcessorEditor::timerCallback()
 {
     refreshPresetBoxFromLibrary();
     syncPresetSelectionFromParameter();
+
+    activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
 }
 
 void HarmonizerAudioProcessorEditor::refreshPresetBoxFromLibrary()

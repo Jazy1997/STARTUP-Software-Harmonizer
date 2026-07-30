@@ -45,11 +45,13 @@ target_sources(Harmonizer
         src/PluginEditor.cpp
         src/dsp/PitchDetector.cpp
         src/dsp/SpectralShifter.cpp
+        src/dsp/OnsetDetector.cpp
         src/harmony/HarmonyEngine.cpp
         src/harmony/PresetLibrary.cpp
         src/harmony/CsvIo.cpp
         src/voices/Voice.cpp
         src/voices/VoicePool.cpp
+        src/voices/PhraseScheduler.cpp
 )
 
 target_compile_definitions(Harmonizer
