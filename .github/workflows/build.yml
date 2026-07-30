@@ -1,0 +1,70 @@
+name: Build & validate
+
+on:
+  push:
+  pull_request:
+
+env:
+  PLUGINVAL_VERSION: "1.0.4"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            formats: "VST3;Standalone"
+          - os: macos-latest
+            formats: "VST3;AU;Standalone"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Download pluginval (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -sL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/v${PLUGINVAL_VERSION}/pluginval_Windows.zip"
+          unzip -q pluginval.zip -d pluginval
+
+      - name: Download pluginval (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          curl -sL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/v${PLUGINVAL_VERSION}/pluginval_macOS.zip"
+          unzip -q pluginval.zip -d pluginval
+
+      - name: Run pluginval on VST3 (strictness 10)
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            VALIDATOR="./pluginval/pluginval.exe"
+            VST3_PATH=$(find build -iname "Harmonizer.vst3" -print -quit)
+          else
+            VALIDATOR="./pluginval/pluginval.app/Contents/MacOS/pluginval"
+            VST3_PATH=$(find build -iname "Harmonizer.vst3" -print -quit)
+          fi
+          echo "Validating: $VST3_PATH"
+          "$VALIDATOR" --strictness-level 10 --validate "$VST3_PATH"
+
+      - name: Run pluginval on AU (strictness 10, macOS only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          AU_PATH=$(find build -iname "Harmonizer.component" -print -quit)
+          echo "Validating: $AU_PATH"
+          ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate "$AU_PATH"

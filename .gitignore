@@ -1,0 +1,25 @@
+# Build output
+build/
+build-*/
+out/
+cmake-build-*/
+
+# IDE
+.vs/
+.vscode/
+*.user
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pluginval (scaricato localmente, non versionato)
+tools/pluginval*
+tools/*.exe
+tools/*.zip
+
+# JUCE build artifacts inside submodule (safety net; submodule itself is tracked)
+libs/JUCE/build/
