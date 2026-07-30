@@ -8,6 +8,10 @@ namespace ParamIDs
     static const juce::String numVoices { "numVoices" };
     static const juce::String dryLevel { "dryLevel" };
     static const juce::String wetLevel { "wetLevel" };
+    static const juce::String stabilityLevel { "stabilityLevel" };
+    static const juce::String glideTimeMs { "glideTimeMs" };
+
+    static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::createParameterLayout()
@@ -41,6 +45,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
         juce::ParameterID { ParamIDs::wetLevel, 1 }, "Wet Level",
         juce::NormalisableRange<float> (0.0f, 1.0f), 0.8f));
 
+    // FR-54: 5 posizioni discrete (Fast..Accurate). Il numero di posizioni e'
+    // fisso a compile-time (a differenza dei preset armonici), quindi qui una
+    // AudioParameterChoice statica va bene.
+    {
+        juce::StringArray stabilityNames;
+        for (auto* name : Stability::names)
+            stabilityNames.add (name);
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::stabilityLevel, 1 }, "Stability", stabilityNames, Stability::defaultLevel));
+    }
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { ParamIDs::glideTimeMs, 1 }, "Glide Time",
+        juce::NormalisableRange<float> (0.0f, 200.0f), 30.0f));
+
+    // FR-23: Fix/Move e' selezionabile per singola voce, non globalmente.
+    for (int v = 0; v < harmony::numVoices; ++v)
+        params.push_back (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { ParamIDs::voiceFix (v), 1 }, "Voice " + juce::String (v + 1) + " Fix", false));
+
     return { params.begin(), params.end() };
 }
 
@@ -66,15 +91,58 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     voicesMixScratch.setSize (1, scratchSize, false, false, true);
 
     pitchDetector.prepare (sampleRate);
-    voicePool.prepare (sampleRate, scratchSize);
+
+    if (auto* stabilityParam = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::stabilityLevel)))
+        lastKnownStabilityLevel = stabilityParam->getIndex();
+    voicePool.prepare (sampleRate, scratchSize, lastKnownStabilityLevel);
 
     // SpectralShifter (motore interinale) ha una latenza reale non banale
     // (STFT): dichiararla e' necessario perche' l'host possa compensarla.
     setLatencySamples (voicePool.getLatencySamples());
+
+    // Controlla i cambi di Stability (message thread, FR-56) e ripulisce gli
+    // shifter ritirati dallo swap precedente (PRD §9.4) — mai sull'audio thread.
+    startTimer (250);
 }
 
 void HarmonizerAudioProcessor::releaseResources()
 {
+    stopTimer();
+}
+
+void HarmonizerAudioProcessor::timerCallback()
+{
+    if (auto* stabilityParam = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::stabilityLevel)))
+    {
+        const int currentLevel = stabilityParam->getIndex();
+        if (currentLevel != lastKnownStabilityLevel)
+        {
+            // Costruzione (con allocazione) dei nuovi shifter: message thread.
+            voicePool.requestStabilityChange (currentLevel);
+            lastKnownStabilityLevel = currentLevel;
+        }
+    }
+
+    // Distrugge gli shifter ritirati dallo scambio precedente: mai sull'audio
+    // thread (PRD §9.4).
+    voicePool.collectGarbage();
+}
+
+bool HarmonizerAudioProcessor::canApplyStabilityChangeNow() const
+{
+    // FR-57: nella versione standalone non esiste transport, il cambio si
+    // applica sempre immediatamente.
+    if (wrapperType == wrapperType_Standalone)
+        return true;
+
+    // FR-56: se il transport sta suonando, il cambio resta in attesa fino
+    // allo stop (molti host producono click/buchi se la latenza dichiarata
+    // cambia durante la riproduzione).
+    if (auto* playHead = getPlayHead())
+        if (auto position = playHead->getPosition())
+            return ! position->getIsPlaying();
+
+    return true; // nessun playhead disponibile: non c'e' modo di saperlo, si applica comunque
 }
 
 bool HarmonizerAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -134,6 +202,14 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const int numActiveVoices = (int) *apvts.getRawParameterValue (ParamIDs::numVoices);
     const float dryLevel = *apvts.getRawParameterValue (ParamIDs::dryLevel);
     const float wetLevel = *apvts.getRawParameterValue (ParamIDs::wetLevel);
+    const float glideMs = *apvts.getRawParameterValue (ParamIDs::glideTimeMs);
+
+    voicePool.setGlideTimeMs (glideMs);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        const bool isFix = *apvts.getRawParameterValue (ParamIDs::voiceFix (v)) >= 0.5f;
+        voicePool.setVoiceMode (v, isFix ? ShiftMode::fix : ShiftMode::move);
+    }
 
     // Snapshot immutabile: sicuro da leggere sull'audio thread (vedi header).
     const auto presetLibrary = getPresetLibrary();
@@ -143,16 +219,23 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const int presetIndex = juce::jlimit (0, presetLibrary->getNumPresets() - 1, presetOneBased - 1);
 
     std::array<harmony::Cell, harmony::numVoices> offsets {};
+    int quantizedPlayedNote = 0;
+    const float continuousInputMidiNote = pitchDetector.getMidiNote();
     if (pitchDetector.hasStableSignal())
     {
-        const int playedNote = juce::roundToInt (pitchDetector.getMidiNote());
-        offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), playedNote, rootPitchClass);
+        quantizedPlayedNote = juce::roundToInt (continuousInputMidiNote);
+        offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
     }
     // Altrimenti offsets resta tutto nullopt: silenzio sulle voci finche' non
     // c'e' un pitch stabile (placeholder per il fade morbido di FR-20).
 
     voicesMixScratch.setSize (1, numSamples, false, false, true);
-    voicePool.process (mono, voicesMixScratch.getWritePointer (0), numSamples, offsets, numActiveVoices);
+    const bool appliedStabilityChange = voicePool.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
+        offsets, numActiveVoices, quantizedPlayedNote, continuousInputMidiNote, canApplyStabilityChangeNow());
+
+    if (appliedStabilityChange)
+        setLatencySamples (voicePool.getLatencySamples());
+
     const auto* voicesMix = voicesMixScratch.getReadPointer (0);
 
     for (int ch = 0; ch < numOutputChannels; ++ch)

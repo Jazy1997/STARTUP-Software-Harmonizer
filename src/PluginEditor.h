@@ -28,10 +28,15 @@ private:
 
     juce::ComboBox rootNoteBox;
     juce::ComboBox presetBox;
+    juce::ComboBox stabilityBox;
     juce::Slider numVoicesSlider;
     juce::Slider dryLevelSlider;
     juce::Slider wetLevelSlider;
+    juce::Slider glideTimeSlider;
     juce::TextEditor presetNameEditor;
+
+    // FR-23: Fix/Move per singola voce — un bottone a due stati per voce.
+    std::array<juce::ToggleButton, harmony::numVoices> voiceFixButtons;
 
     juce::TextButton addButton          { "Add" };
     juce::TextButton duplicateButton    { "Duplicate" };
@@ -49,14 +54,21 @@ private:
     juce::Label dryLevelLabel   { {}, "Dry" };
     juce::Label wetLevelLabel   { {}, "Wet" };
     juce::Label nameLabel       { {}, "Name" };
+    juce::Label stabilityLabel  { {}, "Stability" };
+    juce::Label glideLabel      { {}, "Glide ms" };
+    juce::Label fixMoveLabel    { {}, "Fix/Move" };
 
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
     std::unique_ptr<ComboAttachment> rootNoteAttachment;
+    std::unique_ptr<ComboAttachment> stabilityAttachment;
     std::unique_ptr<SliderAttachment> numVoicesAttachment;
     std::unique_ptr<SliderAttachment> dryLevelAttachment;
     std::unique_ptr<SliderAttachment> wetLevelAttachment;
+    std::unique_ptr<SliderAttachment> glideTimeAttachment;
+    std::array<std::unique_ptr<ButtonAttachment>, harmony::numVoices> voiceFixAttachments;
 
     // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare
     // dimensione a runtime, cosa che le "choices" fisse di un parametro APVTS

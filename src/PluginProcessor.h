@@ -10,7 +10,8 @@
 #include <functional>
 #include <memory>
 
-class HarmonizerAudioProcessor : public juce::AudioProcessor
+class HarmonizerAudioProcessor : public juce::AudioProcessor,
+                                  private juce::Timer
 {
 public:
     HarmonizerAudioProcessor();
@@ -63,12 +64,16 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    void timerCallback() override;
+    bool canApplyStabilityChangeNow() const;
+
     mutable juce::SpinLock presetLibraryLock;
     std::shared_ptr<const harmony::PresetLibrary> currentPresetLibrary;
     std::shared_ptr<const harmony::PresetLibrary> retiredPresetLibrary; // solo message thread
 
     PitchDetector pitchDetector;
     VoicePool voicePool;
+    int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
 
     // Buffer di lavoro mono, dimensionati sul caso peggiore in prepareToPlay
     // (NFR-03): nessuna riallocazione in processBlock (CLAUDE.md regola 1).

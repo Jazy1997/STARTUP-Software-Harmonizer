@@ -10,7 +10,7 @@
 class SpectralShifter : public PitchShifter
 {
 public:
-    void prepare (double sampleRate, int maxBlockSize) override;
+    void prepare (double sampleRate, int maxBlockSize, int stabilityLevel) override;
     void reset() override;
     void setPitchShiftSemitones (float semitones) override;
     int getLatencySamples() const override;
@@ -18,5 +18,4 @@ public:
 
 private:
     signalsmith::stretch::SignalsmithStretch<float> stretch;
-    float currentSemitones = 0.0f;
 };

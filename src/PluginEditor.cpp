@@ -13,7 +13,7 @@ namespace
         parent.addAndMakeVisible (label);
     }
 
-    void layoutRowOfButtons (juce::Rectangle<int> row, std::initializer_list<juce::Component*> buttons)
+    void layoutRowOfButtons (juce::Rectangle<int> row, const std::vector<juce::Component*>& buttons)
     {
         const int n = (int) buttons.size();
         if (n == 0)
@@ -42,6 +42,14 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     rootNoteLabel.attachToComponent (&rootNoteBox, true);
     addAndMakeVisible (rootNoteLabel);
 
+    if (auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (apvtsRef.getParameter ("stabilityLevel")))
+        for (auto& choice : choiceParam->choices)
+            stabilityBox.addItem (choice, stabilityBox.getNumItems() + 1);
+
+    addAndMakeVisible (stabilityBox);
+    stabilityLabel.attachToComponent (&stabilityBox, true);
+    addAndMakeVisible (stabilityLabel);
+
     addAndMakeVisible (presetBox);
     presetLabel.attachToComponent (&presetBox, true);
     addAndMakeVisible (presetLabel);
@@ -60,11 +68,24 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     setupSlider (numVoicesSlider, numVoicesLabel, *this);
     setupSlider (dryLevelSlider, dryLevelLabel, *this);
     setupSlider (wetLevelSlider, wetLevelLabel, *this);
+    setupSlider (glideTimeSlider, glideLabel, *this);
 
-    rootNoteAttachment  = std::make_unique<ComboAttachment>  (apvtsRef, "rootNote",  rootNoteBox);
-    numVoicesAttachment = std::make_unique<SliderAttachment> (apvtsRef, "numVoices", numVoicesSlider);
-    dryLevelAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "dryLevel",  dryLevelSlider);
-    wetLevelAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",  wetLevelSlider);
+    rootNoteAttachment   = std::make_unique<ComboAttachment>  (apvtsRef, "rootNote",      rootNoteBox);
+    stabilityAttachment  = std::make_unique<ComboAttachment>  (apvtsRef, "stabilityLevel", stabilityBox);
+    numVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "numVoices",     numVoicesSlider);
+    dryLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "dryLevel",      dryLevelSlider);
+    wetLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",      wetLevelSlider);
+    glideTimeAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "glideTimeMs",   glideTimeSlider);
+
+    addAndMakeVisible (fixMoveLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& button = voiceFixButtons[(size_t) v];
+        button.setButtonText (juce::String (v + 1));
+        button.setClickingTogglesState (true);
+        addAndMakeVisible (button);
+        voiceFixAttachments[(size_t) v] = std::make_unique<ButtonAttachment> (apvtsRef, "voiceFix" + juce::String (v + 1), button);
+    }
 
     for (auto* b : { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton,
                      &importCsvButton, &exportCsvButton, &loadGlobalButton, &saveGlobalButton })
@@ -201,8 +222,8 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (420, 420, 1200, 900);
-    setSize (460, 460);
+    setResizeLimits (460, 560, 1200, 900);
+    setSize (500, 600);
 
     startTimerHz (15);
 }
@@ -245,7 +266,19 @@ void HarmonizerAudioProcessorEditor::resized()
     layoutRow (numVoicesSlider);
     layoutRow (dryLevelSlider);
     layoutRow (wetLevelSlider);
+    layoutRow (stabilityBox);
+    layoutRow (glideTimeSlider);
 
+    area.removeFromTop (gap);
+
+    {
+        auto row = area.removeFromTop (rowHeight);
+        row.removeFromLeft (labelWidth);
+        std::vector<juce::Component*> buttons;
+        for (auto& b : voiceFixButtons)
+            buttons.push_back (&b);
+        layoutRowOfButtons (row, buttons);
+    }
     area.removeFromTop (gap);
 
     layoutRowOfButtons (area.removeFromTop (rowHeight),
