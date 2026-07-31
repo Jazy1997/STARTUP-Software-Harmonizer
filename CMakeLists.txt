@@ -56,6 +56,7 @@ target_sources(Harmonizer
         src/voices/PhraseScheduler.cpp
         src/midi/CcRouter.cpp
         src/midi/OverrideManager.cpp
+        src/midi/PlayModeInput.cpp
 )
 
 target_compile_definitions(Harmonizer

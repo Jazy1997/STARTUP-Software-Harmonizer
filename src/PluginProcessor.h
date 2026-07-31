@@ -9,6 +9,7 @@
 #include "voices/PhraseScheduler.h"
 #include "midi/CcRouter.h"
 #include "midi/OverrideManager.h"
+#include "midi/PlayModeInput.h"
 
 #include <functional>
 #include <memory>
@@ -102,10 +103,15 @@ private:
     OverrideManager overrideManager;
     bool wasPlayingLastBlock = false; // solo audio thread: rileva il fronte di stop (FR-36)
 
+    // FR-24..28: modalita' Play, VoicePool dedicato separato (vedi
+    // PlayModeInput.h per il perche' non condivide phraseScheduler).
+    PlayModeInput playModeInput;
+
     // Buffer di lavoro mono, dimensionati sul caso peggiore in prepareToPlay
     // (NFR-03): nessuna riallocazione in processBlock (CLAUDE.md regola 1).
     juce::AudioBuffer<float> monoInputScratch;
     juce::AudioBuffer<float> voicesMixScratch;
+    juce::AudioBuffer<float> playVoicesMixScratch;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HarmonizerAudioProcessor)
 };

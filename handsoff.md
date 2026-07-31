@@ -33,6 +33,21 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter` — vedi sotto.**
 
+**Novita' sessione 9 (continuazione) — Modalita' Play (FR-24..28):**
+
+Dopo il controllo MIDI CC, chiesto di nuovo esplicitamente all'utente quale area (Play / Pattern ritmico / Preset timbrici / altro): scelta la modalita' Play.
+
+- **Decisione architetturale centrale**: `PlayModeInput` (`src/midi/PlayModeInput.{h,cpp}`, nuovo) e' deliberatamente SEPARATO da `PhraseScheduler`, non costruito sopra. Il modello e' fondamentalmente diverso: `PhraseScheduler` esiste per "un onset genera una frase con voicing congelato che vive di vita propria" (FR-43/46); in Play mode non c'e' alcun concetto di frase, solo "nota MIDI premuta -> una voce insegue quella nota assoluta finche' non arriva il note-off". Questo E' esattamente la logica gia' esistente per la modalita' Fix di `Voice` (FR-22: bersaglio = `quantizedPlayedNote + offset`): con `quantizedPlayedNote=0` e `offset=notaMidi`, il bersaglio assoluto e' semplicemente la nota MIDI — **riusato cosi' com'era, zero codice nuovo dentro `Voice`**.
+- **`VoicePool` dedicato a 8 slot** (non i 32 della catena Harmonizer): le due modalita' sono mutuamente esclusive in ogni istante (FR-24, "la tabella e' completamente disattivata"), quindi non serve condividere/contendere lo stesso pool. Mapping nota->slot: 1:1 in ordine di arrivo; oltre 8 note simultanee, le eccedenti restano mute (FR-25, coerente con "le voci in eccesso restano mute" applicato anche al caso limite non esplicitamente coperto dal PRD).
+- **FR-20 si applica anche qui**: senza un ingresso audio stabile (`pitchDetector.hasStableSignal()`) le voci Play tacciono, indipendentemente da quali note MIDI sono premute — la nota resta "premuta" internamente (`slotNote` invariato), solo l'audio si interrompe finche' l'ingresso non torna stabile. **Confermato dalla lettura del PRD, non solo assunto**: il setup di riferimento (§3.4, "stesso schema di Waves Harmony") descrive una traccia MIDI separata che pilota il plugin residente sulla traccia AUDIO — Play non e' un sintetizzatore, richiede comunque una sorgente audio viva da pitchare.
+- **`PlayModeInput::process()` viene chiamato SEMPRE**, anche a modalita' spenta (`modeActive=false`): il tracking note-on/off resta aggiornato (riattivare Play non richiede un nuovo note-on) e lo swap di Stability continua ad applicarsi in modo uniforme indipendentemente dalla modalita' corrente — stesso principio gia' usato per `phraseScheduler`, che a sua volta viene sempre chiamato con `inputIsStable` forzato a `false` mentre Play e' attivo (FR-24: nessuna frase nuova o viva, ma lo swap di Stability del suo pool continua a funzionare).
+- **Canale MIDI condiviso col controllo CC** (`ccRouter.getMidiChannel()`): un'unica impostazione di canale per tutto il MIDI in ingresso al plugin (note E CC), non una seconda impostazione ridondante — interpretazione di FR-32, che nel PRD vive nella stessa sezione Impostazioni della configurazione CC.
+- **Nuovo parametro APVTS `playModeEnabled`** (bool, automatizzabile FR-34, ma NON uno dei 3 CC di FR-30 — quindi non passa per `OverrideManager`). Le due modalita' non si sommano mai (`voicesMix` sceglie l'uno o l'altro buffer in base al flag, mai entrambi).
+- **UI**: `ToggleButton` "Play Mode" (stesso pattern del toggle Bypass). Finestra ri-allargata (910px default).
+- **Non fatto**: nessuna gestione velocity (non richiesta dal PRD). Nessuna regola di furto per oltre 8 note (il PRD non la definisce per Play, a differenza di FR-51/52 per Harmonizer — le eccedenti restano semplicemente mute). Nessun test numerico dedicato (a differenza di CC/Formanti/PSOLA): la logica nota->slot e' semplice e deterministica ma coinvolge `juce::MidiBuffer`/`juce::MidiMessage`, stesso limite gia' incontrato per `CcRouter`.
+- **Verificato**: build VST3/Standalone riuscite, `pluginval --strictness-level 10` verde, entrambe le suite di test (psola, override_manager) ancora verdi — invariate, nessuna delle due tocca questo codice.
+- **Non verificabile in questa sessione**: nessun controller MIDI fisico ne' tastiera collegata — il ciclo reale "traccia MIDI + traccia audio" del setup di riferimento non e' mai stato provato, ne' l'assenza di click nel passaggio Harmonizer<->Play (FR-28) e' stata verificata all'ascolto (il meccanismo scelto, `freeAllPhrases()` forzato ogni blocco mentre Play e' attivo, e' lo stesso gia' usato — e mai verificato all'ascolto nemmeno li' — per il caso "segnale non stabile", quindi non introduce un rischio nuovo, solo lo stesso rischio pre-esistente in un caso d'uso in piu').
+
 **Novita' sessione 9 (continuazione) — Controllo MIDI CC (M4, FR-29..38):**
 
 Dopo il push del lavoro precedente, scelto esplicitamente dall'utente di procedere col controllo MIDI CC, pur non potendo ancora testare in Ableton — l'utente ha notato che questa e' un'area verificabile con test numerici (override) e con pluginval, non richiede ascolto.
@@ -331,6 +346,16 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `.github/workflows/build.yml` | modificato | Job `dsp-tests` compila ed esegue anche `override_manager_test` |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 9 (continuazione — Modalita' Play, FR-24..28):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/midi/PlayModeInput.{h,cpp}` | creato | `VoicePool` dedicato 8 slot, mapping nota MIDI -> slot, riusa `ShiftMode::fix` di `Voice` con bersaglio assoluto |
+| `src/PluginProcessor.{h,cpp}` | modificato | Parametro `playModeEnabled`; secondo scratch buffer; `phraseScheduler` forzato a `inputIsStable=false` mentre Play e' attivo; scelta del buffer wet in base alla modalita' |
+| `src/PluginEditor.{h,cpp}` | modificato | `ToggleButton` "Play Mode"; finestra allargata |
+| `CMakeLists.txt` | modificato | Nuovo sorgente `midi/PlayModeInput.cpp` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -461,10 +486,10 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
    - Se qualcosa non convince all'ascolto: la mappatura Stability->minF0Hz (`{165,130,100,85,70}` Hz, in `PsolaShifter.cpp`) e' un singolo array con valori esplicitamente segnalati come "di partenza, da tarare" — e' il primo posto dove intervenire.
 3. **Poi ascoltare le Formanti** (slider "Fmt Spread" + 8 knob "Fmt/Voice" nell'editor): verificare che shift verso il basso schiarisca davvero (non impastato) e verso l'alto scurisca (non "chipmunk"), a Spread pieno (default) e a zero (deve essere impercettibile/nullo). Se l'effetto e' troppo debole o troppo marcato, la costante `k=0.3` in `Voice.cpp` (`kFormantSpreadK`) e' il primo posto dove intervenire — mai tarata, presa cosi' com'era nella spec sorgente.
 4. **Provare il controllo MIDI CC con un controller fisico o le automazioni dell'host** (mai fatto, vedi §2): mandare CC sui 3 numeri di default (Root=20, Preset=21, Bypass=22, canale Omni) o usare "Learn"; verificare in particolare FR-36 (automazione host in scrittura + CC in arrivo -> vince il CC; stop del transport -> torna l'automazione) e FR-37 in standalone (nessuna revoca).
-5. Ricordare i limiti noti (aggiornati, vedi sotto): `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto, selettore root/preset in UI che non riflette un override CC attivo.
+5. **Provare la modalita' Play** (mai fatto): setup di riferimento del PRD §3.4 — traccia MIDI vuota che riceve dalla tastiera, routata verso il plugin sulla traccia audio. Attivare "Play Mode", suonare l'audio (sax/voce/microfono) MENTRE si tengono premute fino a 8 note sulla tastiera; verificare che le voci seguano le note assolute (non il grado armonico), che senza note premute passi solo il dry (FR-27), e che il passaggio Harmonizer<->Play non produca click (FR-28, mai verificato all'ascolto).
+6. Ricordare i limiti noti (aggiornati, vedi sotto): `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto, selettore root/preset in UI che non riflette un override CC attivo.
 
 **Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro di prova sopra:
-- **Modalita' Play (FR-24..28)**: rimasta esplicitamente fuori da questo passaggio (l'utente aveva scelto CC, non Play). Riusa la stessa `VoicePool`, ma richiede una decisione su come si intreccia col `PhraseScheduler` guidato da onset (oggi pensato per la modalita' Harmonizer).
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
 - **Preset timbrici (FR-11..13)**: sistema di preset separato da quello armonico, non ancora iniziato — conterrebbe anche Formant Spread/offset per voce una volta esistente (oggi sono solo parametri APVTS piatti, come Stability/Dry/Glide).
 
@@ -475,7 +500,8 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - **Finestra di Hann ricalcolata per campione** in `emitGrain` (chiamata a `std::cos`): nota ottimizzazione non fatta, rilevante se la profilazione CPU con 8 voci (mai eseguita) rivelasse problemi rispetto al budget ≤15% del PRD §1.3.
 - **`SpectralShifter` non piu' usato ma ancora compilato**: se in futuro si rimuove per pulizia, verificare prima che nessuno faccia piu' riferimento a `HARMONIZER_USE_SPECTRAL_SHIFTER`.
 - **Formanti (FR-39..42) implementate ma non tarate**: costante `k=0.3` presa cosi' com'era dalla spec sorgente, mai all'ascolto. Nessun test numerico scritto per le Formanti in questa sessione (a differenza del motore PSOLA) — la correzione formantica e' per natura una preferenza timbrica soggettiva, non ha un criterio "giusto/sbagliato" oggettivo come l'accuratezza di trasposizione.
-- **Controllo MIDI CC (FR-29..38) implementato ma mai provato con hardware/host reale**: la logica di precedenza e' testata numericamente (`override_manager_test`), ma il parsing dei messaggi MIDI veri (`CcRouter`) no — nessun target di test dedicato (avrebbe richiesto linkare `juce_audio_basics`), verificato solo a lettura e con `pluginval`. Modalita' Play (FR-24..28) non implementata. UI: il selettore root/preset non riflette visivamente un override CC attivo (l'audio segue comunque correttamente il CC).
+- **Controllo MIDI CC (FR-29..38) implementato ma mai provato con hardware/host reale**: la logica di precedenza e' testata numericamente (`override_manager_test`), ma il parsing dei messaggi MIDI veri (`CcRouter`) no — nessun target di test dedicato (avrebbe richiesto linkare `juce_audio_basics`), verificato solo a lettura e con `pluginval`. UI: il selettore root/preset non riflette visivamente un override CC attivo (l'audio segue comunque correttamente il CC).
+- **Modalita' Play (FR-24..28) implementata ma mai provata con hardware/host reale**: stesso limite del controllo CC — nessun test dedicato (coinvolge `juce::MidiBuffer`/`juce::MidiMessage`), verificata solo a lettura e con `pluginval`. Nessuna regola di furto definita per oltre 8 note simultanee (il PRD non la specifica per Play, a differenza di FR-51/52 per Harmonizer): le eccedenti restano semplicemente mute. FR-28 (nessun click nel passaggio di modalita') non verificato all'ascolto.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).

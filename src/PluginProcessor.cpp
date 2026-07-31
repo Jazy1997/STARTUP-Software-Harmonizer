@@ -14,6 +14,7 @@ namespace ParamIDs
 
     static const juce::String formantSpread { "formantSpread" };
     static const juce::String bypass { "bypass" };
+    static const juce::String playModeEnabled { "playModeEnabled" };
 
     static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
     static juce::String voiceFormantOffset (int voiceIndex) { return "voiceFormantOffset" + juce::String (voiceIndex + 1); }
@@ -92,6 +93,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
 
+    // FR-24/28: interruttore Harmonizer/Play, discreto e automatizzabile
+    // come tutti gli altri (FR-34/35). Non e' uno dei 3 CC di FR-30, quindi
+    // non passa per OverrideManager: solo automazione host + UI.
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { ParamIDs::playModeEnabled, 1 }, "Play Mode", false));
+
     // FR-51: tetto configurabile di voci simultanee TRA TUTTE le frasi attive
     // (non le 8 voci di un singolo preset — quello e' "Num Voices" sopra).
     // Il range e' 1..hardSlotCapacity: qui il tetto tecnico coincide col
@@ -123,6 +130,7 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
 
     monoInputScratch.setSize (1, scratchSize, false, false, true);
     voicesMixScratch.setSize (1, scratchSize, false, false, true);
+    playVoicesMixScratch.setSize (1, scratchSize, false, false, true);
 
     pitchDetector.prepare (sampleRate);
     onsetDetector.prepare (sampleRate);
@@ -130,6 +138,7 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     if (auto* stabilityParam = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::stabilityLevel)))
         lastKnownStabilityLevel = stabilityParam->getIndex();
     phraseScheduler.prepare (hardVoiceSlotCapacity, sampleRate, scratchSize, lastKnownStabilityLevel);
+    playModeInput.prepare (sampleRate, scratchSize, lastKnownStabilityLevel);
 
     // SpectralShifter (motore interinale) ha una latenza reale non banale
     // (STFT): dichiararla e' necessario perche' l'host possa compensarla.
@@ -153,7 +162,10 @@ void HarmonizerAudioProcessor::timerCallback()
         if (currentLevel != lastKnownStabilityLevel)
         {
             // Costruzione (con allocazione) dei nuovi shifter: message thread.
+            // Entrambi i pool (Harmonizer e Play) condividono lo stesso
+            // livello di Stability: un solo controllo, due VoicePool.
             phraseScheduler.requestStabilityChange (currentLevel);
+            playModeInput.requestStabilityChange (currentLevel);
             lastKnownStabilityLevel = currentLevel;
         }
     }
@@ -161,6 +173,7 @@ void HarmonizerAudioProcessor::timerCallback()
     // Distrugge gli shifter ritirati dallo scambio precedente: mai sull'audio
     // thread (PRD §9.4).
     phraseScheduler.collectGarbage();
+    playModeInput.collectGarbage();
 }
 
 bool HarmonizerAudioProcessor::canApplyStabilityChangeNow() const
@@ -280,6 +293,10 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     const float formantSpread = *apvts.getRawParameterValue (ParamIDs::formantSpread);
 
+    // FR-24: quando Play e' attivo, la tabella armonica e' completamente
+    // disattivata. Non e' uno dei 3 CC di FR-30: solo APVTS/automazione.
+    const bool playModeEnabled = *apvts.getRawParameterValue (ParamIDs::playModeEnabled) >= 0.5f;
+
     phraseScheduler.setGlideTimeMs (glideMs);
     phraseScheduler.setVoiceCap (voiceCap);
     phraseScheduler.setFormantSpread (formantSpread);
@@ -302,21 +319,35 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     int quantizedPlayedNote = 0;
     const float continuousInputMidiNote = pitchDetector.getMidiNote();
     const bool inputIsStable = pitchDetector.hasStableSignal();
-    if (inputIsStable)
+    if (! playModeEnabled && inputIsStable)
     {
         quantizedPlayedNote = juce::roundToInt (continuousInputMidiNote);
         offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
     }
 
+    // FR-24: mentre Play e' attivo, la catena Harmonizer resta "in attesa"
+    // con inputIsStable forzato a false — la stessa via gia' usata quando
+    // il segnale non e' intonato (freeAllPhrases): nessuna frase nuova o
+    // viva, nessun contributo audio, ma lo swap di Stability continua ad
+    // essere applicato in modo uniforme (vedi PhraseScheduler::process).
+    const bool harmonizerInputIsStable = (! playModeEnabled) && inputIsStable;
+
     voicesMixScratch.setSize (1, numSamples, false, false, true);
-    const bool appliedStabilityChange = phraseScheduler.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
-        onsetDetectedThisBlock, inputIsStable, quantizedPlayedNote, continuousInputMidiNote,
+    const bool appliedStabilityChangeHarmonizer = phraseScheduler.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
+        onsetDetectedThisBlock, harmonizerInputIsStable, quantizedPlayedNote, continuousInputMidiNote,
         offsets, numActiveVoices, canApplyStabilityChangeNow());
 
-    if (appliedStabilityChange)
-        setLatencySamples (phraseScheduler.getLatencySamples());
+    playVoicesMixScratch.setSize (1, numSamples, false, false, true);
+    const bool appliedStabilityChangePlay = playModeInput.process (midiMessages, ccRouter.getMidiChannel(), playModeEnabled,
+        mono, playVoicesMixScratch.getWritePointer (0), numSamples,
+        inputIsStable, continuousInputMidiNote, canApplyStabilityChangeNow());
 
-    const auto* voicesMix = voicesMixScratch.getReadPointer (0);
+    if (appliedStabilityChangeHarmonizer || appliedStabilityChangePlay)
+        setLatencySamples (phraseScheduler.getLatencySamples()); // stessa Stability, stessa latenza per entrambi i pool
+
+    // Le due modalita' sono mutuamente esclusive (FR-24): si sceglie l'una
+    // o l'altra, non si sommano.
+    const auto* voicesMix = playModeEnabled ? playVoicesMixScratch.getReadPointer (0) : voicesMixScratch.getReadPointer (0);
 
     // Bypass (FR-30): solo dry, esattamente come se Dry=1/Wet=0 — il
     // percorso dry e' gia' il segnale in ingresso non processato, quindi

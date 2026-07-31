@@ -288,14 +288,19 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     addAndMakeVisible (bypassToggle);
     bypassAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "bypass", bypassToggle);
 
+    // FR-24/28: interruttore Harmonizer/Play.
+    playModeToggle.setButtonText ("Play Mode");
+    addAndMakeVisible (playModeToggle);
+    playModeAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "playModeEnabled", playModeToggle);
+
     syncCcControlsFromRouter();
 
     refreshPresetBoxFromLibrary();
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (460, 840, 1200, 1120);
-    setSize (500, 880);
+    setResizeLimits (460, 870, 1200, 1150);
+    setSize (500, 910);
 
     startTimerHz (15);
 }
@@ -384,6 +389,7 @@ void HarmonizerAudioProcessorEditor::resized()
     layoutCcRow (bypassCcSlider, learnBypassButton);
 
     layoutRow (bypassToggle);
+    layoutRow (playModeToggle);
 
     layoutRowOfButtons (area.removeFromTop (rowHeight),
                         { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton });

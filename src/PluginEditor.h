@@ -56,6 +56,8 @@ private:
     // mette in override come gli altri — questo toggle serve per testare
     // senza hardware MIDI.
     juce::ToggleButton bypassToggle;
+    // FR-24/28: interruttore Harmonizer/Play.
+    juce::ToggleButton playModeToggle;
 
     juce::TextButton addButton          { "Add" };
     juce::TextButton duplicateButton    { "Duplicate" };
@@ -101,6 +103,7 @@ private:
     std::array<std::unique_ptr<ButtonAttachment>, harmony::numVoices> voiceFixAttachments;
     std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voiceFormantAttachments;
     std::unique_ptr<ButtonAttachment> bypassAttachment;
+    std::unique_ptr<ButtonAttachment> playModeAttachment;
 
     // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare
     // dimensione a runtime, cosa che le "choices" fisse di un parametro APVTS
