@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-07-30 (sessione 7)
+> Ultimo aggiornamento: 2026-07-31 (sessione 9)
 
 ---
 
@@ -31,7 +31,74 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e ora anche il motore a frasi (M3, FR-43..53) sono completi e funzionali.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter` — vedi sotto.**
+
+**Novita' sessione 9 — PSOLA proprietario integrato come motore di default (M1):**
+
+Su scelta esplicita dell'utente tra le direzioni proposte (PSOLA / MIDI CC / Formanti / solo processo), si e' portato il motore TD-PSOLA scoperto in sessione 8 dentro il progetto, sostituendolo a Signalsmith Stretch come motore attivo di default dietro l'interfaccia astratta `PitchShifter` (FR-62, CLAUDE.md regola 2). Perimetro concordato con l'utente: solo il motore (Formanti rimandate a una sessione dedicata), selezione a compile-time (nessun parametro APVTS/UI), suite di test numerici portata nel repo e in CI.
+
+- **`src/dsp/PsolaShifter.{h,cpp}`** (nuovo): algoritmo TD-PSOLA (dominio pubblico) split `.h`/`.cpp` in stile progetto, namespace globale (non `harm`), derivato dalla nostra `PitchShifter`. Tre problemi reali trovati leggendo i sorgenti (non noti alla sessione 8) e risolti PRIMA che il motore entrasse in `processBlock`, ciascuno verificato con la suite numerica prima di procedere al successivo:
+  1. **`std::deque<long long> epochs` allocava sull'audio thread** (`push_back`/`pop_front` dentro `detectEpochs()`, violazione CLAUDE.md regola 1/PRD §9.4 — su MSVC il blocco del deque e' da soli 16 byte, allocazione quasi ad ogni chiamata). Sostituito con un ring buffer a capacita' fissa (`epochRing`/`epochHead`/`epochCount`), pre-allocato in `prepare()`, dimensionato su `bufSize/2/minPeriod + 4`. **Verificato bit-per-bit identico** al deque originale (stessa suite di test, stessi numeri esatti prima e dopo la sostituzione).
+  2. **La latenza sarebbe esplosa** (`latency = 2*maxPeriod + maxBlockSize`, e `PluginProcessor.cpp` passa agli shifter `maxBlockSize = 8192`, limite prudenziale per gli scratch buffer, non il blocco reale dell'host — sarebbero stati ~170ms). Risolto con **chunking interno**: `process()` ora suddivide qualunque blocco ricevuto in fette di `kInternalChunk = 64` campioni e la formula di latenza usa questa costante invece del `maxBlockSize` esterno. **Verificato con un controllo ad-hoc** (fuori dal progetto, scratchpad) che l'uscita e' identica bit-per-bit indipendentemente da come il chiamante spezza le chiamate a `process()` (testato con blocchi da 256, 8192 e 777 campioni sullo stesso segnale).
+  3. **Perdita di sovrapposizione sotto circa un'ottava sotto** (bug latente nell'originale, non nella nostra checklist di sessione 8): il commento di `emitGrain()` diceva che la semiampiezza del grano va legata al maggiore fra periodo di analisi e di sintesi "cosi' la sovrapposizione resta sempre garantita", ma il codice usava solo il periodo di analisi. Sotto `alpha <= 0.5` (~-12 semitoni) la spaziatura fra grani di sintesi supera la loro lunghezza: l'inviluppo crolla a vuoti periodici. **Primo tentativo di correzione (margine largo, `W = P/alpha`) ha rotto il test 1** (a -12 semitoni la f0 misurata torna quella originale, errore di un'ottava): un grano troppo lungo, a beta=1, e' una copia diretta e non trasposta del segnale sorgente, e reintroduce direttamente la periodicita' originale al suo interno. **Corretto con il margine minimo analiticamente necessario** (`W = 1.2 * max(P, P/(2*alpha))`, il fattore 1.2 e non 1.0 perche' la finestra di Hann si azzera ai bordi e il contatto esatto lasciava comunque vuoti stretti) — l'intera indagine (formula sbagliata -> test 1 rotto -> formula corretta -> tutti i test verdi) e' stata condotta empiricamente con il compilatore, non "a orecchio" (CLAUDE.md regola 12).
+  - Mappatura **Stability -> minF0Hz** (non piu' una finestra STFT come in `SpectralShifter`): tabella `{165, 130, 100, 85, 70}` Hz per i 5 livelli Fast..Accurate, valori di partenza **da tarare all'ascolto**. E' uno scostamento deliberato e documentato dalla lettera di FR-54 ("seleziona la dimensione della finestra di analisi") — il PRD non e' stato modificato, solo annotato qui e nel codice.
+  - `setPitchShiftSemitones(float)` converte in `alpha` internamente (`alpha = 2^(semitoni/12)`); il resto del progetto continua a ragionare in semitoni.
+- **`src/dsp/PitchShifter.h`** (modificato): due metodi virtuali nuovi con default no-op, cosi' `SpectralShifter` non ha dovuto essere toccato: `setInputF0Hz(double)` (PSOLA ne ha bisogno per gli epoch) e `setFormantRatio(double)` (FR-39..42, implementato nel motore ma non ancora collegato a nulla — sessione futura).
+- **`src/voices/Voice.cpp`** (modificato): una riga in `processAdd`, `shifter->setInputF0Hz(440.0 * exp2((continuousInputMidiNote-69.0)/12.0))` — nessuna firma cambiata in `Voice`/`PhraseScheduler`/`PluginProcessor`, perche' la nota MIDI continua era gia' un parametro esistente e la conversione a Hz e' un calcolo esatto (round-trip dello stesso valore che `PitchDetector` ricava da Hz).
+- **`src/dsp/PitchShifterFactory.cpp`** (nuovo): `createDefaultPitchShifter()` spostata qui da `SpectralShifter.cpp`. Default: PSOLA. `SpectralShifter` resta compilato e disponibile come fallback dietro `#define HARMONIZER_USE_SPECTRAL_SHIFTER`, nessun parametro APVTS/UI (scelta esplicita dell'utente per questa sessione).
+- **`tests/psola_test.cpp`** (nuovo): suite portata da `TIPS` e adattata alla nostra interfaccia (niente JUCE, si compila ed esegue in meno di un secondo). Test 1-5 della suite originale (accuratezza di trasposizione, ortogonalita' pitch/formanti nei due sensi, assenza di discontinuita', monotonia della latenza — quest'ultimo riformulato su `stabilityLevel` invece che su `minF0Hz` diretto) piu' **due test nuovi**: Test 6 (inviluppo minimo di sovrapposizione, RMS a breve termine su finestra scorrevole — e' quello che ha scoperto il problema 3 sopra) e Test 7 (tenuta con f0 variabile nel tempo, mai esercitata dalla suite originale che passa sempre una f0 costante — verifica il ricambio continuo del ring di epoch). **Tutti e 7 verdi**, esito completo riportato durante la sessione, non solo "passa".
+- **`CMakeLists.txt`** (modificato): nuovi sorgenti (`PsolaShifter.cpp`, `PitchShifterFactory.cpp`) nel target del plugin; nuovo target `psola_test` (eseguibile separato, senza dipendenze JUCE, `enable_testing()` + `add_test`).
+- **`.github/workflows/build.yml`** (modificato): nuovo job `dsp-tests` (ubuntu, compila ed esegue `psola_test` con g++) che gira per primo; i job di build del plugin (Windows/macOS) ora dipendono da esso (`needs: dsp-tests`) — se il DSP e' rotto non si aspettano 20 minuti di build per scoprirlo.
+- **`CLAUDE.md`** (modificato): aggiunte le regole 12 ("non puoi ascoltare") e 13 ("un test che fallisce puo' essere il test sbagliato — ma vale anche il contrario"), adottate da `TIPS/CLAUDE.md` dopo che si sono dimostrate utili proprio in questa sessione (problema 3 sopra). Nota di stato milestone aggiornata da M0 a M1.
+- **Correzione di un errore della sessione 8**: la nota su `_USE_MATH_DEFINES`/`M_PI` (riga 337 della versione precedente di questo file) attribuiva il problema al motore PSOLA in generale; verificato leggendo `PsolaShifter.h` che **non usa affatto `M_PI`** (costante letterale scritta a mano). Il problema riguardava solo `psola_test.cpp` originale, e nel nostro porting e' stato evitato definendo una `constexpr double kPi` locale invece di includere `<cmath>` con la define — non serve alcun flag di compilazione speciale.
+
+**Verificato in questa sessione (build reale, non solo lettura):**
+- Compilazione isolata (MSVC via `vcvarsall.bat x64`, scratchpad, nessun file di progetto toccato) di ogni fase intermedia del porting, con la suite di test rieseguita ad ogni modifica (deque -> ring, poi chunking, poi correzione `emitGrain`) per confermare invarianza o correggere regressioni prima di andare avanti.
+- **Build reale del progetto**: `cmake --build` Release, VST3 compilato e linkato con successo (il solo passo di copia post-build in `C:\Program Files\Common Files\VST3` fallisce per permessi, comportamento gia' noto e documentato dalla sessione 4 — non un problema di codice). **Standalone compilato con successo** (target buildato separatamente per bypassare l'interruzione del grafo MSBuild causata dal fallimento del passo di copia del VST3).
+- **`pluginval --strictness-level 10` verde sul VST3**, nessun fallimento su nessuna sezione (audio processing, state, automation, parametri, thread safety, bus, fuzz — log completo controllato riga per riga, non solo il codice di uscita).
+- **Target CMake `psola_test` verificato anche tramite `ctest`** (non solo la compilazione manuale in scratchpad): `1/1 Test #1: psola ... Passed`.
+- **Latenza misurata, target PRD raggiunto**: Stability Fast = 646 campioni = **13.5 ms** @48kHz — sotto la soglia <=15ms di NFR §1.3 per la prima volta nel progetto. Accurate = 1436 campioni = 29.9ms (comunque migliore del minimo di Signalsmith, che partiva da 30ms).
+
+**Novita' sessione 8 — scoperta cartella `TIPS` (PSOLA esterno, NON ANCORA INTEGRATO):**
+
+L'utente ha segnalato una cartella `TIPS` (trovata in `C:\Users\cazza\Downloads\TIPS`, **fuori dal progetto**) prodotta da una sessione Claude web separata, concentrata specificamente sul motore PSOLA proprietario — il rischio più alto del prodotto secondo il PRD (§13). Contenuto:
+
+```
+TIPS/
+├── CLAUDE.md                          (variante indipendente delle nostre regole, con alcune aggiunte utili — vedi sotto)
+├── PsolaShifter.h, psola-spec.md      (copie duplicate di quelle sotto)
+└── harmonizer-scaffold/
+    ├── CLAUDE.md
+    ├── CMakeLists.txt                  (JUCE via FetchContent tag 8.0.4, non submodule; target psola_test)
+    ├── docs/prd.md                     (VERIFICATO byte-per-byte identico al nostro PRD-Harmonizer-v1.md)
+    ├── docs/psola-spec.md              (specifica tecnica del TD-PSOLA, ben scritta)
+    ├── src/dsp/PitchShifter.h          (interfaccia astratta, namespace harm, SIMILE ma non identica alla nostra)
+    ├── src/dsp/PsolaShifter.h          (implementazione, ~300 righe, ZERO dipendenze esterne)
+    └── tests/psola_test.cpp            (5 test numerici)
+```
+
+**Non esistono PluginProcessor/PluginEditor in quella cartella**: è DSP puro, pensato per essere validato da riga di comando prima ancora di toccare JUCE. Il loro `CLAUDE.md` documenta un ordine di lavoro diverso dal nostro: PSOLA prima (validato numericamente) → M0 infrastruttura → CI → verifica AU → **solo dopo** PitchDetector — mentre noi abbiamo fatto M0 prima e costruito in ampiezza con un motore interinale (Signalsmith).
+
+**Verifica fatta io stesso (non solo lettura):** ho compilato `psola_test.cpp` con MSVC in una cartella temporanea fuori dal progetto (nessun file di progetto toccato) ed eseguito i test:
+- **TUTTI I TEST SUPERATI (0 fallimenti)**: errore di trasposizione < 0.01 cent su ±12 semitoni; indipendenza pitch/formanti confermata numericamente; nessuna discontinuità; latenza monotona al variare di `minF0`.
+- Un solo intoppo, cosmetico e non-mio-problema: mancava `_USE_MATH_DEFINES` per `M_PI` su MSVC (la libreria è stata scritta/testata altrove, probabilmente con g++/clang dove `M_PI` è disponibile di default) — risolto con un flag di compilazione, non è un bug dell'algoritmo.
+- I numeri di latenza misurati coincidono ESATTAMENTE con quelli dichiarati nella spec (minF0=70Hz → 33.9ms / 1628 campioni; minF0=120Hz → 22.0ms / 1056 campioni).
+
+**Perché è rilevante per noi:**
+- Algoritmo TD-PSOLA di dominio pubblico (anni '90), **zero dipendenze e zero problemi di licenza** (coerente con CLAUDE.md regola 9).
+- **Latenza reale misurata (22-34ms secondo `minF0`) già inferiore al nostro motore interinale Signalsmith** (30-180ms secondo Stability) — e ulteriormente riducibile con un blocco più piccolo (con blocco 32-64 campioni si stima si scenda sotto i 15ms target del PRD a `minF0` intorno a 150Hz, cosa che Signalsmith non potrà mai fare per costruzione).
+- **`alpha`/`beta` ortogonali per costruzione**: `alpha` controlla SOLO il pitch, `beta` SOLO le formanti — la formula proposta per FR-39 (`beta = alpha^(-k*spread)`) è già scritta nella spec e ricalca quasi alla lettera il requisito. Noi non abbiamo ancora toccato le Formanti (FR-39..42): questo ci darebbe un punto di partenza concreto.
+- Loro `CLAUDE.md` ha due regole in più che vale la pena adottare anche nel nostro: **"Non puoi ascoltare"** (mai dichiarare completo un lavoro sul suono perché "compila" — o tradurlo in una misura numerica con un test, o segnalare che serve un ascolto umano) e un promemoria che un test che fallisce potrebbe essere il test sbagliato, non l'algoritmo (successo due volte nella loro sessione, entrambe le volte l'algoritmo era giusto — vedi dettagli su autocorrelazione/sub-armonica e centroide spettrale in `psola-spec.md` §8.1).
+
+**Perché NON è plug-and-play — differenze architetturali reali da colmare prima di integrarlo:**
+1. La loro interfaccia `PitchShifter` (namespace `harm`) richiede `setF0(double f0Hz)` esplicito — PSOLA ne ha bisogno per posizionare gli epoch sul periodo reale. La nostra interfaccia attuale (`src/dsp/PitchShifter.h`) espone solo `setPitchShiftSemitones(float)`: va estesa.
+2. Loro lavorano in `alpha` (rapporto moltiplicativo, es. 2.0 = ottava sopra) e `beta` (rapporto formanti); noi lavoriamo in semitoni. Conversione banale (`alpha = 2^(semitoni/12)`), ma va scritta.
+3. Il nostro `PitchDetector` oggi espone solo `getMidiNote()` (nota MIDI continua); serve anche l'Hz grezzo (`getFrequencyHz()` o simile) per alimentare `setF0`.
+4. Loro `prepare()` prende `minF0Hz` direttamente; il nostro prende `stabilityLevel` (0-4, mappato internamente da `SpectralShifter`). Andrebbe deciso come le 5 posizioni di Stability mappano a `minF0Hz` per questo motore (la loro tabella in `psola-spec.md` §6 da' gia' dei valori di riferimento).
+5. Nessun collegamento a Formanti/UI/parametri APVTS per `beta` — tutto da costruire (FR-39..42 sono ancora del tutto assenti dal nostro progetto).
+6. Va portato nella nostra struttura (`src/dsp/PsolaShifter.h` + eventuale `.cpp`), verificato con la NOSTRA build CMake/pluginval, non solo con la loro suite standalone.
+
+**Nessun file del progetto è stato modificato in questa sessione**, su richiesta esplicita dell'utente: solo lettura, ricerca e una compilazione di verifica fuori dal progetto.
 
 **Novita' sessione 7 — motore a frasi (M3):**
 - **Rilevamento onset** (FR-43, nuovo `src/dsp/OnsetDetector.{h,cpp}`): inviluppo di picco (`cycfi::q::peak_envelope_follower`) + `cycfi::q::onset_gate` (soglia di livello O pendenza rapida, per catturare anche attacchi morbidi). Un EVENTO di onset e' il fronte di salita del gate; pattern d'uso copiato esattamente dalla documentazione di Cycfi Q in `noise_gate.hpp`.
@@ -85,11 +152,13 @@ SVILUPPO SOFTWARE/
 ├── PRD-Harmonizer-v1.md
 ├── handsoff.md
 ├── libs/{JUCE, q, signalsmith-stretch}/   (submodule)
-└── src/
-    ├── PluginProcessor.{h,cpp}, PluginEditor.{h,cpp}
-    ├── dsp/PitchDetector.{h,cpp}, PitchShifter.h, SpectralShifter.{h,cpp}, Glide.h, OnsetDetector.{h,cpp}
-    ├── harmony/HarmonyPreset.h, HarmonyEngine.{h,cpp}, PresetLibrary.{h,cpp}, CsvIo.{h,cpp}
-    └── voices/Voice.{h,cpp}, VoicePool.{h,cpp}, Phrase.h, PhraseScheduler.{h,cpp}
+├── src/
+│   ├── PluginProcessor.{h,cpp}, PluginEditor.{h,cpp}
+│   ├── dsp/PitchDetector.{h,cpp}, PitchShifter.h, PsolaShifter.{h,cpp}, SpectralShifter.{h,cpp},
+│   │       PitchShifterFactory.cpp, Glide.h, OnsetDetector.{h,cpp}
+│   ├── harmony/HarmonyPreset.h, HarmonyEngine.{h,cpp}, PresetLibrary.{h,cpp}, CsvIo.{h,cpp}
+│   └── voices/Voice.{h,cpp}, VoicePool.{h,cpp}, Phrase.h, PhraseScheduler.{h,cpp}
+└── tests/psola_test.cpp   (target CMake `psola_test`, niente JUCE, gate in CI)
 ```
 
 Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prosecuzione tecnica):
@@ -186,7 +255,30 @@ Questioni aperte dal PRD (§16) che restano da chiudere (nessuna blocca la prose
 | `CMakeLists.txt` | modificato | Nuovi sorgenti `OnsetDetector.cpp`, `PhraseScheduler.cpp` |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 8 (scoperta PSOLA esterno — NESSUN file di progetto modificato):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `handsoff.md` | aggiornato | Questo aggiornamento — unico file toccato in questa sessione |
+
+File letti (fuori dal progetto, in `C:\Users\cazza\Downloads\TIPS`, mai modificati): `CLAUDE.md`, `harmonizer-scaffold/CLAUDE.md`, `harmonizer-scaffold/CMakeLists.txt`, `harmonizer-scaffold/docs/prd.md`, `harmonizer-scaffold/docs/psola-spec.md`, `harmonizer-scaffold/src/dsp/PitchShifter.h`, `harmonizer-scaffold/src/dsp/PsolaShifter.h`, `harmonizer-scaffold/tests/psola_test.cpp`.
+
 Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrascritta) a ogni sessione futura.
+
+**Sessione 9 (integrazione PSOLA, M1):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/dsp/PsolaShifter.{h,cpp}` | creato | Motore TD-PSOLA portato da `TIPS`, ring di epoch RT-safe, chunking interno, mappa Stability->minF0Hz |
+| `src/dsp/PitchShifterFactory.cpp` | creato | `createDefaultPitchShifter()` spostata qui da `SpectralShifter.cpp`; default PSOLA, `#define HARMONIZER_USE_SPECTRAL_SHIFTER` per fallback |
+| `tests/psola_test.cpp` | creato | Suite numerica portata (5 test originali + 2 nuovi), niente JUCE |
+| `src/dsp/PitchShifter.h` | modificato | `setInputF0Hz`/`setFormantRatio` virtuali con default no-op |
+| `src/dsp/SpectralShifter.cpp` | modificato | Rimossa la factory (spostata) |
+| `src/voices/Voice.cpp` | modificato | Una riga: `setInputF0Hz` da `continuousInputMidiNote` |
+| `CMakeLists.txt` | modificato | Nuovi sorgenti + target `psola_test` + `enable_testing()` |
+| `.github/workflows/build.yml` | modificato | Job `dsp-tests` come gate prima della build plugin |
+| `CLAUDE.md` | modificato | Regole 12/13 (processo) + nota di stato milestone M0->M1 |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
 
 ---
 
@@ -252,6 +344,21 @@ Nessuna modifica al PRD.
 - Generalizzato `VoicePool` da 8 slot fissi a un pool di N slot riutilizzabile sia dalle 8 "colonne armoniche" di ogni frase sia dal meccanismo di furto.
 - Build e `pluginval --strictness-level 10` verdi al primo tentativo (nessun errore di compilazione in questa sessione).
 
+**Sessione 8 — scoperta e verifica del PSOLA esterno (richiesta esplicita: nessuna modifica al progetto):**
+- Localizzata la cartella `TIPS` (non era nel progetto, ne' menzionata prima): trovata in `C:\Users\cazza\Downloads\TIPS` cercando piu' in profondita' dopo che una ricerca nel progetto non ha dato risultati.
+- Letta per intero: `CLAUDE.md` (loro), `docs/prd.md` (confrontato con `diff` contro il nostro — **identico**), `docs/psola-spec.md`, `src/dsp/PitchShifter.h`, `src/dsp/PsolaShifter.h`, `tests/psola_test.cpp`, `CMakeLists.txt`.
+- **Compilato ed eseguito io stesso** `psola_test.cpp` con MSVC (`cl.exe` via `vcvarsall.bat x64`), in una cartella temporanea creata sotto lo scratchpad di sessione — non sotto il progetto, non sotto `Downloads/TIPS`. Un solo intoppo (mancava `_USE_MATH_DEFINES` per `M_PI`, aggiunto come flag `/D_USE_MATH_DEFINES` senza toccare i sorgenti), poi tutti i 5 test superati con i numeri riportati nella spec confermati esattamente.
+- Confrontata l'interfaccia `harm::PitchShifter` (loro) con la nostra `PitchShifter` per capire il gap di integrazione reale (vedi §2 per il dettaglio: `setF0` esplicito mancante da noi, unita' di misura diverse — alpha/beta vs semitoni, `minF0Hz` vs `stabilityLevel`).
+- Nessun file di progetto toccato in questa sessione, ne' prima ne' dopo questo aggiornamento a `handsoff.md`, come esplicitamente richiesto dall'utente.
+
+**Sessione 9 — integrazione PSOLA (scelta dall'utente tra le direzioni proposte):**
+- Chiesta esplicitamente all'utente la direzione tra le opzioni segnalate come aperte in sessione 8 (PSOLA / MIDI CC / Formanti / solo processo): scelto "Integrare il PSOLA di TIPS", poi due decisioni di perimetro chieste esplicitamente (selezione motore a compile-time vs UI; solo motore vs anche Formanti; test in CI o solo locali) — vedi §6 vecchia versione per le opzioni presentate.
+- **Esplorazione parallela** (due agenti) del nostro DSP attuale e dei sorgenti `TIPS`, poi lettura diretta dei file chiave (`PsolaShifter.h`, `PitchShifter.h` nostro e loro, `Voice.cpp`, `VoicePool.h`) prima di scrivere qualunque riga di piano, per non fidarsi solo dei riassunti degli agenti sui dettagli che contavano di piu' (le firme esatte, dove alloca il codice).
+- Lavoro condotto a piccoli passi verificati singolarmente col compilatore (deque->ring, poi chunking, poi correzione `emitGrain`), non come un'unica riscrittura: ha permesso di isolare la regressione del problema 3 (sotto) al passo esatto che l'ha introdotta, invece di dover fare debug su un cambiamento cumulativo.
+- **Il primo tentativo di correggere il bug di sovrapposizione (`emitGrain`) ha rotto un test che prima passava** (test 1, accuratezza di trasposizione a -12 semitoni): invece di allentare la soglia del test o di scartare il fix, si e' analizzato perche' l'uscita fosse davvero cambiata (grano troppo lungo = periodicita' originale reintrodotta), trovata la causa esatta e corretta la formula stessa (margine minimo analitico invece del margine largo iniziale). Coerente con la nuova regola 13 di `CLAUDE.md`: un test che fallisce dopo una correzione non e' automaticamente "il test sbagliato" — a volte lo e' davvero il codice.
+- Costruito un controllo ad-hoc separato (fuori dalla suite permanente, in scratchpad) per verificare l'invarianza dell'uscita rispetto a come l'host suddivide le chiamate a `process()` — proprieta' non coperta dai 7 test della suite ma cruciale per la correttezza del chunking interno introdotto in questa sessione.
+- Build reale (non solo compilazione isolata) e `pluginval --strictness-level 10` eseguiti a fine sessione, con esito riportato per intero (regola 8 di `CLAUDE.md`).
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -277,8 +384,15 @@ Nessuna modifica al PRD.
 **Sessione 7:**
 - Nessun errore incontrato: build e pluginval verdi al primo tentativo, nonostante la riscrittura sostanziale di VoicePool e i due nuovi file (OnsetDetector, PhraseScheduler). Probabilmente dovuto ad aver progettato con cura la sincronizzazione dei thread PRIMA di scrivere codice (stesso schema gia' rodato in sessione 5/6), invece di scoprirla per tentativi.
 
+**Sessione 8:**
+- **`M_PI` non dichiarato compilando `psola_test.cpp` con MSVC**: `error C2065: 'M_PI': identificatore non dichiarato`. Non e' un bug dell'algoritmo — MSVC espone `M_PI` solo se `_USE_MATH_DEFINES` e' definito PRIMA di includere `<cmath>`, a differenza di g++/clang dove e' disponibile di default. Risolto passando `/D_USE_MATH_DEFINES` come flag di compilazione (nessuna modifica ai sorgenti, che restano quelli scaricati). **Correzione sessione 9**: la frase seguente (rimossa) attribuiva il problema al motore PSOLA in generale — falso, verificato leggendo `PsolaShifter.h`: non usa affatto `M_PI` (costante letterale scritta a mano), riguardava solo il file di test. Nel nostro porting evitato del tutto con una `constexpr double` locale.
+
+**Sessione 9:**
+- **La prima correzione del bug di sovrapposizione in `emitGrain` ha rotto il test 1**: allargando la semiampiezza del grano al margine "largo" (`W = P * max(1, 1/alpha)`, cio' che il commento originale sembrava suggerire), a -12 semitoni la f0 misurata tornava quella originale (errore di un'ottava esatto). Causa: a `beta=1` il grano e' una copia diretta, non trasposta, del segnale sorgente — un grano piu' lungo della spaziatura fra grani reintroduce direttamente la periodicita' ORIGINALE (non shiftata) al suo interno, che l'autocorrelazione del test rileva come dominante sulla periodicita' "strutturale" data dalla spaziatura. Non era un problema del test (la sua stessa logica anti-ottava, controllata, era corretta): l'uscita conteneva davvero energia forte alla frequenza originale. Risolto usando il margine minimo analiticamente necessario a far toccare i grani (`W = 1.2 * max(P, P/(2*alpha))`, derivato dalla condizione `Lg=2W >= synthPeriod`) invece del margine largo — tutti e 7 i test verdi dopo la correzione, confermato che nessun altro test e' peggiorato.
+- Nessun errore di compilazione incontrato nel resto della sessione (build VST3/Standalone e `pluginval` verdi al primo tentativo dopo il porting completo).
+
 Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora affrontati:
-- **Qualità del PSOLA proprietario** non ancora validata all'ascolto (previsto a fine M1). È il rischio più alto per il prodotto: se non regge, serve valutare ZTX PRO di Zynaptiq (costo/trattativa commerciale).
+- **Qualità del PSOLA proprietario**: rischio piu' alto secondo il PRD. **Aggiornamento sessione 9**: PSOLA e' ora INTEGRATO come motore di default, verificato numericamente (7 test verdi, incluso un test di sovrapposizione che ha scoperto e permesso di correggere un bug reale nell'algoritmo sorgente) e verificato in build reale (`pluginval` verde, latenza Fast misurata a 13.5ms, sotto il target PRD). Resta comunque solo su segnale sintetico (onda a impulsi + risonanza singola), non su registrazioni reali di sax/tromba/voce ne' provato all'ascolto dentro il nostro plugin. Il rischio "suona bene dal vivo" resta aperto finche' l'utente non lo prova in Ableton. Se anche cosi' non dovesse reggere, resta l'opzione ZTX PRO di Zynaptiq (costo/trattativa commerciale).
 - **Tipo di plugin AU** deve essere Music Effect (`aumf`) fin da M0: è una decisione strutturale irreversibile dopo il rilascio (PRD §4.1).
 - **FR-17 / FR-46**: implementate entrambe in sessione 7 con una risoluzione esplicita (solo la frase piu' recente segue dal vivo il preset) — **da validare all'ascolto**, come il PRD stesso richiedeva. Non ancora fatto: l'utente non ha ancora potuto testare in Ableton.
 - **Sviluppatore singolo alle prime armi con C++** su un progetto di ~50 settimane — mitigato nel piano con milestone brevi e CI dal giorno uno.
@@ -287,17 +401,26 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Immediato — testare in Ableton Live (l'utente non ha ancora potuto, da due sessioni):**
-1. Ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza.
-2. Provare in particolare il motore a frasi (novita' di questa sessione): suonare una linea veloce di note diverse e verificare che si sentano piu' armonizzazioni sovrapposte (FR-45), che cambiare accordo mentre si tiene una nota aggiorni dal vivo la voce (FR-17), e che cambiare accordo DOPO essere passati a una nuova nota NON alteri retroattivamente la frase precedente (FR-46). Provare anche ad abbassare "Voice Cap" a un valore piccolo (es. 4) e suonare rapidamente per sentire il furto di frase in azione.
-3. Continuare a provare anche le novita' di sessione 6 (Fix/Move con vibrato, cambio Stability) se non gia' fatto.
-4. Ricordare i limiti noti: latenza minima ~30ms, solo preset Min verificato, pattern ritmico non implementato (tutte le voci di una frase entrano in sync), risoluzione FR-17/FR-46 non ancora validata all'ascolto.
+**Immediato — testare in Ableton Live (l'utente non ha ancora potuto, da tre sessioni):**
+1. Ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza — ricompilato in questa sessione, contiene il motore PSOLA.
+2. **Priorita' assoluta: ascoltare il motore PSOLA per la prima volta**, dato che finora e' stato validato solo su segnale sintetico e in build (mai all'ascolto — regola 12 di `CLAUDE.md`). In particolare:
+   - Confronto con la sensazione di reattivita' di prima (Signalsmith): la latenza dichiarata e' scesa da ~30ms a 13.5ms (Fast) / 29.9ms (Accurate) — dovrebbe sentirsi.
+   - **Voicing a -12 semitoni e sotto**, il caso specifico su cui questa sessione ha trovato e corretto un bug reale (vedi §2/§5): verificare che non ci siano vuoti/artefatti percepibili scendendo di un'ottava o piu'.
+   - Fix/Move con vibrato, cambio Stability, motore a frasi — tutte le funzionalita' di sessione 6/7, ora sopra un motore diverso.
+   - Se qualcosa non convince all'ascolto: la mappatura Stability->minF0Hz (`{165,130,100,85,70}` Hz, in `PsolaShifter.cpp`) e' un singolo array con valori esplicitamente segnalati come "di partenza, da tarare" — e' il primo posto dove intervenire.
+3. Ricordare i limiti noti (aggiornati, vedi fondo file): Formanti ancora assenti, `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto.
 
-**Prossima area di sviluppo — da ridiscutere con l'utente**, tra le direzioni proposte e non ancora scelte:
+**Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro d'ascolto sopra:
+- **Formanti (FR-39..42)**: perimetro lasciato fuori da questa sessione apposta. Il motore espone gia' `setFormantRatio(beta)` funzionante e testato (Test 3 della suite); manca tutto il resto — parametri APVTS (Spread globale + offset manuale per voce), wiring della formula `beta = alpha^(-k*spread)` (k≈0.3, da tarare all'ascolto, vedi `psola-spec.md` §3 in `TIPS`), controlli UI. E' il lavoro reso piu' naturale da questa sessione, non piu' quello con il rischio piu' alto.
 - **Controllo MIDI CC (M4)**: router dei 3 CC, modalita' Play, override vs automazione host.
-- **Formanti** (FR-39..42): correzione automatica in funzione dello shift, knob Spread, offset per voce.
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
-- Sostituire `SpectralShifter` con `PsolaShifter` proprietario dietro la stessa interfaccia (FR-62) — lavoro DSP sostanzioso a se stante; risolverebbe anche la latenza minima troppo alta.
+
+**Limiti noti del motore PSOLA dopo questa sessione (da non scambiare per requisiti soddisfatti):**
+- **`f0 <= 0` senza fade dedicato**: oggi `PhraseScheduler` smette semplicemente di processare le voci quando il segnale non e' stabile (`freeAllPhrases()`) — comportamento pre-esistente, non peggiorato ne' risolto da questa sessione.
+- **Nessun crossfade esplicito sul cambio di Stability** dentro il motore stesso: la transizione si appoggia interamente al `Glide` gia' presente in `Voice` (sessione 6) — da verificare all'ascolto che basti.
+- **Validato solo su segnale sintetico** (onda a impulsi + risonanza singola) — nessuna registrazione reale di sax/tromba/voce ancora provata, ne' in `tests/`, ne' all'ascolto.
+- **Finestra di Hann ricalcolata per campione** in `emitGrain` (chiamata a `std::cos`): nota ottimizzazione non fatta, rilevante se la profilazione CPU con 8 voci (mai eseguita) rivelasse problemi rispetto al budget ≤15% del PRD §1.3.
+- **`SpectralShifter` non piu' usato ma ancora compilato**: se in futuro si rimuove per pulizia, verificare prima che nessuno faccia piu' riferimento a `HARMONIZER_USE_SPECTRAL_SHIFTER`.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).
@@ -307,4 +430,5 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - Nome prodotto/azienda non deciso: `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` restano placeholder.
 - Solo un preset (Min) e' verificato contro il prototipo reale — gli altri 6 sono standard jazz generici, da correggere quando l'utente fornira' i dati veri (ora importabili via CSV).
 - Risoluzione FR-17/FR-46 (sessione 7) da validare all'ascolto appena possibile.
+- **Nuova**: valori della tabella Stability->minF0Hz (sessione 9) sono un punto di partenza, non tarati all'ascolto.
 - Commit/push di questa sessione: da confermare con l'utente prima di procedere — verificare `git status` all'inizio della prossima sessione.

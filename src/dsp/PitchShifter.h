@@ -35,6 +35,19 @@ public:
     // modalita' Fix (FR-22), che ricalcola il rapporto ogni blocco.
     virtual void setPitchShiftSemitones (float semitones) = 0;
 
+    // Fondamentale del segnale in ingresso, in Hz (0 o negativo se il
+    // detector non ha confidenza sufficiente). Serve ai motori a dominio
+    // del tempo (PSOLA) per posizionare gli epoch sul periodo reale; le
+    // implementazioni che non ne hanno bisogno (SpectralShifter) lasciano
+    // il default no-op. Sicuro da chiamare ogni blocco: non alloca.
+    virtual void setInputF0Hz (double /*f0Hz*/) {}
+
+    // Rapporto di scalatura delle formanti, indipendente dal pitch (FR-39..42).
+    // 1.0 = formanti dell'originale preservate. Non ancora collegato a un
+    // parametro APVTS/UI: implementato nei motori che lo supportano, in
+    // attesa del lavoro dedicato. Sicuro da chiamare ogni blocco: non alloca.
+    virtual void setFormantRatio (double /*beta*/) {}
+
     virtual int getLatencySamples() const = 0;
 
     // in e out sono buffer mono distinti (non alias) di numSamples campioni.

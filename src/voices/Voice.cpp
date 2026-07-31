@@ -1,4 +1,5 @@
 #include "Voice.h"
+#include <cmath>
 
 void Voice::prepare (double sampleRate, int maxBlockSize, int stabilityLevel)
 {
@@ -49,6 +50,15 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
         // dell'esecutore si trasferiscono integralmente sulla voce.
         semitonesToApply = smoothedOffset;
     }
+
+    // Fondamentale del segnale in ingresso, in Hz: serve ai motori a
+    // dominio del tempo (PSOLA) per posizionare gli epoch sul periodo
+    // reale. E' un calcolo esatto, non un'approssimazione: PitchDetector
+    // ricava continuousInputMidiNote proprio da una frequenza in Hz
+    // (get_frequency() di Cycfi Q), quindi questo e' l'andata e ritorno
+    // dello stesso valore. Le implementazioni che non ne hanno bisogno
+    // (SpectralShifter) ignorano la chiamata (default no-op).
+    shifter->setInputF0Hz (440.0 * std::exp2 (((double) continuousInputMidiNote - 69.0) / 12.0));
 
     shifter->setPitchShiftSemitones (semitonesToApply);
     shifter->process (monoIn, scratch.data(), numSamples);

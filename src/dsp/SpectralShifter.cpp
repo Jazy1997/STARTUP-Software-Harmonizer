@@ -48,8 +48,3 @@ void SpectralShifter::process (const float* in, float* out, int numSamples)
     float* const outputs[1] = { out };
     stretch.process (inputs, numSamples, outputs, numSamples);
 }
-
-std::unique_ptr<PitchShifter> createDefaultPitchShifter()
-{
-    return std::make_unique<SpectralShifter>();
-}

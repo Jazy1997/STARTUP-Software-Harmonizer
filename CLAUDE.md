@@ -26,12 +26,23 @@ discostarsi da un requisito, **va segnalato e discusso, non deciso unilateralmen
     `feat(harmony): lookup tabella preset — FR-16`.
 11. **Il target standalone deve restare sempre funzionante.** È lo strumento principale di
     iterazione sul DSP, va tenuto vivo ad ogni milestone.
+12. **Non puoi ascoltare.** Non hai modo di sapere se qualcosa "suona bene". Se un requisito è
+    formulato in termini percettivi, traducilo in una misura numerica e aggiungi un test
+    (vedi `tests/psola_test.cpp`), oppure segnala esplicitamente che serve una verifica
+    all'ascolto da parte dell'utente. Non dichiarare mai completo un lavoro sul suono
+    basandoti sul fatto che il codice compila.
+13. **Quando un test fallisce, considera anche l'ipotesi che sia sbagliato il test**, non
+    l'algoritmo — prima di riscrivere il codice, verifica che la misura stia davvero misurando
+    ciò che pensi. Vale anche il contrario: se una correzione fa fallire un test che prima
+    passava, non è detto che sia il test ad essere sbagliato — verifica cosa è cambiato
+    davvero nell'uscita prima di allentare una soglia.
 
 ---
 
 ## Note di stato (aggiornare ad ogni milestone)
 
-- Milestone corrente: **M0 — Fondamenta**.
+- Milestone corrente: **M1 — Detection e shifting** (M0 tecnicamente completo; PSOLA proprietario
+  integrato come motore di default dietro `PitchShifter`, verificato da `tests/psola_test.cpp`).
 - Formati target: VST3, AU (Music Effect), Standalone — tutti `[MUST]`.
 - `PLUGIN_MANUFACTURER_CODE` / `PLUGIN_CODE` in `CMakeLists.txt` sono **placeholder**
   (nome prodotto/azienda non ancora deciso, vedi PRD §16). Vanno confermati prima della

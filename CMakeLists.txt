@@ -45,6 +45,8 @@ target_sources(Harmonizer
         src/PluginEditor.cpp
         src/dsp/PitchDetector.cpp
         src/dsp/SpectralShifter.cpp
+        src/dsp/PsolaShifter.cpp
+        src/dsp/PitchShifterFactory.cpp
         src/dsp/OnsetDetector.cpp
         src/harmony/HarmonyEngine.cpp
         src/harmony/PresetLibrary.cpp
@@ -81,3 +83,18 @@ target_link_libraries(Harmonizer
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# Suite di verifica numerica del motore PSOLA (CLAUDE.md, "non puoi
+# ascoltare" — vedi tests/psola_test.cpp). Deliberatamente SENZA
+# dipendenze da JUCE: si compila ed esegue in un secondo, senza aprire una
+# DAW, cosi' una regressione nel motore si scopre prima di aspettare la
+# build completa del plugin (vedi anche .github/workflows/build.yml).
+add_executable(psola_test
+    tests/psola_test.cpp
+    src/dsp/PsolaShifter.cpp
+)
+target_include_directories(psola_test PRIVATE src)
+target_compile_features(psola_test PRIVATE cxx_std_20)
+
+enable_testing()
+add_test(NAME psola COMMAND psola_test)
