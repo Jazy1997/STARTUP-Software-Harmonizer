@@ -7,6 +7,8 @@
 #include "harmony/HarmonyEngine.h"
 #include "harmony/PresetLibrary.h"
 #include "voices/PhraseScheduler.h"
+#include "midi/CcRouter.h"
+#include "midi/OverrideManager.h"
 
 #include <functional>
 #include <memory>
@@ -70,11 +72,17 @@ public:
     // FR-53: numero di voci fisiche attualmente in uso tra tutte le frasi.
     int getNumActiveVoices() const noexcept { return phraseScheduler.getNumActiveVoices(); }
 
+    // FR-31/32/33: configurazione CC (numeri, canale) e MIDI Learn. Letta e
+    // scritta dal message thread (UI); CcRouter la rende sicura anche
+    // rispetto all'audio thread internamente (std::atomic).
+    CcRouter& getCcRouter() noexcept { return ccRouter; }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void timerCallback() override;
     bool canApplyStabilityChangeNow() const;
+    bool isTransportPlaying() const;
 
     mutable juce::SpinLock presetLibraryLock;
     std::shared_ptr<const harmony::PresetLibrary> currentPresetLibrary;
@@ -84,6 +92,15 @@ private:
     OnsetDetector onsetDetector;
     PhraseScheduler phraseScheduler;
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
+
+    // FR-30/36/37/38: CcRouter interpreta i CC in ingresso, OverrideManager
+    // decide se contano piu' di quello che dice l'automazione host. Entrambi
+    // vivono e si usano solo sull'audio thread (dentro processBlock);
+    // CcRouter espone comunque setter/getter atomici per l'UI (message
+    // thread) tramite getCcRouter().
+    CcRouter ccRouter;
+    OverrideManager overrideManager;
+    bool wasPlayingLastBlock = false; // solo audio thread: rileva il fronte di stop (FR-36)
 
     // Buffer di lavoro mono, dimensionati sul caso peggiore in prepareToPlay
     // (NFR-03): nessuna riallocazione in processBlock (CLAUDE.md regola 1).

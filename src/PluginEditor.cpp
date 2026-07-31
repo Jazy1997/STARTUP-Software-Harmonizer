@@ -13,6 +13,20 @@ namespace
         parent.addAndMakeVisible (label);
     }
 
+    void setupCcRow (juce::Slider& slider, juce::Label& label, juce::TextButton& learnButton, juce::Component& parent)
+    {
+        slider.setSliderStyle (juce::Slider::LinearHorizontal);
+        slider.setRange (0.0, 127.0, 1.0);
+        slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 20);
+        parent.addAndMakeVisible (slider);
+
+        label.attachToComponent (&slider, true);
+        parent.addAndMakeVisible (label);
+
+        learnButton.setClickingTogglesState (false);
+        parent.addAndMakeVisible (learnButton);
+    }
+
     void layoutRowOfButtons (juce::Rectangle<int> row, const std::vector<juce::Component*>& buttons)
     {
         const int n = (int) buttons.size();
@@ -236,12 +250,52 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
             ok ? "Libreria salvata come globale." : "Salvataggio fallito.");
     };
 
+    // FR-32: canale MIDI, omni come default (itemId 1). itemId N+1 = canale N.
+    midiChannelBox.addItem ("Omni", 1);
+    for (int ch = 1; ch <= 16; ++ch)
+        midiChannelBox.addItem (juce::String (ch), ch + 1);
+    addAndMakeVisible (midiChannelBox);
+    midiChannelLabel.attachToComponent (&midiChannelBox, true);
+    addAndMakeVisible (midiChannelLabel);
+    midiChannelBox.onChange = [this]
+    {
+        const int itemId = midiChannelBox.getSelectedId();
+        processorRef.getCcRouter().setMidiChannel (itemId <= 1 ? 0 : itemId - 1);
+    };
+
+    // FR-30/31/33: numero CC per funzione + MIDI Learn. Non sono
+    // AudioProcessorValueTreeState::SliderAttachment: i numeri CC non sono
+    // parametri APVTS (vedi PluginProcessor::getStateInformation), quindi
+    // slider e bottoni si collegano direttamente a CcRouter e si
+    // risincronizzano dal timer esistente (syncCcControlsFromRouter).
+    setupCcRow (rootCcSlider, rootCcLabel, learnRootButton, *this);
+    setupCcRow (presetCcSlider, presetCcLabel, learnPresetButton, *this);
+    setupCcRow (bypassCcSlider, bypassCcLabel, learnBypassButton, *this);
+
+    rootCcSlider.onValueChange   = [this] { processorRef.getCcRouter().setRootCc   ((int) rootCcSlider.getValue()); };
+    presetCcSlider.onValueChange = [this] { processorRef.getCcRouter().setPresetCc ((int) presetCcSlider.getValue()); };
+    bypassCcSlider.onValueChange = [this] { processorRef.getCcRouter().setBypassCc ((int) bypassCcSlider.getValue()); };
+
+    learnRootButton.onClick   = [this] { processorRef.getCcRouter().startLearning (CcRouter::LearnTarget::root); };
+    learnPresetButton.onClick = [this] { processorRef.getCcRouter().startLearning (CcRouter::LearnTarget::preset); };
+    learnBypassButton.onClick = [this] { processorRef.getCcRouter().startLearning (CcRouter::LearnTarget::bypass); };
+
+    // FR-30/34/36: bypass e' un parametro APVTS come gli altri (automatizzabile
+    // dall'host); il CC lo mette in override esattamente come root/preset
+    // (vedi PluginProcessor::processBlock, OverrideManager). Il bottone qui
+    // serve a testare senza un controller MIDI a disposizione.
+    bypassToggle.setButtonText ("Bypass");
+    addAndMakeVisible (bypassToggle);
+    bypassAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "bypass", bypassToggle);
+
+    syncCcControlsFromRouter();
+
     refreshPresetBoxFromLibrary();
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (460, 680, 1200, 960);
-    setSize (500, 720);
+    setResizeLimits (460, 840, 1200, 1120);
+    setSize (500, 880);
 
     startTimerHz (15);
 }
@@ -312,6 +366,25 @@ void HarmonizerAudioProcessorEditor::resized()
     }
     area.removeFromTop (gap);
 
+    layoutRow (midiChannelBox);
+
+    auto layoutCcRow = [&] (juce::Slider& slider, juce::TextButton& button)
+    {
+        auto row = area.removeFromTop (rowHeight);
+        row.removeFromLeft (labelWidth);
+        auto buttonArea = row.removeFromRight (70);
+        button.setBounds (buttonArea);
+        row.removeFromRight (4);
+        slider.setBounds (row);
+        area.removeFromTop (gap);
+    };
+
+    layoutCcRow (rootCcSlider, learnRootButton);
+    layoutCcRow (presetCcSlider, learnPresetButton);
+    layoutCcRow (bypassCcSlider, learnBypassButton);
+
+    layoutRow (bypassToggle);
+
     layoutRowOfButtons (area.removeFromTop (rowHeight),
                         { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton });
     area.removeFromTop (gap);
@@ -324,8 +397,33 @@ void HarmonizerAudioProcessorEditor::timerCallback()
 {
     refreshPresetBoxFromLibrary();
     syncPresetSelectionFromParameter();
+    syncCcControlsFromRouter();
 
     activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
+}
+
+void HarmonizerAudioProcessorEditor::syncCcControlsFromRouter()
+{
+    auto& router = processorRef.getCcRouter();
+
+    // Non toccare uno slider mentre l'utente lo sta trascinando: eviterebbe
+    // che il valore "scatti" sotto il mouse durante il polling a 15Hz.
+    if (! rootCcSlider.isMouseButtonDown())
+        rootCcSlider.setValue (router.getRootCc(), juce::dontSendNotification);
+    if (! presetCcSlider.isMouseButtonDown())
+        presetCcSlider.setValue (router.getPresetCc(), juce::dontSendNotification);
+    if (! bypassCcSlider.isMouseButtonDown())
+        bypassCcSlider.setValue (router.getBypassCc(), juce::dontSendNotification);
+
+    const int channel = router.getMidiChannel();
+    const int desiredItemId = channel == 0 ? 1 : channel + 1;
+    if (midiChannelBox.getSelectedId() != desiredItemId)
+        midiChannelBox.setSelectedId (desiredItemId, juce::dontSendNotification);
+
+    const auto learning = router.getLearnTarget();
+    learnRootButton.setButtonText   (learning == CcRouter::LearnTarget::root   ? "Learning..." : "Learn");
+    learnPresetButton.setButtonText (learning == CcRouter::LearnTarget::preset ? "Learning..." : "Learn");
+    learnBypassButton.setButtonText (learning == CcRouter::LearnTarget::bypass ? "Learning..." : "Learn");
 }
 
 void HarmonizerAudioProcessorEditor::refreshPresetBoxFromLibrary()

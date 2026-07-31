@@ -21,6 +21,7 @@ private:
     void timerCallback() override;
     void refreshPresetBoxFromLibrary();
     void syncPresetSelectionFromParameter();
+    void syncCcControlsFromRouter();
     void commitRename();
     void selectPresetIndex (int index);
 
@@ -42,6 +43,19 @@ private:
     std::array<juce::ToggleButton, harmony::numVoices> voiceFixButtons;
     // FR-41: offset formantico manuale per voce, in semitoni-equivalenti.
     std::array<juce::Slider, harmony::numVoices> voiceFormantSliders;
+
+    // FR-31/32/33: numeri CC (non parametri APVTS, vedi PluginProcessor —
+    // sono configurazione di routing, non valori automatizzabili) + MIDI
+    // Learn. Sincronizzati dal timer esistente (15Hz), non un'attachment.
+    juce::ComboBox midiChannelBox;
+    juce::Slider rootCcSlider, presetCcSlider, bypassCcSlider;
+    juce::TextButton learnRootButton   { "Learn" };
+    juce::TextButton learnPresetButton { "Learn" };
+    juce::TextButton learnBypassButton { "Learn" };
+    // FR-30/34: bypass E' un parametro APVTS (automatizzabile), il CC lo
+    // mette in override come gli altri — questo toggle serve per testare
+    // senza hardware MIDI.
+    juce::ToggleButton bypassToggle;
 
     juce::TextButton addButton          { "Add" };
     juce::TextButton duplicateButton    { "Duplicate" };
@@ -66,6 +80,11 @@ private:
     juce::Label activeVoicesLabel { {}, "Active" };
     juce::Label formantSpreadLabel { {}, "Fmt Spread" };
     juce::Label voiceFormantLabel  { {}, "Fmt/Voice" };
+    juce::Label midiChannelLabel { {}, "MIDI Ch" };
+    juce::Label rootCcLabel      { {}, "CC Root" };
+    juce::Label presetCcLabel    { {}, "CC Chord" };
+    juce::Label bypassCcLabel    { {}, "CC Bypass" };
+    juce::Label bypassLabel      { {}, "Bypass" };
 
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -81,6 +100,7 @@ private:
     std::unique_ptr<SliderAttachment> formantSpreadAttachment;
     std::array<std::unique_ptr<ButtonAttachment>, harmony::numVoices> voiceFixAttachments;
     std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voiceFormantAttachments;
+    std::unique_ptr<ButtonAttachment> bypassAttachment;
 
     // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare
     // dimensione a runtime, cosa che le "choices" fisse di un parametro APVTS

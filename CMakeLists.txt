@@ -54,6 +54,8 @@ target_sources(Harmonizer
         src/voices/Voice.cpp
         src/voices/VoicePool.cpp
         src/voices/PhraseScheduler.cpp
+        src/midi/CcRouter.cpp
+        src/midi/OverrideManager.cpp
 )
 
 target_compile_definitions(Harmonizer
@@ -96,5 +98,16 @@ add_executable(psola_test
 target_include_directories(psola_test PRIVATE src)
 target_compile_features(psola_test PRIVATE cxx_std_20)
 
+# Verifica numerica della precedenza CC/automazione (FR-36/37/38): logica
+# pura, nessuna dipendenza JUCE (OverrideManager non usa juce::MidiBuffer,
+# solo CcRouter lo fa) — stesso principio del target psola_test sopra.
+add_executable(override_manager_test
+    tests/override_manager_test.cpp
+    src/midi/OverrideManager.cpp
+)
+target_include_directories(override_manager_test PRIVATE src)
+target_compile_features(override_manager_test PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
+add_test(NAME override_manager COMMAND override_manager_test)

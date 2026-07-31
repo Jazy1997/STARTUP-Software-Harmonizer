@@ -13,6 +13,7 @@ namespace ParamIDs
     static const juce::String maxSimultaneousVoices { "maxSimultaneousVoices" };
 
     static const juce::String formantSpread { "formantSpread" };
+    static const juce::String bypass { "bypass" };
 
     static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
     static juce::String voiceFormantOffset (int voiceIndex) { return "voiceFormantOffset" + juce::String (voiceIndex + 1); }
@@ -84,6 +85,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
         params.push_back (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { ParamIDs::voiceFormantOffset (v), 1 }, "Voice " + juce::String (v + 1) + " Formant",
             juce::NormalisableRange<float> (-24.0f, 24.0f), 0.0f));
+
+    // FR-34/36: automatizzabile come tutti gli altri; il CC di bypass (FR-30)
+    // puo' mettere l'automazione host in override per questo parametro,
+    // esattamente come per root/preset (vedi processBlock, OverrideManager).
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
 
     // FR-51: tetto configurabile di voci simultanee TRA TUTTE le frasi attive
     // (non le 8 voci di un singolo preset — quello e' "Num Voices" sopra).
@@ -173,6 +180,19 @@ bool HarmonizerAudioProcessor::canApplyStabilityChangeNow() const
     return true; // nessun playhead disponibile: non c'e' modo di saperlo, si applica comunque
 }
 
+bool HarmonizerAudioProcessor::isTransportPlaying() const
+{
+    // Usata solo per il fronte di stop dell'override CC (FR-36): a
+    // differenza di canApplyStabilityChangeNow(), qui non si tratta mai lo
+    // standalone come caso speciale — il chiamante lo esclude a monte
+    // (FR-37, l'override non si revoca mai in standalone).
+    if (auto* playHead = getPlayHead())
+        if (auto position = playHead->getPosition())
+            return position->getIsPlaying();
+
+    return false; // nessun playhead: non c'e' automazione da overridare comunque
+}
+
 bool HarmonizerAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto mono = juce::AudioChannelSet::mono();
@@ -190,7 +210,7 @@ bool HarmonizerAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
     return true;
 }
 
-void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     const int numSamples = buffer.getNumSamples();
     const int numInputChannels = getTotalNumInputChannels();
@@ -231,7 +251,27 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             onsetDetectedThisBlock = true;
     }
 
-    const int rootPitchClass = (int) *apvts.getRawParameterValue (ParamIDs::rootNote);
+    // FR-30/36/37/38: interpreta i CC di questo blocco e risolve la
+    // precedenza rispetto all'automazione host. In standalone l'override,
+    // una volta attivo, non si revoca mai — non esiste transport da fermare
+    // (FR-37): si salta del tutto il rilevamento del fronte di stop.
+    const int hostRootPitchClass = (int) *apvts.getRawParameterValue (ParamIDs::rootNote);
+    const int hostPresetOneBased = (int) *apvts.getRawParameterValue (ParamIDs::presetIndex);
+    const bool hostBypass = *apvts.getRawParameterValue (ParamIDs::bypass) >= 0.5f;
+
+    const auto ccEvents = ccRouter.process (midiMessages);
+
+    if (wrapperType != wrapperType_Standalone)
+    {
+        const bool isPlayingNow = isTransportPlaying();
+        if (wasPlayingLastBlock && ! isPlayingNow)
+            overrideManager.clearOverrides(); // FR-36: fronte di stop
+        wasPlayingLastBlock = isPlayingNow;
+    }
+
+    const auto effective = overrideManager.resolve (ccEvents, hostRootPitchClass, hostPresetOneBased, hostBypass);
+
+    const int rootPitchClass = effective.rootPitchClass;
     const int numActiveVoices = (int) *apvts.getRawParameterValue (ParamIDs::numVoices);
     const int voiceCap = (int) *apvts.getRawParameterValue (ParamIDs::maxSimultaneousVoices);
     const float dryLevel = *apvts.getRawParameterValue (ParamIDs::dryLevel);
@@ -254,10 +294,9 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Snapshot immutabile: sicuro da leggere sull'audio thread (vedi header).
     const auto presetLibrary = getPresetLibrary();
-    const int presetOneBased = (int) *apvts.getRawParameterValue (ParamIDs::presetIndex);
     // Valori oltre la lunghezza attuale della libreria vengono ignorati
-    // (stesso comportamento del futuro CC posizionale, FR-30).
-    const int presetIndex = juce::jlimit (0, presetLibrary->getNumPresets() - 1, presetOneBased - 1);
+    // (FR-30, sia da automazione/UI sia da CC).
+    const int presetIndex = juce::jlimit (0, presetLibrary->getNumPresets() - 1, effective.presetOneBased - 1);
 
     std::array<harmony::Cell, harmony::numVoices> offsets {};
     int quantizedPlayedNote = 0;
@@ -279,11 +318,17 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     const auto* voicesMix = voicesMixScratch.getReadPointer (0);
 
+    // Bypass (FR-30): solo dry, esattamente come se Dry=1/Wet=0 — il
+    // percorso dry e' gia' il segnale in ingresso non processato, quindi
+    // non serve un secondo percorso audio dedicato.
+    const float effectiveDryLevel = effective.bypassed ? 1.0f : dryLevel;
+    const float effectiveWetLevel = effective.bypassed ? 0.0f : wetLevel;
+
     for (int ch = 0; ch < numOutputChannels; ++ch)
     {
         auto* out = buffer.getWritePointer (ch);
         for (int i = 0; i < numSamples; ++i)
-            out[i] = dryLevel * mono[i] + wetLevel * voicesMix[i];
+            out[i] = effectiveDryLevel * mono[i] + effectiveWetLevel * voicesMix[i];
     }
 }
 
@@ -354,6 +399,18 @@ void HarmonizerAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     root.appendChild (apvts.copyState(), nullptr);
     root.appendChild (getPresetLibrary()->toValueTree(), nullptr);
 
+    // FR-31: i numeri CC (e il canale) sono configurazione di routing, non
+    // un valore automatizzabile — non vivono nell'APVTS (non avrebbe senso
+    // automatizzare "quale CC controlla cosa"), ma vanno comunque salvati
+    // con lo stato del plugin perche' l'utente non debba reimpostarli/
+    // ri-imparare ad ogni apertura del progetto.
+    juce::ValueTree ccSettings ("MidiCcSettings");
+    ccSettings.setProperty ("rootCc", ccRouter.getRootCc(), nullptr);
+    ccSettings.setProperty ("presetCc", ccRouter.getPresetCc(), nullptr);
+    ccSettings.setProperty ("bypassCc", ccRouter.getBypassCc(), nullptr);
+    ccSettings.setProperty ("midiChannel", ccRouter.getMidiChannel(), nullptr);
+    root.appendChild (ccSettings, nullptr);
+
     if (auto xml = root.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -373,6 +430,14 @@ void HarmonizerAudioProcessor::setStateInformation (const void* data, int sizeIn
 
     if (auto libTree = root.getChildWithName ("PresetLibrary"); libTree.isValid())
         editPresetLibrary ([&] (harmony::PresetLibrary& lib) { lib.loadFromValueTree (libTree); });
+
+    if (auto ccTree = root.getChildWithName ("MidiCcSettings"); ccTree.isValid())
+    {
+        ccRouter.setRootCc    ((int) ccTree.getProperty ("rootCc",    ccRouter.getRootCc()));
+        ccRouter.setPresetCc  ((int) ccTree.getProperty ("presetCc",  ccRouter.getPresetCc()));
+        ccRouter.setBypassCc  ((int) ccTree.getProperty ("bypassCc",  ccRouter.getBypassCc()));
+        ccRouter.setMidiChannel ((int) ccTree.getProperty ("midiChannel", ccRouter.getMidiChannel()));
+    }
 }
 
 std::shared_ptr<const harmony::PresetLibrary> HarmonizerAudioProcessor::getPresetLibrary() const noexcept

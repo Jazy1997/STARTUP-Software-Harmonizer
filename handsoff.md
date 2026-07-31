@@ -33,6 +33,20 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter` — vedi sotto.**
 
+**Novita' sessione 9 (continuazione) — Controllo MIDI CC (M4, FR-29..38):**
+
+Dopo il push del lavoro precedente, scelto esplicitamente dall'utente di procedere col controllo MIDI CC, pur non potendo ancora testare in Ableton — l'utente ha notato che questa e' un'area verificabile con test numerici (override) e con pluginval, non richiede ascolto.
+
+- **`src/midi/OverrideManager.{h,cpp}`** (nuovo): logica PURA (nessuna dipendenza JUCE) della regola di precedenza CC/automazione (FR-36/37/38). Tre stati indipendenti (root/preset/bypass), ciascuno "override attivo + valore" o "segui l'host". `resolve()` applica i nuovi eventi CC del blocco e ritorna i valori effettivi; `clearOverrides()` va chiamata sul fronte di stop del transport. FR-38 (l'ultimo CC vince) soddisfatto per costruzione, nessuna logica dedicata necessaria.
+- **`tests/override_manager_test.cpp`** (nuovo): 6 test — pass-through senza override, indipendenza tra i tre parametri, persistenza dell'override sui blocchi successivi anche con nuova automazione host in arrivo, `clearOverrides()` che restituisce il controllo, l'ultimo CC che vince, soglia booleana del bypass. Tutti verdi al primo tentativo. Target CMake separato (`override_manager_test`), stesso principio di `psola_test`: **testabile senza un controller MIDI fisico**, perche' la logica di precedenza non dipende dall'hardware — e' l'equivalente, per il MIDI, di "non puoi ascoltare" per il DSP.
+- **`src/midi/CcRouter.{h,cpp}`** (nuovo): interpreta i CC grezzi secondo FR-30 (root 1-12, preset 1-N con 0 ignorato, bypass soglia 64 come il sustain) e gestisce il MIDI Learn (FR-33) — durante l'apprendimento il filtro canale viene ignorato di proposito (si vuole imparare da QUALUNQUE controller fisico, prima ancora di aver deciso il canale). Configurazione (numeri CC, canale, target di apprendimento) in `std::atomic`: scritta dal message thread (UI) o dall'audio thread stesso (quando l'apprendimento cattura un numero), letta dall'audio thread ogni blocco — nessun lock, nessuna allocazione.
+- **`PluginProcessor`**: nuovo parametro APVTS `bypass` (automatizzabile come tutti gli altri, FR-34). `processBlock` ora nomina il `MidiBuffer` (prima ignorato) e lo passa a `ccRouter.process()`; rileva il fronte di stop del transport (nuovo helper `isTransportPlaying()`, distinto da `canApplyStabilityChangeNow()` perche' la semantica standalone e' diversa: qui lo standalone va escluso del tutto dal rilevamento, mai incluso come "sempre fermo") e chiama `overrideManager.clearOverrides()` solo li'; **mai in standalone** (FR-37). I valori effettivi (`OverrideManager::Effective`) sostituiscono le letture dirette di `rootNote`/`presetIndex`/`bypass` a valle. Bypass implementato come `dryLevel=1, wetLevel=0` per quel blocco — il percorso dry e' gia' il segnale non processato, non serve un secondo percorso audio.
+- **Persistenza (FR-31)**: numeri CC e canale salvati in un nodo `MidiCcSettings` dentro lo stato del plugin (sibling di APVTS e PresetLibrary) — sono configurazione di routing, non valori automatizzabili, quindi deliberatamente FUORI dall'APVTS (non avrebbe senso automatizzare "quale CC controlla cosa").
+- **UI**: ComboBox canale MIDI (Omni + 1-16), 3 slider CC (0-127) con bottone "Learn" ciascuno — non sono `SliderAttachment` (i numeri CC non sono parametri APVTS), si sincronizzano dal timer 15Hz gia' esistente, con guardia `isMouseButtonDown()` per non "strappare" lo slider da sotto il mouse durante il polling. `ToggleButton` bypass attaccato al parametro APVTS per test senza hardware. Finestra riallargata (880px di default).
+- **Non fatto in questo passaggio** (scope FR-30..38, non tutto M4): **Modalita' Play (FR-24..28)** resta esplicitamente fuori — l'utente aveva scelto "punto 1" (CC), non Play, che era un'opzione separata proposta. Nessun indicatore UI di "override attivo" (non richiesto dal criterio di uscita M4, "ciclo hardware -> plugin senza mappature manuali" e' comunque soddisfatto). Il selettore root/preset in UI continua a mostrare il valore del parametro APVTS, non il valore effettivo quando un override CC e' attivo — gap di UX noto, non un errore funzionale (l'audio segue correttamente il CC).
+- **Verificato**: `override_manager_test` verde (6/6, anche via CTest), `psola_test` ancora verde (invariato), build VST3 e Standalone riuscite, `pluginval --strictness-level 10` verde su tutte le sezioni.
+- **Non verificabile in questa sessione**: il parsing dei CC veri (`CcRouter::process`) non ha un test dedicato — richiede `juce::MidiBuffer`/`juce::MidiMessage`, che avrebbe richiesto linkare `juce_audio_basics` in un target di test separato; rimandato, coperto per ora da lettura attenta del codice + `pluginval` (che include un fuzzing dei parametri, non della porta MIDI). **Il ciclo reale hardware -> plugin non e' mai stato provato**: nessun controller MIDI fisico disponibile in questa sessione, esattamente come per l'ascolto del motore PSOLA.
+
 **Novita' sessione 9 (continuazione) — Formanti (FR-39..42):**
 
 Dopo il commit del motore PSOLA, chiesta di nuovo esplicitamente all'utente la prossima area (Formanti / MIDI CC / Pattern ritmico / aspettare l'ascolto): scelte le Formanti, resa naturale dal fatto che `beta` era gia' implementato e testato nel motore ma non collegato a nulla.
@@ -304,6 +318,19 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `src/PluginEditor.{h,cpp}` | modificato | Slider "Fmt Spread", 8 knob rotativi "Fmt/Voice"; finestra allargata |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 9 (continuazione — Controllo MIDI CC, M4, FR-29..38):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/midi/OverrideManager.{h,cpp}` | creato | Logica pura di precedenza CC/automazione (FR-36/37/38), nessuna dipendenza JUCE |
+| `tests/override_manager_test.cpp` | creato | 6 test sulla logica di override, target CMake separato |
+| `src/midi/CcRouter.{h,cpp}` | creato | Interpretazione CC (FR-30) + MIDI Learn (FR-33), config in `std::atomic` |
+| `src/PluginProcessor.{h,cpp}` | modificato | Parametro `bypass`; `MidiBuffer` nominato e passato a `CcRouter`; fronte di stop transport; valori effettivi a valle; persistenza `MidiCcSettings` |
+| `src/PluginEditor.{h,cpp}` | modificato | ComboBox canale, 3 slider CC + bottoni Learn, toggle bypass; finestra allargata |
+| `CMakeLists.txt` | modificato | Nuovi sorgenti `midi/*.cpp`; target `override_manager_test` + `add_test` |
+| `.github/workflows/build.yml` | modificato | Job `dsp-tests` compila ed esegue anche `override_manager_test` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -433,10 +460,11 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
    - Fix/Move con vibrato, cambio Stability, motore a frasi — tutte le funzionalita' di sessione 6/7, ora sopra un motore diverso.
    - Se qualcosa non convince all'ascolto: la mappatura Stability->minF0Hz (`{165,130,100,85,70}` Hz, in `PsolaShifter.cpp`) e' un singolo array con valori esplicitamente segnalati come "di partenza, da tarare" — e' il primo posto dove intervenire.
 3. **Poi ascoltare le Formanti** (slider "Fmt Spread" + 8 knob "Fmt/Voice" nell'editor): verificare che shift verso il basso schiarisca davvero (non impastato) e verso l'alto scurisca (non "chipmunk"), a Spread pieno (default) e a zero (deve essere impercettibile/nullo). Se l'effetto e' troppo debole o troppo marcato, la costante `k=0.3` in `Voice.cpp` (`kFormantSpreadK`) e' il primo posto dove intervenire — mai tarata, presa cosi' com'era nella spec sorgente.
-4. Ricordare i limiti noti (aggiornati, vedi sotto): `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto.
+4. **Provare il controllo MIDI CC con un controller fisico o le automazioni dell'host** (mai fatto, vedi §2): mandare CC sui 3 numeri di default (Root=20, Preset=21, Bypass=22, canale Omni) o usare "Learn"; verificare in particolare FR-36 (automazione host in scrittura + CC in arrivo -> vince il CC; stop del transport -> torna l'automazione) e FR-37 in standalone (nessuna revoca).
+5. Ricordare i limiti noti (aggiornati, vedi sotto): `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto, selettore root/preset in UI che non riflette un override CC attivo.
 
-**Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro d'ascolto sopra:
-- **Controllo MIDI CC (M4)**: router dei 3 CC, modalita' Play, override vs automazione host.
+**Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro di prova sopra:
+- **Modalita' Play (FR-24..28)**: rimasta esplicitamente fuori da questo passaggio (l'utente aveva scelto CC, non Play). Riusa la stessa `VoicePool`, ma richiede una decisione su come si intreccia col `PhraseScheduler` guidato da onset (oggi pensato per la modalita' Harmonizer).
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
 - **Preset timbrici (FR-11..13)**: sistema di preset separato da quello armonico, non ancora iniziato — conterrebbe anche Formant Spread/offset per voce una volta esistente (oggi sono solo parametri APVTS piatti, come Stability/Dry/Glide).
 
@@ -447,6 +475,7 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - **Finestra di Hann ricalcolata per campione** in `emitGrain` (chiamata a `std::cos`): nota ottimizzazione non fatta, rilevante se la profilazione CPU con 8 voci (mai eseguita) rivelasse problemi rispetto al budget ≤15% del PRD §1.3.
 - **`SpectralShifter` non piu' usato ma ancora compilato**: se in futuro si rimuove per pulizia, verificare prima che nessuno faccia piu' riferimento a `HARMONIZER_USE_SPECTRAL_SHIFTER`.
 - **Formanti (FR-39..42) implementate ma non tarate**: costante `k=0.3` presa cosi' com'era dalla spec sorgente, mai all'ascolto. Nessun test numerico scritto per le Formanti in questa sessione (a differenza del motore PSOLA) — la correzione formantica e' per natura una preferenza timbrica soggettiva, non ha un criterio "giusto/sbagliato" oggettivo come l'accuratezza di trasposizione.
+- **Controllo MIDI CC (FR-29..38) implementato ma mai provato con hardware/host reale**: la logica di precedenza e' testata numericamente (`override_manager_test`), ma il parsing dei messaggi MIDI veri (`CcRouter`) no — nessun target di test dedicato (avrebbe richiesto linkare `juce_audio_basics`), verificato solo a lettura e con `pluginval`. Modalita' Play (FR-24..28) non implementata. UI: il selettore root/preset non riflette visivamente un override CC attivo (l'audio segue comunque correttamente il CC).
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).
@@ -457,4 +486,4 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - Solo un preset (Min) e' verificato contro il prototipo reale — gli altri 6 sono standard jazz generici, da correggere quando l'utente fornira' i dati veri (ora importabili via CSV).
 - Risoluzione FR-17/FR-46 (sessione 7) da validare all'ascolto appena possibile.
 - **Nuova**: valori della tabella Stability->minF0Hz (sessione 9) sono un punto di partenza, non tarati all'ascolto.
-- Commit/push di questa sessione: da confermare con l'utente prima di procedere — verificare `git status` all'inizio della prossima sessione.
+- Commit/push di questa sessione: **fatto** — due commit (`40ef069` motore PSOLA, `6e22c78` Formanti) pushati su `origin/main` (`065ba4b..6e22c78`) su richiesta esplicita dell'utente. Verificare l'esito della CI (job `dsp-tests` nuovo + build Windows/macOS) all'inizio della prossima sessione.
