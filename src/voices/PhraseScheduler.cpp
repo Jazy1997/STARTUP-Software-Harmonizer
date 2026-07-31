@@ -40,6 +40,27 @@ void PhraseScheduler::setGlideTimeMs (float ms)
         voicePool.getSlot (i).setGlideTimeMs (ms);
 }
 
+void PhraseScheduler::setFormantSpread (float spread)
+{
+    for (int i = 0; i < voicePool.getNumSlots(); ++i)
+        voicePool.getSlot (i).setFormantSpread (spread);
+}
+
+void PhraseScheduler::setVoiceFormantOffset (int harmonicVoiceIndex, float semitones)
+{
+    // Stessa logica di setVoiceMode: e' una proprieta' della COLONNA
+    // armonica, non della singola frase — si applica a qualunque slot
+    // fisico che in questo momento la stia interpretando.
+    for (auto& p : phrases)
+    {
+        if (! p.active)
+            continue;
+        const int slot = p.slotIndices[(size_t) harmonicVoiceIndex];
+        if (slot >= 0)
+            voicePool.getSlot (slot).setFormantOffsetSemitones (semitones);
+    }
+}
+
 bool PhraseScheduler::isSlotInUse (int slotIndex) const
 {
     for (auto& p : phrases)

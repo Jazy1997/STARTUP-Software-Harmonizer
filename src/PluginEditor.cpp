@@ -70,6 +70,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     setupSlider (wetLevelSlider, wetLevelLabel, *this);
     setupSlider (glideTimeSlider, glideLabel, *this);
     setupSlider (maxVoicesSlider, maxVoicesLabel, *this);
+    setupSlider (formantSpreadSlider, formantSpreadLabel, *this);
 
     activeVoicesLabel.attachToComponent (&activeVoicesValueLabel, true);
     addAndMakeVisible (activeVoicesLabel);
@@ -82,6 +83,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     wetLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",      wetLevelSlider);
     glideTimeAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "glideTimeMs",   glideTimeSlider);
     maxVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "maxSimultaneousVoices", maxVoicesSlider);
+    formantSpreadAttachment = std::make_unique<SliderAttachment> (apvtsRef, "formantSpread", formantSpreadSlider);
 
     addAndMakeVisible (fixMoveLabel);
     for (int v = 0; v < harmony::numVoices; ++v)
@@ -91,6 +93,16 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
         button.setClickingTogglesState (true);
         addAndMakeVisible (button);
         voiceFixAttachments[(size_t) v] = std::make_unique<ButtonAttachment> (apvtsRef, "voiceFix" + juce::String (v + 1), button);
+    }
+
+    addAndMakeVisible (voiceFormantLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& slider = voiceFormantSliders[(size_t) v];
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        addAndMakeVisible (slider);
+        voiceFormantAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceFormantOffset" + juce::String (v + 1), slider);
     }
 
     for (auto* b : { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton,
@@ -228,8 +240,8 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (460, 620, 1200, 900);
-    setSize (500, 660);
+    setResizeLimits (460, 680, 1200, 960);
+    setSize (500, 720);
 
     startTimerHz (15);
 }
@@ -275,6 +287,7 @@ void HarmonizerAudioProcessorEditor::resized()
     layoutRow (stabilityBox);
     layoutRow (glideTimeSlider);
     layoutRow (maxVoicesSlider);
+    layoutRow (formantSpreadSlider);
     layoutRow (activeVoicesValueLabel);
 
     area.removeFromTop (gap);
@@ -286,6 +299,16 @@ void HarmonizerAudioProcessorEditor::resized()
         for (auto& b : voiceFixButtons)
             buttons.push_back (&b);
         layoutRowOfButtons (row, buttons);
+    }
+    area.removeFromTop (gap);
+
+    {
+        auto row = area.removeFromTop (rowHeight);
+        row.removeFromLeft (labelWidth);
+        std::vector<juce::Component*> knobs;
+        for (auto& s : voiceFormantSliders)
+            knobs.push_back (&s);
+        layoutRowOfButtons (row, knobs);
     }
     area.removeFromTop (gap);
 

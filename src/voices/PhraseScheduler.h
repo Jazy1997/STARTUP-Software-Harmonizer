@@ -27,6 +27,12 @@ public:
 
     void setVoiceMode (int harmonicVoiceIndex, ShiftMode mode);
     void setGlideTimeMs (float ms);
+
+    // FR-40: globale, si applica a tutti gli slot fisici (non solo a quelli
+    // occupati ora: una frase futura la trovera' gia' impostata).
+    void setFormantSpread (float spread);
+    // FR-41: come setVoiceMode, proprieta' della colonna armonica (0-7).
+    void setVoiceFormantOffset (int harmonicVoiceIndex, float semitones);
     void setVoiceCap (int cap) noexcept { currentVoiceCap = cap; }
 
     int getLatencySamples() const { return voicePool.getLatencySamples(); }

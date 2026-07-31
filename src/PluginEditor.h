@@ -34,11 +34,14 @@ private:
     juce::Slider wetLevelSlider;
     juce::Slider glideTimeSlider;
     juce::Slider maxVoicesSlider; // FR-51: tetto voci simultanee tra tutte le frasi
+    juce::Slider formantSpreadSlider; // FR-40
     juce::TextEditor presetNameEditor;
     juce::Label activeVoicesValueLabel; // FR-53: aggiornata dal timer, non un parametro
 
     // FR-23: Fix/Move per singola voce — un bottone a due stati per voce.
     std::array<juce::ToggleButton, harmony::numVoices> voiceFixButtons;
+    // FR-41: offset formantico manuale per voce, in semitoni-equivalenti.
+    std::array<juce::Slider, harmony::numVoices> voiceFormantSliders;
 
     juce::TextButton addButton          { "Add" };
     juce::TextButton duplicateButton    { "Duplicate" };
@@ -61,6 +64,8 @@ private:
     juce::Label fixMoveLabel    { {}, "Fix/Move" };
     juce::Label maxVoicesLabel  { {}, "Voice Cap" };
     juce::Label activeVoicesLabel { {}, "Active" };
+    juce::Label formantSpreadLabel { {}, "Fmt Spread" };
+    juce::Label voiceFormantLabel  { {}, "Fmt/Voice" };
 
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -73,7 +78,9 @@ private:
     std::unique_ptr<SliderAttachment> wetLevelAttachment;
     std::unique_ptr<SliderAttachment> glideTimeAttachment;
     std::unique_ptr<SliderAttachment> maxVoicesAttachment;
+    std::unique_ptr<SliderAttachment> formantSpreadAttachment;
     std::array<std::unique_ptr<ButtonAttachment>, harmony::numVoices> voiceFixAttachments;
+    std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voiceFormantAttachments;
 
     // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare
     // dimensione a runtime, cosa che le "choices" fisse di un parametro APVTS

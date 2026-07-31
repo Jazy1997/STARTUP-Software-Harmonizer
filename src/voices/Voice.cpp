@@ -51,6 +51,21 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
         semitonesToApply = smoothedOffset;
     }
 
+    // FR-39/FR-41: correzione formantica in funzione dello shift REALMENTE
+    // applicato a questa voce (semitonesToApply), non dell'offset grezzo del
+    // preset — cosi' funziona identica in Fix e Move, e restera' identica
+    // anche in modalita' Play (FR-42) quando esistera', perche' tutte
+    // finiscono per produrre lo stesso semitonesToApply. Formula da
+    // psola-spec.md §3 (k~0.3): shift in giu' schiarisce (beta>1), shift in
+    // su scurisce (beta<1). Si lavora in "semitoni-equivalenti" anziche' nel
+    // rapporto beta direttamente cosi' l'offset manuale (FR-41) e' una somma
+    // letterale con la correzione automatica, non una moltiplicazione di
+    // rapporti — coerente col resto del progetto, che ragiona in semitoni.
+    constexpr float kFormantSpreadK = 0.3f;
+    const float autoFormantSemitones = -kFormantSpreadK * formantSpread * semitonesToApply;
+    const float totalFormantSemitones = autoFormantSemitones + formantOffsetSemitones;
+    shifter->setFormantRatio (std::exp2 ((double) totalFormantSemitones / 12.0));
+
     // Fondamentale del segnale in ingresso, in Hz: serve ai motori a
     // dominio del tempo (PSOLA) per posizionare gli epoch sul periodo
     // reale. E' un calcolo esatto, non un'approssimazione: PitchDetector

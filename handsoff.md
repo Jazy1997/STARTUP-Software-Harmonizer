@@ -33,6 +33,20 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter` — vedi sotto.**
 
+**Novita' sessione 9 (continuazione) — Formanti (FR-39..42):**
+
+Dopo il commit del motore PSOLA, chiesta di nuovo esplicitamente all'utente la prossima area (Formanti / MIDI CC / Pattern ritmico / aspettare l'ascolto): scelte le Formanti, resa naturale dal fatto che `beta` era gia' implementato e testato nel motore ma non collegato a nulla.
+
+- **Dove si calcola**: in `Voice::processAdd`, subito dopo aver calcolato `semitonesToApply` (lo shift REALMENTE applicato a quella voce in quel blocco, identico in Fix e Move, e identico anche in una futura modalita' Play — FR-42 soddisfatto strutturalmente senza codice dedicato, perche' tutte le modalita' producono lo stesso `semitonesToApply`).
+- **Unita' di misura scelta**: "semitoni-equivalenti" invece del rapporto `beta` direttamente. Motivo: FR-41 dice che l'offset manuale per voce va "sommato alla correzione automatica" — lavorando in semitoni quella somma e' letterale (`totalFormantSemitones = autoFormantSemitones + formantOffsetSemitones`), invece di dover decidere se moltiplicare due rapporti o convertire avanti e indietro. Coerente con come il resto del progetto ragiona gia' in semitoni (`setPitchShiftSemitones`, gli offset della tabella armonica). Alla fine si converte una sola volta: `beta = 2^(totalFormantSemitones/12)`.
+- **Formula automatica** (FR-39, presa da `psola-spec.md` §3 di `TIPS`, gia' verificata concettualmente nella sessione precedente): `autoFormantSemitones = -k * spread * semitonesToApply`, `k = 0.3`. Per costruzione: shift in giu' (`semitonesToApply < 0`) da' `autoFormantSemitones > 0` (schiarisce, FR-39), shift in su scurisce. Il clamp di `beta` gia' presente dentro `PsolaShifter::setFormantRatio` (`[0.25, 4.0]`, cioe' circa ±24 semitoni-equivalenti) copre gia' i casi estremi, non serve un clamp duplicato in `Voice`.
+- **Propagazione**: stesso schema gia' rodato per `ShiftMode` (sessione 6) — `setFormantSpread(float)` globale su tutti gli slot fisici del `VoicePool` (una nuova frase la trova gia' impostata), `setVoiceFormantOffset(int, float)` per colonna armonica (0-7), applicato a qualunque slot fisico la stia interpretando ora, identico a `setVoiceMode`.
+- **Parametri APVTS nuovi**: `formantSpread` (float 0..1, default **1.0**, non 0 — FR-39 dice "attiva di default"); `voiceFormantOffset1..8` (float −24..24 semitoni-equivalenti, default 0, range scelto per coincidere esattamente col clamp di `beta` nel motore).
+- **UI**: slider "Fmt Spread" accanto agli altri controlli globali; riga di 8 knob rotativi "Fmt/Voice" sotto la riga Fix/Move — stesso pattern (`layoutRowOfButtons`, gia' generico su `Component*`, riusato senza modifiche). Finestra allargata di conseguenza (720px di default, limite minimo 680px).
+- **Non toccato**: `PitchDetector`, `HarmonyEngine`, `PresetLibrary`, `VoicePool`, `PhraseScheduler` (solo due metodi aggiunti, nessuna riga esistente modificata), `PsolaShifter`/`SpectralShifter` (l'interfaccia `setFormantRatio` esisteva gia' dalla sessione precedente).
+- **Verificato**: build VST3 e Standalone riuscite (solo il consueto fallimento di copia post-build per permessi), `pluginval --strictness-level 10` verde su tutte le sezioni, suite `psola_test` riverificata verde (non toccata da queste modifiche, ma rieseguita per scrupolo).
+- **Non verificato**: nessun ascolto, ne' della correzione automatica ne' dell'offset manuale — il motore PSOLA stesso non e' ancora stato provato all'ascolto (vedi sotto), quindi le Formanti lo sono ancora meno. La costante `k=0.3` e' quella di partenza della spec sorgente, mai tarata.
+
 **Novita' sessione 9 — PSOLA proprietario integrato come motore di default (M1):**
 
 Su scelta esplicita dell'utente tra le direzioni proposte (PSOLA / MIDI CC / Formanti / solo processo), si e' portato il motore TD-PSOLA scoperto in sessione 8 dentro il progetto, sostituendolo a Signalsmith Stretch come motore attivo di default dietro l'interfaccia astratta `PitchShifter` (FR-62, CLAUDE.md regola 2). Perimetro concordato con l'utente: solo il motore (Formanti rimandate a una sessione dedicata), selezione a compile-time (nessun parametro APVTS/UI), suite di test numerici portata nel repo e in CI.
@@ -280,6 +294,16 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `CLAUDE.md` | modificato | Regole 12/13 (processo) + nota di stato milestone M0->M1 |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 9 (continuazione — Formanti, FR-39..42):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/voices/Voice.{h,cpp}` | modificato | `setFormantSpread`/`setFormantOffsetSemitones`; calcolo di `beta` in `processAdd` da `semitonesToApply` |
+| `src/voices/PhraseScheduler.{h,cpp}` | modificato | `setFormantSpread` (globale) e `setVoiceFormantOffset` (per colonna, come `setVoiceMode`) |
+| `src/PluginProcessor.{h,cpp}` | modificato | Parametri `formantSpread`, `voiceFormantOffset1..8`; lettura e propagazione in `processBlock` |
+| `src/PluginEditor.{h,cpp}` | modificato | Slider "Fmt Spread", 8 knob rotativi "Fmt/Voice"; finestra allargata |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -402,25 +426,27 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 ## 6. Quale sarebbe il prossimo passo
 
 **Immediato — testare in Ableton Live (l'utente non ha ancora potuto, da tre sessioni):**
-1. Ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza — ricompilato in questa sessione, contiene il motore PSOLA.
+1. Ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza — ricompilato in questa sessione, contiene sia il motore PSOLA sia le Formanti.
 2. **Priorita' assoluta: ascoltare il motore PSOLA per la prima volta**, dato che finora e' stato validato solo su segnale sintetico e in build (mai all'ascolto — regola 12 di `CLAUDE.md`). In particolare:
    - Confronto con la sensazione di reattivita' di prima (Signalsmith): la latenza dichiarata e' scesa da ~30ms a 13.5ms (Fast) / 29.9ms (Accurate) — dovrebbe sentirsi.
    - **Voicing a -12 semitoni e sotto**, il caso specifico su cui questa sessione ha trovato e corretto un bug reale (vedi §2/§5): verificare che non ci siano vuoti/artefatti percepibili scendendo di un'ottava o piu'.
    - Fix/Move con vibrato, cambio Stability, motore a frasi — tutte le funzionalita' di sessione 6/7, ora sopra un motore diverso.
    - Se qualcosa non convince all'ascolto: la mappatura Stability->minF0Hz (`{165,130,100,85,70}` Hz, in `PsolaShifter.cpp`) e' un singolo array con valori esplicitamente segnalati come "di partenza, da tarare" — e' il primo posto dove intervenire.
-3. Ricordare i limiti noti (aggiornati, vedi fondo file): Formanti ancora assenti, `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto.
+3. **Poi ascoltare le Formanti** (slider "Fmt Spread" + 8 knob "Fmt/Voice" nell'editor): verificare che shift verso il basso schiarisca davvero (non impastato) e verso l'alto scurisca (non "chipmunk"), a Spread pieno (default) e a zero (deve essere impercettibile/nullo). Se l'effetto e' troppo debole o troppo marcato, la costante `k=0.3` in `Voice.cpp` (`kFormantSpreadK`) e' il primo posto dove intervenire — mai tarata, presa cosi' com'era nella spec sorgente.
+4. Ricordare i limiti noti (aggiornati, vedi sotto): `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto.
 
 **Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro d'ascolto sopra:
-- **Formanti (FR-39..42)**: perimetro lasciato fuori da questa sessione apposta. Il motore espone gia' `setFormantRatio(beta)` funzionante e testato (Test 3 della suite); manca tutto il resto — parametri APVTS (Spread globale + offset manuale per voce), wiring della formula `beta = alpha^(-k*spread)` (k≈0.3, da tarare all'ascolto, vedi `psola-spec.md` §3 in `TIPS`), controlli UI. E' il lavoro reso piu' naturale da questa sessione, non piu' quello con il rischio piu' alto.
 - **Controllo MIDI CC (M4)**: router dei 3 CC, modalita' Play, override vs automazione host.
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
+- **Preset timbrici (FR-11..13)**: sistema di preset separato da quello armonico, non ancora iniziato — conterrebbe anche Formant Spread/offset per voce una volta esistente (oggi sono solo parametri APVTS piatti, come Stability/Dry/Glide).
 
-**Limiti noti del motore PSOLA dopo questa sessione (da non scambiare per requisiti soddisfatti):**
+**Limiti noti dopo questa sessione (da non scambiare per requisiti soddisfatti):**
 - **`f0 <= 0` senza fade dedicato**: oggi `PhraseScheduler` smette semplicemente di processare le voci quando il segnale non e' stabile (`freeAllPhrases()`) — comportamento pre-esistente, non peggiorato ne' risolto da questa sessione.
 - **Nessun crossfade esplicito sul cambio di Stability** dentro il motore stesso: la transizione si appoggia interamente al `Glide` gia' presente in `Voice` (sessione 6) — da verificare all'ascolto che basti.
 - **Validato solo su segnale sintetico** (onda a impulsi + risonanza singola) — nessuna registrazione reale di sax/tromba/voce ancora provata, ne' in `tests/`, ne' all'ascolto.
 - **Finestra di Hann ricalcolata per campione** in `emitGrain` (chiamata a `std::cos`): nota ottimizzazione non fatta, rilevante se la profilazione CPU con 8 voci (mai eseguita) rivelasse problemi rispetto al budget ≤15% del PRD §1.3.
 - **`SpectralShifter` non piu' usato ma ancora compilato**: se in futuro si rimuove per pulizia, verificare prima che nessuno faccia piu' riferimento a `HARMONIZER_USE_SPECTRAL_SHIFTER`.
+- **Formanti (FR-39..42) implementate ma non tarate**: costante `k=0.3` presa cosi' com'era dalla spec sorgente, mai all'ascolto. Nessun test numerico scritto per le Formanti in questa sessione (a differenza del motore PSOLA) — la correzione formantica e' per natura una preferenza timbrica soggettiva, non ha un criterio "giusto/sbagliato" oggettivo come l'accuratezza di trasposizione.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).

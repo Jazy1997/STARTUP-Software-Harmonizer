@@ -12,7 +12,10 @@ namespace ParamIDs
     static const juce::String glideTimeMs { "glideTimeMs" };
     static const juce::String maxSimultaneousVoices { "maxSimultaneousVoices" };
 
+    static const juce::String formantSpread { "formantSpread" };
+
     static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
+    static juce::String voiceFormantOffset (int voiceIndex) { return "voiceFormantOffset" + juce::String (voiceIndex + 1); }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::createParameterLayout()
@@ -66,6 +69,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
     for (int v = 0; v < harmony::numVoices; ++v)
         params.push_back (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { ParamIDs::voiceFix (v), 1 }, "Voice " + juce::String (v + 1) + " Fix", false));
+
+    // FR-39/FR-40: correzione formantica attiva di default (spread pieno,
+    // non a meta') — "da nulla a massima" del PRD, 0 = disattivata.
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { ParamIDs::formantSpread, 1 }, "Formant Spread",
+        juce::NormalisableRange<float> (0.0f, 1.0f), 1.0f));
+
+    // FR-41: offset manuale indipendente per voce, in semitoni-equivalenti
+    // (stessa unita' della correzione automatica — si sommano direttamente,
+    // vedi Voice::processAdd). Range +-24 st coincide col clamp di beta
+    // dentro PsolaShifter (0.25..4.0).
+    for (int v = 0; v < harmony::numVoices; ++v)
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::voiceFormantOffset (v), 1 }, "Voice " + juce::String (v + 1) + " Formant",
+            juce::NormalisableRange<float> (-24.0f, 24.0f), 0.0f));
 
     // FR-51: tetto configurabile di voci simultanee TRA TUTTE le frasi attive
     // (non le 8 voci di un singolo preset — quello e' "Num Voices" sopra).
@@ -220,12 +238,18 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const float wetLevel = *apvts.getRawParameterValue (ParamIDs::wetLevel);
     const float glideMs = *apvts.getRawParameterValue (ParamIDs::glideTimeMs);
 
+    const float formantSpread = *apvts.getRawParameterValue (ParamIDs::formantSpread);
+
     phraseScheduler.setGlideTimeMs (glideMs);
     phraseScheduler.setVoiceCap (voiceCap);
+    phraseScheduler.setFormantSpread (formantSpread);
     for (int v = 0; v < harmony::numVoices; ++v)
     {
         const bool isFix = *apvts.getRawParameterValue (ParamIDs::voiceFix (v)) >= 0.5f;
         phraseScheduler.setVoiceMode (v, isFix ? ShiftMode::fix : ShiftMode::move);
+
+        const float formantOffset = *apvts.getRawParameterValue (ParamIDs::voiceFormantOffset (v));
+        phraseScheduler.setVoiceFormantOffset (v, formantOffset);
     }
 
     // Snapshot immutabile: sicuro da leggere sull'audio thread (vedi header).
