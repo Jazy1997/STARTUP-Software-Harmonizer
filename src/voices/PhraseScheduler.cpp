@@ -171,11 +171,25 @@ bool PhraseScheduler::process (const float* monoIn,
     }
     else if (onsetDetectedThisBlock)
     {
-        // La frase finora "live" smette di esserlo da qui in poi: resta
-        // congelata per sempre a quello che era il suo ultimo voicing (FR-46).
+        // Vedi Phrase.h per la semantica completa di Keep Tails. Con
+        // keepTails=false (default) le frasi superate si liberano subito:
+        // senza pattern ritmico (voci scaglionate nel tempo) non hanno mai
+        // nulla "in coda", quindi non c'e' motivo di lasciarle continuare a
+        // ri-armonizzare il segnale live con offset ormai vecchi (bug
+        // verificato all'ascolto in sessione 10: accumulo di voci/preset
+        // sovrapposti ad ogni nuovo attacco). Con keepTails=true si mantiene
+        // il comportamento precedente: la frase resta viva, solo "non piu'
+        // live" (smette di seguire i cambi in tempo reale, FR-46).
         for (auto& p : phrases)
-            if (p.active)
+        {
+            if (! p.active)
+                continue;
+
+            if (keepTails)
                 p.isLive = false;
+            else
+                freePhrase (p);
+        }
 
         triggerNewPhrase (currentOffsetsForTrigger, numRequestedVoices);
     }

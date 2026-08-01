@@ -293,14 +293,26 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     addAndMakeVisible (playModeToggle);
     playModeAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "playModeEnabled", playModeToggle);
 
+    // Sessione 10: vedi Phrase.h per la semantica completa.
+    keepTailsToggle.setButtonText ("Keep Tails");
+    addAndMakeVisible (keepTailsToggle);
+    keepTailsAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "keepPhraseTails", keepTailsToggle);
+
+    // Diagnostica PRD §8.1 "Display della nota rilevata" — sessione 10.
+    // Non e' un parametro: sincronizzata dal timer esistente come
+    // activeVoicesValueLabel.
+    detectedLabel.attachToComponent (&detectedValueLabel, true);
+    addAndMakeVisible (detectedLabel);
+    addAndMakeVisible (detectedValueLabel);
+
     syncCcControlsFromRouter();
 
     refreshPresetBoxFromLibrary();
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (460, 870, 1200, 1150);
-    setSize (500, 910);
+    setResizeLimits (460, 950, 1200, 1230);
+    setSize (500, 990);
 
     startTimerHz (15);
 }
@@ -316,7 +328,12 @@ void HarmonizerAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colours::white);
     g.setFont (juce::FontOptions (14.0f));
-    g.drawFittedText ("HARMONIZER - M0/M1/M2 placeholder (motore Signalsmith interinale)",
+    // Editor placeholder (le tre schermate definitive sono lavoro di M5):
+    // il testo qui sotto descrive solo il motore attivo, non l'elenco delle
+    // milestone completate — evita di doverlo tenere sincronizzato a mano
+    // (era rimasto "motore Signalsmith interinale" ben oltre il cambio a
+    // PSOLA in sessione 9, scoperto solo al primo test reale in sessione 10).
+    g.drawFittedText ("HARMONIZER - motore PSOLA",
                        getLocalBounds().removeFromTop (24), juce::Justification::centred, 1);
 }
 
@@ -353,7 +370,11 @@ void HarmonizerAudioProcessorEditor::resized()
 
     {
         auto row = area.removeFromTop (rowHeight);
-        row.removeFromLeft (labelWidth);
+        // Bug di sessione 6 corretto in sessione 10: il rettangolo tolto a
+        // sinistra andava assegnato alla label, non solo scartato — la
+        // label restava con bounds vuoti (invisibile), pur essendo
+        // aggiunta come figlia visibile.
+        fixMoveLabel.setBounds (row.removeFromLeft (labelWidth));
         std::vector<juce::Component*> buttons;
         for (auto& b : voiceFixButtons)
             buttons.push_back (&b);
@@ -362,8 +383,12 @@ void HarmonizerAudioProcessorEditor::resized()
     area.removeFromTop (gap);
 
     {
-        auto row = area.removeFromTop (rowHeight);
-        row.removeFromLeft (labelWidth);
+        // Riga piu' alta delle altre: una manopola rotativa ha bisogno di
+        // piu' di 26px per essere leggibile (erano i "puntini" nello
+        // screenshot del test di sessione 10 — bounds validi ma minuscoli).
+        const int knobRowHeight = 36;
+        auto row = area.removeFromTop (knobRowHeight);
+        voiceFormantLabel.setBounds (row.removeFromLeft (labelWidth)); // stesso bug del blocco sopra
         std::vector<juce::Component*> knobs;
         for (auto& s : voiceFormantSliders)
             knobs.push_back (&s);
@@ -390,6 +415,8 @@ void HarmonizerAudioProcessorEditor::resized()
 
     layoutRow (bypassToggle);
     layoutRow (playModeToggle);
+    layoutRow (keepTailsToggle);
+    layoutRow (detectedValueLabel);
 
     layoutRowOfButtons (area.removeFromTop (rowHeight),
                         { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton });
@@ -406,6 +433,25 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     syncCcControlsFromRouter();
 
     activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
+
+    // Diagnostica PRD §8.1 — sessione 10, vedi PluginProcessor::processBlock
+    // per dove viene scritta.
+    const float midiNote = processorRef.getLastDetectedMidiNote();
+    const bool stable = processorRef.getLastInputStable();
+    juce::String detectedText;
+    if (midiNote >= 0.0f)
+    {
+        const auto noteName = juce::MidiMessage::getMidiNoteName (juce::roundToInt (midiNote), true, true, 3);
+        detectedText = noteName + juce::String::formatted (
+            "  (%.2f, conf %.2f)  %s", midiNote,
+            (double) processorRef.getLastDetectedConfidence(),
+            stable ? "stable" : "unstable");
+    }
+    else
+    {
+        detectedText = "-- (nessun segnale)";
+    }
+    detectedValueLabel.setText (detectedText, juce::dontSendNotification);
 }
 
 void HarmonizerAudioProcessorEditor::syncCcControlsFromRouter()

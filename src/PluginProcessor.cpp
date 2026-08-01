@@ -15,6 +15,7 @@ namespace ParamIDs
     static const juce::String formantSpread { "formantSpread" };
     static const juce::String bypass { "bypass" };
     static const juce::String playModeEnabled { "playModeEnabled" };
+    static const juce::String keepPhraseTails { "keepPhraseTails" };
 
     static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
     static juce::String voiceFormantOffset (int voiceIndex) { return "voiceFormantOffset" + juce::String (voiceIndex + 1); }
@@ -98,6 +99,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
     // non passa per OverrideManager: solo automazione host + UI.
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { ParamIDs::playModeEnabled, 1 }, "Play Mode", false));
+
+    // Vedi Phrase.h/PhraseScheduler::setKeepTails per la semantica completa.
+    // Default false (tronca): risoluzione presa in sessione 10 dopo il primo
+    // ascolto reale, che ha mostrato l'accumulo di voci/preset col
+    // comportamento precedente (sempre "tieni le code").
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { ParamIDs::keepPhraseTails, 1 }, "Keep Tails", false));
 
     // FR-51: tetto configurabile di voci simultanee TRA TUTTE le frasi attive
     // (non le 8 voci di un singolo preset — quello e' "Num Voices" sopra).
@@ -297,9 +305,12 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // disattivata. Non e' uno dei 3 CC di FR-30: solo APVTS/automazione.
     const bool playModeEnabled = *apvts.getRawParameterValue (ParamIDs::playModeEnabled) >= 0.5f;
 
+    const bool keepPhraseTails = *apvts.getRawParameterValue (ParamIDs::keepPhraseTails) >= 0.5f;
+
     phraseScheduler.setGlideTimeMs (glideMs);
     phraseScheduler.setVoiceCap (voiceCap);
     phraseScheduler.setFormantSpread (formantSpread);
+    phraseScheduler.setKeepTails (keepPhraseTails);
     for (int v = 0; v < harmony::numVoices; ++v)
     {
         const bool isFix = *apvts.getRawParameterValue (ParamIDs::voiceFix (v)) >= 0.5f;
@@ -319,6 +330,15 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     int quantizedPlayedNote = 0;
     const float continuousInputMidiNote = pitchDetector.getMidiNote();
     const bool inputIsStable = pitchDetector.hasStableSignal();
+
+    // Diagnostica per l'UI (PRD §8.1): snapshot dell'esito di PitchDetector
+    // per questo blocco, indipendente dalla modalita' — utile proprio per
+    // capire casi come "con questo synth non riconosce" (punti 2/5 del test
+    // di sessione 10) senza dover indovinare le costanti del rilevatore.
+    lastDetectedMidiNote.store (continuousInputMidiNote, std::memory_order_relaxed);
+    lastDetectedConfidence.store (pitchDetector.getConfidence(), std::memory_order_relaxed);
+    lastInputStable.store (inputIsStable, std::memory_order_relaxed);
+
     if (! playModeEnabled && inputIsStable)
     {
         quantizedPlayedNote = juce::roundToInt (continuousInputMidiNote);

@@ -11,6 +11,7 @@
 #include "midi/OverrideManager.h"
 #include "midi/PlayModeInput.h"
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -78,6 +79,14 @@ public:
     // rispetto all'audio thread internamente (std::atomic).
     CcRouter& getCcRouter() noexcept { return ccRouter; }
 
+    // Diagnostica (PRD §8.1, "Display della nota rilevata" — mai
+    // implementato prima di sessione 10): snapshot dell'ultimo esito di
+    // PitchDetector, scritto ogni blocco sull'audio thread, letto dal
+    // message thread (UI, timer 15Hz). Nessun lock: solo atomici.
+    float getLastDetectedMidiNote() const noexcept { return lastDetectedMidiNote.load (std::memory_order_relaxed); }
+    float getLastDetectedConfidence() const noexcept { return lastDetectedConfidence.load (std::memory_order_relaxed); }
+    bool  getLastInputStable() const noexcept { return lastInputStable.load (std::memory_order_relaxed); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -102,6 +111,11 @@ private:
     CcRouter ccRouter;
     OverrideManager overrideManager;
     bool wasPlayingLastBlock = false; // solo audio thread: rileva il fronte di stop (FR-36)
+
+    // Vedi i getter pubblici sopra.
+    std::atomic<float> lastDetectedMidiNote { -1.0f };
+    std::atomic<float> lastDetectedConfidence { 0.0f };
+    std::atomic<bool> lastInputStable { false };
 
     // FR-24..28: modalita' Play, VoicePool dedicato separato (vedi
     // PlayModeInput.h per il perche' non condivide phraseScheduler).

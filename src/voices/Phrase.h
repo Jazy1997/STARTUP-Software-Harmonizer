@@ -10,9 +10,30 @@
 //
 // Solo la frase piu' recente (isLive) segue in tempo reale i cambi di
 // preset/fondamentale finche' la nota che l'ha generata continua a suonare
-// (FR-17); tutte le altre restano congelate per sempre a quando sono state
-// superate da un nuovo onset (FR-46). Risoluzione della tensione FR-17/FR-46
-// segnalata come [DECISION] nel PRD §6.1 — da validare all'ascolto.
+// (FR-17).
+//
+// Cosa succede a una frase superata da un nuovo onset — risoluzione della
+// tensione FR-17/FR-46 segnalata come [DECISION] nel PRD §6.1, validata
+// all'ascolto in sessione 10 e risolta con un bottone utente ("Keep Tails",
+// PhraseScheduler::setKeepTails) invece di un comportamento fisso:
+//   - Keep Tails OFF (default): la frase si libera SUBITO. Senza l'editor
+//     di pattern ritmico (FR-47..49, [V1.1], non ancora costruito) tutte le
+//     voci di una frase entrano insieme al trigger — non c'e' mai una "coda"
+//     di voci ancora in attesa. Lasciarla viva non farebbe che continuare a
+//     ri-armonizzare il segnale live corrente con offset ormai vecchi:
+//     verificato all'ascolto in sessione 10 che questo produce un accumulo
+//     di voci e preset sovrapposti ad ogni nuovo attacco (bug, non feature).
+//   - Keep Tails ON: comportamento precedente, invariato — la frase resta
+//     viva (isLive=false, active=true) finche' non viene rubata o il
+//     segnale tace. Diventa la scelta creativa giusta SOLO quando esistera'
+//     il pattern coi ritardi: li' "tenere le code" significa lasciar finire
+//     le voci gia' partite della frase precedente invece di troncarle di
+//     netto (vedi l'esempio fornito dall'utente: tre note in corsa scaglio-
+//     nata, con la coda dell'ultima tagliata o meno da un nuovo attacco).
+//     Oggi, senza ritardi, i due casi "tronca la coda" e "lascia finire"
+//     collassano nello stesso caso limite (nessuna voce mai "in coda"),
+//     quindi Keep Tails ON oggi equivale semplicemente al vecchio
+//     comportamento, non ancora alla ricchezza descritta sopra.
 struct Phrase
 {
     std::array<int, harmony::numVoices> slotIndices { -1, -1, -1, -1, -1, -1, -1, -1 };

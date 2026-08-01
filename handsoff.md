@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-07-31 (sessione 9)
+> Ultimo aggiornamento: 2026-08-01 (sessione 10)
 
 ---
 
@@ -31,7 +31,19 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter` — vedi sotto.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica — vedi sotto.**
+
+**Novita' sessione 10 — primo test reale in Ableton, bug nel ciclo di vita delle frasi (FR-45/46), fix UI, diagnostica pitch:**
+
+Prima sessione in cui l'utente ha effettivamente ascoltato/usato in Ableton il lavoro delle sessioni 8-9 (PSOLA, Formanti, CC MIDI, Play — tutto verificato fino a qui solo con test numerici, build e `pluginval`). Ha riportato 8 osservazioni con uno screenshot dell'editor e un file Excel che illustra il comportamento atteso del futuro Pattern Ritmico. Confermato funzionante senza modifiche: Dry/Wet, Voices, Root/Chord/Name, Up/Down, e il cambio di accordo su nota tenuta che si aggiorna dal vivo (FR-17).
+
+- **Bug principale — le frasi superate da un nuovo onset non si liberavano mai** (`PhraseScheduler::process()`, ramo onset): venivano solo "smontate" (`isLive=false`) ma restavano `active` per sempre, finche' non rubate (pool esaurito) o il segnale taceva. Conseguenza osservata dall'utente: ogni frase "smontata" continuava a chiamare `voice.processAdd()` sul segnale live CORRENTE coi propri offset congelati vecchi — cambiare preset tra una nota e l'altra faceva sentire insieme tutti i preset selezionati fino a quel momento, e le voci attive salivano di `numVoices` ad ogni nuovo attacco (osservato: 0→4→8→12). Cambiare Stability "sembrava" resettare tutto, ma non tocca `phrases[]` — quasi certamente solo l'effetto del silenzio naturale mentre si maneggia la UI.
+- **Non risolto con un comportamento fisso**: l'utente ha chiarito (con un file Excel che illustra tre note in corsa scaglionata nel tempo, C→E→D, dove la seconda nota della corsa di E taglia la terza nota — ancora "in coda" — della corsa di C) che il caso reale a cui pensa e' il futuro **Pattern Ritmico** (FR-47..49, `[V1.1]`, voci scaglionate nel tempo dentro una frase, non ancora costruito). Li' "tronca la coda non ancora suonata" vs "lasciala finire, la nuova armonizzazione parte dal prossimo suono" e' una scelta creativa legittima, non un bug. Oggi, senza pattern (tutte le voci di una frase partono insieme, nessuna mai "in coda"), le due scelte collassano nello stesso caso limite. **Risolto con un bottone invece di un'interpretazione fissa**: nuovo parametro APVTS `keepPhraseTails` ("Keep Tails" in UI), **default OFF (tronca)** — deciso con l'utente. `PhraseScheduler::setKeepTails(bool)`: quando `false`, le frasi smontate si liberano subito (`freePhrase`) invece di restare vive; quando `true`, comportamento precedente invariato. Sara' lo stesso bottone a guadagnare il pieno significato descritto nell'Excel quando il Pattern Ritmico esistera' — nessun ritocco di plumbing previsto in quel momento. Aggiornato il commento in `Phrase.h` per riflettere questa risoluzione (era ancora "[DECISION] da validare all'ascolto" dalla sessione 7).
+- **Due bug di UI, entrambi da lettura diretta del codice, non ipotizzati**: `fixMoveLabel` (dalla sessione 6) e `voiceFormantLabel` (da questa sessione, stesso pattern replicato) venivano aggiunte con `addAndMakeVisible()` ma **mai posizionate** in `resized()` — nessun `attachToComponent()` ne' `setBounds()` esplicito, quindi bounds vuoti/invisibili. Corretto catturando il rettangolo di `row.removeFromLeft(labelWidth)` e assegnandolo alla label invece di scartarlo. Le 8 slider Fmt/Voice (i "puntini" nello screenshot dell'utente) avevano bounds validi — solo troppo piccole (26px, rotary senza text box): ingrandite a 36px di riga già che si toccava quel layout.
+- **Titolo dell'editor obsoleto**: `paint()` diceva ancora "motore Signalsmith interinale", mai aggiornato dal cambio a PSOLA in sessione 9 — attivamente fuorviante durante un test. Sostituito con un testo che non richiede sync manuale ad ogni milestone.
+- **Diagnostica "nota rilevata" aggiunta** (soddisfa anche un requisito PRD mai implementato, §8.1 "Display della nota rilevata"): nuovi atomici in `PluginProcessor` (`lastDetectedMidiNote`/`lastDetectedConfidence`/`lastInputStable`), popolati ogni blocco da `PitchDetector` (gia' pubblico, nessuna modifica li'), letti dall'editor nel timer 15Hz esistente. Serve a diagnosticare i punti 2 e 5 del test (mancato riconoscimento con certi synth, primo attacco a "0 voci attive"): l'ipotesi piu' probabile e' una corsa fra `OnsetDetector` (apre il gate in pochi ms) e `PitchDetector` (BACF, serve una finestra piu' lunga per agganciare con confidenza) — **non verificabile senza dati reali, quindi NESSUN fix speculativo sulle costanti del rilevatore** (CLAUDE.md regole 12/13, adottate proprio in sessione 9). Deciso esplicitamente con l'utente: solo diagnostica in questa sessione, il fix vero arrivera' dal prossimo giro di test con la nuova label visibile.
+- **Verificato**: build VST3 (bloccata una volta da `LNK1104` — Ableton aveva ancora il plugin caricato, stesso caso gia' visto in sessione 6, risolto chiedendo all'utente di chiuderlo) e Standalone riuscite, `pluginval --strictness-level 10` verde su tutte le sezioni, `psola_test` e `override_manager_test` ancora verdi (nessuno dei due tocca questo codice, riverificati per scrupolo).
+- **Non toccato**: `PitchDetector`, `OnsetDetector`, `Voice`, `VoicePool`, `PsolaShifter`, `CcRouter`, `OverrideManager`, `PlayModeInput` — nessuno di questi era in causa nella diagnosi.
 
 **Novita' sessione 9 (continuazione) — Modalita' Play (FR-24..28):**
 
@@ -356,6 +368,16 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `CMakeLists.txt` | modificato | Nuovo sorgente `midi/PlayModeInput.cpp` |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 10 (primo test reale in Ableton — fix ciclo di vita frasi, UI, diagnostica):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/voices/Phrase.h` | modificato | Commento aggiornato: risoluzione FR-17/FR-46 col bottone Keep Tails |
+| `src/voices/PhraseScheduler.{h,cpp}` | modificato | `setKeepTails(bool)`; le frasi smontate si liberano subito quando `keepTails=false` (default) |
+| `src/PluginProcessor.{h,cpp}` | modificato | Parametro `keepPhraseTails`; atomici `lastDetectedMidiNote`/`lastDetectedConfidence`/`lastInputStable` + getter |
+| `src/PluginEditor.{h,cpp}` | modificato | Fix bounds `fixMoveLabel`/`voiceFormantLabel` (erano invisibili); slider Fmt/Voice ingrandite; titolo aggiornato; toggle "Keep Tails"; label "Detected"; finestra allargata |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -435,6 +457,13 @@ Nessuna modifica al PRD.
 - Costruito un controllo ad-hoc separato (fuori dalla suite permanente, in scratchpad) per verificare l'invarianza dell'uscita rispetto a come l'host suddivide le chiamate a `process()` — proprieta' non coperta dai 7 test della suite ma cruciale per la correttezza del chunking interno introdotto in questa sessione.
 - Build reale (non solo compilazione isolata) e `pluginval --strictness-level 10` eseguiti a fine sessione, con esito riportato per intero (regola 8 di `CLAUDE.md`).
 
+**Sessione 10 — primo test reale in Ableton, diagnosi e correzioni:**
+- L'utente ha condiviso uno screenshot dell'editor e 8 osservazioni testuali dal primo uso reale in Ableton. Ogni causa e' stata confermata **leggendo direttamente il codice** (non ipotizzata): `PluginEditor.cpp`, `PhraseScheduler.cpp`, `OnsetDetector.cpp`, `PitchDetector.cpp` riletti integralmente prima di proporre qualunque fix.
+- L'utente ha poi condiviso un file Excel (letto estraendo l'XML interno, `.xlsx` e' uno zip) che illustra il comportamento desiderato del futuro Pattern Ritmico con un esempio concreto (tre note in corsa scaglionata, una che taglia la coda dell'altra) — questo ha permesso di **riformulare il fix del bug principale come un bottone** ("Keep Tails") invece di un comportamento fisso, risolvendo il bug oggi E preparando il terreno per la feature futura senza lavoro sprecato.
+- Due domande di chiarimento poste esplicitamente prima di scrivere il piano (comportamento del bottone Keep Tails e relativo default; se tentare anche un fix speculativo per la corsa onset/pitch o solo aggiungere diagnostica) — l'utente ha risposto scegliendo le opzioni consigliate per entrambe.
+- Il vecchio file di piano (relativo all'integrazione PSOLA, sessione 9, gia' commessa) e' stato **sovrascritto** con il nuovo piano di questa sessione, come da istruzioni del sistema di planning per un task diverso.
+- Build VST3 bloccata una volta da `LNK1104` (Ableton aveva ancora il plugin caricato) durante il primo tentativo — stesso caso esatto di sessione 6, risolto chiedendo all'utente di chiudere Ableton e ricompilando con successo.
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -470,24 +499,18 @@ Nessuna modifica al PRD.
 Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora affrontati:
 - **Qualità del PSOLA proprietario**: rischio piu' alto secondo il PRD. **Aggiornamento sessione 9**: PSOLA e' ora INTEGRATO come motore di default, verificato numericamente (7 test verdi, incluso un test di sovrapposizione che ha scoperto e permesso di correggere un bug reale nell'algoritmo sorgente) e verificato in build reale (`pluginval` verde, latenza Fast misurata a 13.5ms, sotto il target PRD). Resta comunque solo su segnale sintetico (onda a impulsi + risonanza singola), non su registrazioni reali di sax/tromba/voce ne' provato all'ascolto dentro il nostro plugin. Il rischio "suona bene dal vivo" resta aperto finche' l'utente non lo prova in Ableton. Se anche cosi' non dovesse reggere, resta l'opzione ZTX PRO di Zynaptiq (costo/trattativa commerciale).
 - **Tipo di plugin AU** deve essere Music Effect (`aumf`) fin da M0: è una decisione strutturale irreversibile dopo il rilascio (PRD §4.1).
-- **FR-17 / FR-46**: implementate entrambe in sessione 7 con una risoluzione esplicita (solo la frase piu' recente segue dal vivo il preset) — **da validare all'ascolto**, come il PRD stesso richiedeva. Non ancora fatto: l'utente non ha ancora potuto testare in Ableton.
+- **FR-17 / FR-46**: implementate in sessione 7, **validate all'ascolto in sessione 10**. FR-17 (live-update su nota tenuta) confermata funzionante cosi' com'era. La risoluzione della tensione fra le due (cosa succede a una frase superata da un nuovo onset) e' risultata sbagliata cosi' com'era (bug di accumulo, vedi sopra) ed e' stata sostituita da un bottone utente ("Keep Tails") invece di un comportamento fisso — vedi `Phrase.h` e novita' sessione 10 in §2.
 - **Sviluppatore singolo alle prime armi con C++** su un progetto di ~50 settimane — mitigato nel piano con milestone brevi e CI dal giorno uno.
 
 ---
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Immediato — testare in Ableton Live (l'utente non ha ancora potuto, da tre sessioni):**
-1. Ricaricare "Harmonizer" dalla cartella VST3 custom (`build/Harmonizer_artefacts/Release/VST3`) gia' configurata in precedenza — ricompilato in questa sessione, contiene sia il motore PSOLA sia le Formanti.
-2. **Priorita' assoluta: ascoltare il motore PSOLA per la prima volta**, dato che finora e' stato validato solo su segnale sintetico e in build (mai all'ascolto — regola 12 di `CLAUDE.md`). In particolare:
-   - Confronto con la sensazione di reattivita' di prima (Signalsmith): la latenza dichiarata e' scesa da ~30ms a 13.5ms (Fast) / 29.9ms (Accurate) — dovrebbe sentirsi.
-   - **Voicing a -12 semitoni e sotto**, il caso specifico su cui questa sessione ha trovato e corretto un bug reale (vedi §2/§5): verificare che non ci siano vuoti/artefatti percepibili scendendo di un'ottava o piu'.
-   - Fix/Move con vibrato, cambio Stability, motore a frasi — tutte le funzionalita' di sessione 6/7, ora sopra un motore diverso.
-   - Se qualcosa non convince all'ascolto: la mappatura Stability->minF0Hz (`{165,130,100,85,70}` Hz, in `PsolaShifter.cpp`) e' un singolo array con valori esplicitamente segnalati come "di partenza, da tarare" — e' il primo posto dove intervenire.
-3. **Poi ascoltare le Formanti** (slider "Fmt Spread" + 8 knob "Fmt/Voice" nell'editor): verificare che shift verso il basso schiarisca davvero (non impastato) e verso l'alto scurisca (non "chipmunk"), a Spread pieno (default) e a zero (deve essere impercettibile/nullo). Se l'effetto e' troppo debole o troppo marcato, la costante `k=0.3` in `Voice.cpp` (`kFormantSpreadK`) e' il primo posto dove intervenire — mai tarata, presa cosi' com'era nella spec sorgente.
-4. **Provare il controllo MIDI CC con un controller fisico o le automazioni dell'host** (mai fatto, vedi §2): mandare CC sui 3 numeri di default (Root=20, Preset=21, Bypass=22, canale Omni) o usare "Learn"; verificare in particolare FR-36 (automazione host in scrittura + CC in arrivo -> vince il CC; stop del transport -> torna l'automazione) e FR-37 in standalone (nessuna revoca).
-5. **Provare la modalita' Play** (mai fatto): setup di riferimento del PRD §3.4 — traccia MIDI vuota che riceve dalla tastiera, routata verso il plugin sulla traccia audio. Attivare "Play Mode", suonare l'audio (sax/voce/microfono) MENTRE si tengono premute fino a 8 note sulla tastiera; verificare che le voci seguano le note assolute (non il grado armonico), che senza note premute passi solo il dry (FR-27), e che il passaggio Harmonizer<->Play non produca click (FR-28, mai verificato all'ascolto).
-6. Ricordare i limiti noti (aggiornati, vedi sotto): `f0<=0` senza fade dedicato, validato solo su segnale sintetico, risoluzione FR-17/FR-46 (sessione 7) ancora da validare all'ascolto, selettore root/preset in UI che non riflette un override CC attivo.
+**Immediato — riprendere il test in Ableton con le correzioni di sessione 10:**
+1. Ricaricare "Harmonizer" (VST3 ricompilato in questa sessione).
+2. **Riverificare i punti 1, 3, 5 del test precedente**: label "Fix/Move" e "Fmt/Voice" ora visibili; con "Keep Tails" OFF (default) suonare note diverse in sequenza NON deve piu' accumulare voci/preset (contatore "Active" deve tornare a un valore coerente con `numVoices`, non salire indefinitamente); con "Keep Tails" ON deve tornare il comportamento precedente (frasi vecchie restano vive) — utile per capire se quel comportamento serva mai davvero prima del Pattern Ritmico.
+3. **Osservare la nuova label "Detected"** (nome nota + confidenza + stabile/instabile) durante i test dei punti 2 e 5 originali (sample non riconosciuti, primo attacco a "0 voci"): serve a raccogliere dati reali sulla causa (sospetto: corsa fra onset e aggancio del pitch) prima di decidere un fix — vedi §2 sessione 10.
+4. Poi proseguire con gli ascolti ancora non fatti prima dell'interruzione per i bug: motore PSOLA (voicing a -12 semitoni e sotto, Fix/Move, cambio Stability — mappatura `{165,130,100,85,70}` Hz in `PsolaShifter.cpp` da tarare se serve), Formanti (costante `k=0.3` in `Voice.cpp` da tarare se serve), controllo MIDI CC con hardware/automazioni reali (FR-36/37), modalita' Play (setup PRD §3.4, verificare FR-27/28).
 
 **Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro di prova sopra:
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
@@ -502,6 +525,8 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - **Formanti (FR-39..42) implementate ma non tarate**: costante `k=0.3` presa cosi' com'era dalla spec sorgente, mai all'ascolto. Nessun test numerico scritto per le Formanti in questa sessione (a differenza del motore PSOLA) — la correzione formantica e' per natura una preferenza timbrica soggettiva, non ha un criterio "giusto/sbagliato" oggettivo come l'accuratezza di trasposizione.
 - **Controllo MIDI CC (FR-29..38) implementato ma mai provato con hardware/host reale**: la logica di precedenza e' testata numericamente (`override_manager_test`), ma il parsing dei messaggi MIDI veri (`CcRouter`) no — nessun target di test dedicato (avrebbe richiesto linkare `juce_audio_basics`), verificato solo a lettura e con `pluginval`. UI: il selettore root/preset non riflette visivamente un override CC attivo (l'audio segue comunque correttamente il CC).
 - **Modalita' Play (FR-24..28) implementata ma mai provata con hardware/host reale**: stesso limite del controllo CC — nessun test dedicato (coinvolge `juce::MidiBuffer`/`juce::MidiMessage`), verificata solo a lettura e con `pluginval`. Nessuna regola di furto definita per oltre 8 note simultanee (il PRD non la specifica per Play, a differenza di FR-51/52 per Harmonizer): le eccedenti restano semplicemente mute. FR-28 (nessun click nel passaggio di modalita') non verificato all'ascolto.
+- **"Keep Tails" (sessione 10) e' binario oggi**: tronca subito o lascia vivere per sempre. Il significato pieno descritto dall'utente (tronca solo la coda non ancora suonata di una frase, lascia finire il resto) richiede il Pattern Ritmico (FR-47..49, `[V1.1]`), non costruito qui — vedi `Phrase.h`.
+- **Mancato riconoscimento pitch con alcuni synth / primo attacco a "0 voci" (sessione 10, punti 2/5 del test)**: NON risolto, solo reso osservabile con la nuova label "Detected". Serve un secondo giro di ascolto con quella label visibile per decidere il fix vero (sospetto: corsa fra `OnsetDetector` e `PitchDetector`, non verificabile senza dati).
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).
@@ -510,6 +535,7 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 **Questioni ancora aperte:**
 - Nome prodotto/azienda non deciso: `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE`/`PLUGIN_CODE` in `CMakeLists.txt` restano placeholder.
 - Solo un preset (Min) e' verificato contro il prototipo reale — gli altri 6 sono standard jazz generici, da correggere quando l'utente fornira' i dati veri (ora importabili via CSV).
-- Risoluzione FR-17/FR-46 (sessione 7) da validare all'ascolto appena possibile.
-- **Nuova**: valori della tabella Stability->minF0Hz (sessione 9) sono un punto di partenza, non tarati all'ascolto.
-- Commit/push di questa sessione: **fatto** — due commit (`40ef069` motore PSOLA, `6e22c78` Formanti) pushati su `origin/main` (`065ba4b..6e22c78`) su richiesta esplicita dell'utente. Verificare l'esito della CI (job `dsp-tests` nuovo + build Windows/macOS) all'inizio della prossima sessione.
+- Risoluzione FR-17/FR-46: validata all'ascolto e corretta in sessione 10 (bottone Keep Tails) — vedi sopra.
+- Valori della tabella Stability->minF0Hz (sessione 9) e della costante `k=0.3` delle Formanti (sessione 9) sono ancora un punto di partenza, non tarati all'ascolto.
+- **Nuova**: causa esatta del mancato riconoscimento pitch con alcuni synth (punti 2/5 del test di sessione 10) ancora da determinare — la label "Detected" (sessione 10) e' pronta a raccogliere i dati al prossimo test.
+- **Push**: `origin/main` e' fermo a `6e22c78` (Formanti). I commit `92591d4` (CC MIDI) e `87add26` (Play mode) di sessione 9, e i commit di questa sessione 10, sono **solo locali** — l'utente ha scelto esplicitamente di non pushare a meta' sessione 9 ("Facciamo qualcos'altro"). Verificare con l'utente prima di pushare, e controllare `git status`/`git log origin/main..HEAD` all'inizio della prossima sessione per sapere esattamente cosa manca al remoto.

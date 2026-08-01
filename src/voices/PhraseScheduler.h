@@ -9,11 +9,12 @@
 // Orchestratore delle frasi (FR-43..53): ogni onset genera una frase con
 // voicing congelato (FR-46); solo la frase piu' recente segue dal vivo i
 // cambi di preset/fondamentale finche' la stessa nota continua a suonare
-// (FR-17 — vedi Phrase.h per la risoluzione della tensione tra i due
-// requisiti, non ancora validata all'ascolto). Al superamento del tetto di
-// voci simultanee, la frase piu' vecchia viene liberata per intero (FR-51/52);
-// la transizione morbida richiesta (>=20ms) e' data dal Glide gia' presente
-// in Voice quando lo slot fisico viene riassegnato con un nuovo offset.
+// (FR-17 — vedi Phrase.h per come si risolve la tensione tra i due requisiti,
+// validata all'ascolto in sessione 10 col bottone Keep Tails/setKeepTails).
+// Al superamento del tetto di voci simultanee, la frase piu' vecchia viene
+// liberata per intero (FR-51/52); la transizione morbida richiesta (>=20ms)
+// e' data dal Glide gia' presente in Voice quando lo slot fisico viene
+// riassegnato con un nuovo offset.
 class PhraseScheduler
 {
 public:
@@ -34,6 +35,10 @@ public:
     // FR-41: come setVoiceMode, proprieta' della colonna armonica (0-7).
     void setVoiceFormantOffset (int harmonicVoiceIndex, float semitones);
     void setVoiceCap (int cap) noexcept { currentVoiceCap = cap; }
+    // Vedi Phrase.h per la semantica completa. false (default) = tronca
+    // subito una frase superata da un nuovo onset; true = comportamento
+    // precedente (resta viva finche' non rubata o segnale silenzioso).
+    void setKeepTails (bool keep) noexcept { keepTails = keep; }
 
     int getLatencySamples() const { return voicePool.getLatencySamples(); }
     // FR-53: letto anche dal message thread (UI); scritto dall'audio thread
@@ -70,6 +75,7 @@ private:
     VoicePool voicePool;
     std::vector<Phrase> phrases; // capacita' = hardSlotCapacity (limite superiore sul numero di frasi)
     int currentVoiceCap = 0;     // <= voicePool.getNumSlots(); regolabile a runtime senza allocare
+    bool keepTails = false;      // vedi setKeepTails()
     uint64_t ageCounter = 0;
     std::atomic<int> numActiveSlotsLastBlock { 0 };
 };

@@ -58,6 +58,10 @@ private:
     juce::ToggleButton bypassToggle;
     // FR-24/28: interruttore Harmonizer/Play.
     juce::ToggleButton playModeToggle;
+    // Vedi Phrase.h/PhraseScheduler::setKeepTails — sessione 10.
+    juce::ToggleButton keepTailsToggle;
+    // Diagnostica PRD §8.1 "Display della nota rilevata" — sessione 10.
+    juce::Label detectedValueLabel;
 
     juce::TextButton addButton          { "Add" };
     juce::TextButton duplicateButton    { "Duplicate" };
@@ -82,6 +86,7 @@ private:
     juce::Label activeVoicesLabel { {}, "Active" };
     juce::Label formantSpreadLabel { {}, "Fmt Spread" };
     juce::Label voiceFormantLabel  { {}, "Fmt/Voice" };
+    juce::Label detectedLabel { {}, "Detected" };
     juce::Label midiChannelLabel { {}, "MIDI Ch" };
     juce::Label rootCcLabel      { {}, "CC Root" };
     juce::Label presetCcLabel    { {}, "CC Chord" };
@@ -104,6 +109,7 @@ private:
     std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voiceFormantAttachments;
     std::unique_ptr<ButtonAttachment> bypassAttachment;
     std::unique_ptr<ButtonAttachment> playModeAttachment;
+    std::unique_ptr<ButtonAttachment> keepTailsAttachment;
 
     // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare
     // dimensione a runtime, cosa che le "choices" fisse di un parametro APVTS
