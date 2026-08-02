@@ -156,6 +156,7 @@ bool PhraseScheduler::process (const float* monoIn,
                                 float* mixOutput,
                                 int numSamples,
                                 bool onsetDetectedThisBlock,
+                                bool signalPresent,
                                 bool inputIsStable,
                                 int quantizedPlayedNote,
                                 float continuousInputMidiNote,
@@ -165,8 +166,12 @@ bool PhraseScheduler::process (const float* monoIn,
 {
     const bool appliedStabilityChange = voicePool.applyPendingStabilityChangeIfSafe (applyStabilityChangeNow);
 
-    if (! inputIsStable)
+    if (! signalPresent)
     {
+        // Vero silenzio (o segnale sotto soglia): qui, e SOLO qui, si libera
+        // tutto. Deliberatamente NON legato a inputIsStable (sessione 11) —
+        // vedi il commento in PhraseScheduler.h sul perche' i due segnali
+        // sono distinti.
         freeAllPhrases();
     }
     else if (onsetDetectedThisBlock)
@@ -193,7 +198,7 @@ bool PhraseScheduler::process (const float* monoIn,
 
         triggerNewPhrase (currentOffsetsForTrigger, numRequestedVoices);
     }
-    else
+    else if (inputIsStable)
     {
         // FR-17: la frase piu' recente, se ancora "live", segue dal vivo il
         // preset/fondamentale corrente finche' la stessa nota continua a suonare.
@@ -201,6 +206,12 @@ bool PhraseScheduler::process (const float* monoIn,
             if (p.active && p.isLive)
                 p.frozenOffsets = currentOffsetsForTrigger;
     }
+    // else (signalPresent ma ne' onset ne' pitch confidente questo blocco):
+    // non si tocca nulla. currentOffsetsForTrigger non e' affidabile in
+    // questo blocco (es. durante uno scivolamento di intonazione fra due
+    // note cantate legato) — si mantiene l'ultimo voicing valido invece di
+    // aggiornarlo con un valore rumoroso o di liberare tutto (il segnale
+    // c'e' ancora, il performer non si e' fermato).
 
     std::fill (mixOutput, mixOutput + numSamples, 0.0f);
     int activeCount = 0;

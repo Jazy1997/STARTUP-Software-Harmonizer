@@ -331,6 +331,20 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const float continuousInputMidiNote = pitchDetector.getMidiNote();
     const bool inputIsStable = pitchDetector.hasStableSignal();
 
+    // FR-45/46 (sessione 11 — bug trovato dopo il fix dell'isteresi
+    // d'intonazione, canto legato ancora silenzioso su D/E dopo C):
+    // "c'e' ancora un segnale in ingresso" e "il pitch di QUESTO blocco e'
+    // abbastanza confidente" sono due domande diverse. hasStableSignal()
+    // (confidenza/periodicita') puo' scendere per pochi blocchi durante
+    // uno SCIVOLAMENTO di intonazione fra due note cantate legato, anche se
+    // il performer sta ancora chiaramente suonando — usarla per decidere
+    // se liberare tutte le frasi (come si faceva prima) svuota lo stato
+    // armonico proprio nel mezzo della transizione, e senza un onset a
+    // ribattere (canto legato) nulla lo ricostruisce. Il gate di
+    // OnsetDetector (livello del segnale, non pitch) e' un proxy migliore
+    // per "il performer si e' davvero fermato".
+    const bool signalPresent = onsetDetector.isGateOpen();
+
     // Diagnostica per l'UI (PRD §8.1): snapshot dell'esito di PitchDetector
     // per questo blocco, indipendente dalla modalita' — utile proprio per
     // capire casi come "con questo synth non riconosce" (punti 2/5 del test
@@ -349,21 +363,25 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         quantizedPlayedNote = pitchLatch.update (continuousInputMidiNote, onsetDetectedThisBlock);
         offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
     }
-    else
+    else if (! signalPresent)
     {
-        pitchLatch.reset(); // segnale non stabile: il prossimo aggancio riparte pulito
+        pitchLatch.reset(); // vero silenzio: il prossimo aggancio riparte pulito
     }
+    // else (segnale presente ma pitch non confidente questo blocco):
+    // l'aggancio di PitchLatch resta quello dell'ultimo blocco buono,
+    // invece di essere azzerato per un calo di confidenza transitorio.
 
     // FR-24: mentre Play e' attivo, la catena Harmonizer resta "in attesa"
-    // con inputIsStable forzato a false — la stessa via gia' usata quando
-    // il segnale non e' intonato (freeAllPhrases): nessuna frase nuova o
-    // viva, nessun contributo audio, ma lo swap di Stability continua ad
-    // essere applicato in modo uniforme (vedi PhraseScheduler::process).
+    // con entrambi i segnali forzati a false — la stessa via gia' usata
+    // quando il segnale tace (freeAllPhrases): nessuna frase nuova o viva,
+    // nessun contributo audio, ma lo swap di Stability continua ad essere
+    // applicato in modo uniforme (vedi PhraseScheduler::process).
+    const bool harmonizerSignalPresent = (! playModeEnabled) && signalPresent;
     const bool harmonizerInputIsStable = (! playModeEnabled) && inputIsStable;
 
     voicesMixScratch.setSize (1, numSamples, false, false, true);
     const bool appliedStabilityChangeHarmonizer = phraseScheduler.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
-        onsetDetectedThisBlock, harmonizerInputIsStable, quantizedPlayedNote, continuousInputMidiNote,
+        onsetDetectedThisBlock, harmonizerSignalPresent, harmonizerInputIsStable, quantizedPlayedNote, continuousInputMidiNote,
         offsets, numActiveVoices, canApplyStabilityChangeNow());
 
     playVoicesMixScratch.setSize (1, numSamples, false, false, true);

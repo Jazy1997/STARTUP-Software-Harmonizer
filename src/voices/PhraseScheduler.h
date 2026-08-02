@@ -54,10 +54,25 @@ public:
     // correnti): usati per congelare una nuova frase al trigger, o per
     // aggiornare dal vivo la frase piu' recente (FR-17). Ritorna true se e'
     // stato applicato un cambio di Stability in questa chiamata.
+    //
+    // signalPresent e inputIsStable sono due segnali DIVERSI, non
+    // ridondanti (sessione 11 — vedi PluginProcessor.cpp per la scoperta):
+    //   - signalPresent: c'e' ancora energia sul segnale in ingresso (tipicamente
+    //     lo stato del gate di OnsetDetector) — "il performer sta ancora
+    //     suonando qualcosa". Governa SOLO se liberare tutte le frasi.
+    //   - inputIsStable: il pitch rilevato QUESTO blocco e' abbastanza
+    //     confidente da fidarsene (tipicamente PitchDetector::hasStableSignal()).
+    //     Governa SOLO se aggiornare dal vivo gli offset della frase corrente.
+    // Usare la confidenza del pitch anche per la prima decisione (come si
+    // faceva prima di sessione 11) libera erroneamente tutte le frasi durante
+    // un calo di confidenza transitorio — es. lo scivolamento di intonazione
+    // fra due note cantate legato, dove il segnale c'e' ancora (il gate resta
+    // aperto) ma la stima di frequenza per quell'istante e' meno affidabile.
     bool process (const float* monoIn,
                   float* mixOutput,
                   int numSamples,
                   bool onsetDetectedThisBlock,
+                  bool signalPresent,
                   bool inputIsStable,
                   int quantizedPlayedNote,
                   float continuousInputMidiNote,
