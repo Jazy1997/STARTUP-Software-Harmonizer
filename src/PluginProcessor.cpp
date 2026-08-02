@@ -341,8 +341,17 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     if (! playModeEnabled && inputIsStable)
     {
-        quantizedPlayedNote = juce::roundToInt (continuousInputMidiNote);
+        // FR-16/17 (sessione 11): isteresi di +-25 cent invece di un
+        // arrotondamento nudo — vedi PitchLatch.h. onsetDetectedThisBlock
+        // forza l'aggancio immediato su un vero attacco; altrimenti (nota
+        // legata) la nota resta ferma entro la tolleranza e scatta di un
+        // semitono per volta quando la si supera davvero.
+        quantizedPlayedNote = pitchLatch.update (continuousInputMidiNote, onsetDetectedThisBlock);
         offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
+    }
+    else
+    {
+        pitchLatch.reset(); // segnale non stabile: il prossimo aggancio riparte pulito
     }
 
     // FR-24: mentre Play e' attivo, la catena Harmonizer resta "in attesa"

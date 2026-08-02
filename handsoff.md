@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-01 (sessione 10)
+> Ultimo aggiornamento: 2026-08-02 (sessione 11)
 
 ---
 
@@ -31,7 +31,19 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica — vedi sotto.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: secondo giro di test — canto legato (note consecutive senza stacco) non aggiornava l'armonizzazione; causa reale identificata dall'utente (nessuna isteresi sulla nota per il lookup armonico) e corretta — vedi sotto.**
+
+**Novita' sessione 11 — isteresi di intonazione per note legate (FR-16/17):**
+
+Dopo le correzioni di sessione 10, l'utente ha ripreso il test: con un sample Rhodes tutto funziona, ma cantando note legate (C→D→E, senza stacco netto) solo la prima nota si armonizzava. Diagnosi iniziale mia (instabilita' del rilevatore -> `freeAllPhrases()` durante lo scivolamento fra due note) — **corretta dall'utente**: ha riconosciuto che la causa reale e' l'assenza di isteresi sulla nota usata per il lookup nella tabella armonica (`quantizedPlayedNote`, un semplice `juce::roundToInt` ricalcolato da zero ogni blocco), e ha specificato lui stesso il comportamento voluto con tolleranza numerica precisa (±25 cent) e verificato a mano che la matematica di Fix/Move in `Voice.cpp` fosse gia' corretta (lo era).
+
+- **`src/harmony/PitchLatch.h`** (nuovo, header-only come `Glide.h`, nessuna dipendenza JUCE come `OverrideManager`): isteresi con aggancio/sgancio a gradino. Entro ±25 cent dalla nota agganciata non cambia nulla; oltre la soglia si sposta di un semitono per volta verso la nota piu' vicina alla stima corrente — **bloccato (min/max) al risultato di un arrotondamento standard**, non un passo incondizionato.
+- **Bug trovato e corretto nel MIO stesso primo tentativo, prima di consegnarlo**: un passo incondizionato (`heldNote += 1` ogni volta che si supera la soglia) rimbalza avanti e indietro ad ogni blocco durante uno scivolamento lento — il salto di un intero semitono supera quasi sempre la stima attuale del pitch, quindi la nuova nota agganciata risulta "oltre soglia" nella direzione opposta e la chiamata successiva la disfa immediatamente. Scoperto scrivendo il test 4 (verifica esplicita "nessun rimbalzo") **prima** di integrare nel plugin, non dopo — coerente con CLAUDE.md regola 8 (verificare prima di dichiarare fatto) e con l'abitudine di questa sessione di validare ogni pezzo isolatamente. Risolto bloccando lo scatto al risultato di un arrotondamento standard di `continuousMidiNote` (`std::min`/`std::max`), che non puo' mai superare né disfare la nota di destinazione.
+- **`tests/pitch_latch_test.cpp`** (nuovo): 8 gruppi di verifiche — primo aggancio, tolleranza ±25 cent, scatto a gradino nelle due direzioni, assenza di rimbalzo (il test che ha scoperto il bug sopra), `onAttack` forza l'aggancio immediato, `reset()`, un salto ampio che si risolve un semitono a chiamata, e la replica esatta dell'esempio dell'utente (vibrato ±50 cent su C alterna B/C/C#). Un solo intoppo, non nel design ma nel test: `std::lround` a un pareggio esatto di mezzo semitono arrotonda sempre "lontano da zero" (quindi verso l'alto anche scendendo) — corretto usando −51 cent invece di −50 esatti nel test, un pareggio che con dati di pitch reali non si presenta mai.
+- **`PluginProcessor.cpp`**: `quantizedPlayedNote = juce::roundToInt(continuousInputMidiNote)` sostituita con `pitchLatch.update(continuousInputMidiNote, onsetDetectedThisBlock)` — `onsetDetectedThisBlock` (un vero attacco) forza l'aggancio immediato senza isteresi, gia' disponibile a quel punto del metodo. `pitchLatch.reset()` nel ramo "segnale non stabile".
+- **Scartata esplicitamente una finestra temporale di tolleranza (150ms)** proposta inizialmente da me per un'ipotesi diversa (instabilita' del rilevatore): l'utente ha correttamente osservato che, anche non toccando la latenza dichiarata del motore, avrebbe comunque introdotto un ritardo di reazione percepibile a fine frase. Non implementata; l'ipotesi "instabilita' -> `freeAllPhrases()`" resta non verificata e non toccata in questa sessione.
+- **Verificato**: build VST3/Standalone riuscite, `pluginval --strictness-level 10` verde, tutte e 3 le suite di test verdi via CTest (`psola_test`, `override_manager_test`, `pitch_latch_test` nuovo).
+- **Non toccato**: `Voice.cpp` (Fix/Move gia' corretti, verificato per calcolo diretto contro gli esempi in Hz dell'utente), `PhraseScheduler.cpp` (il meccanismo di sessione 10 resta invariato), `HarmonyEngine`, `PitchDetector`, `OnsetDetector`.
 
 **Novita' sessione 10 — primo test reale in Ableton, bug nel ciclo di vita delle frasi (FR-45/46), fix UI, diagnostica pitch:**
 
@@ -378,6 +390,17 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `src/PluginEditor.{h,cpp}` | modificato | Fix bounds `fixMoveLabel`/`voiceFormantLabel` (erano invisibili); slider Fmt/Voice ingrandite; titolo aggiornato; toggle "Keep Tails"; label "Detected"; finestra allargata |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 11 (isteresi di intonazione per note legate, FR-16/17):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/harmony/PitchLatch.h` | creato | Isteresi ±25 cent, aggancio/sgancio a gradino bloccato al nearest-round; pura, nessuna dipendenza JUCE |
+| `tests/pitch_latch_test.cpp` | creato | 8 gruppi di verifiche, incluso il test che ha scoperto il bug di rimbalzo prima dell'integrazione |
+| `src/PluginProcessor.{h,cpp}` | modificato | Nuovo membro `pitchLatch`; `quantizedPlayedNote` ora da `pitchLatch.update(...)` invece di `roundToInt` |
+| `CMakeLists.txt` | modificato | Nuovo target `pitch_latch_test` + `add_test` |
+| `.github/workflows/build.yml` | modificato | Job `dsp-tests` compila ed esegue anche `pitch_latch_test` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -464,6 +487,11 @@ Nessuna modifica al PRD.
 - Il vecchio file di piano (relativo all'integrazione PSOLA, sessione 9, gia' commessa) e' stato **sovrascritto** con il nuovo piano di questa sessione, come da istruzioni del sistema di planning per un task diverso.
 - Build VST3 bloccata una volta da `LNK1104` (Ableton aveva ancora il plugin caricato) durante il primo tentativo — stesso caso esatto di sessione 6, risolto chiedendo all'utente di chiudere Ableton e ricompilando con successo.
 
+**Sessione 11 — isteresi di intonazione, diagnosi corretta dall'utente:**
+- Riletti `PhraseScheduler.cpp`, `PluginProcessor.cpp`, `HarmonyEngine.cpp`, `PresetLibrary.cpp` per formulare una prima ipotesi (instabilita' del rilevatore -> `freeAllPhrases()`), presentata all'utente in un piano — **l'utente l'ha corretta**, riconoscendo che la causa reale era l'assenza di isteresi sulla nota per il lookup armonico, con una proposta numerica precisa (±25 cent) e la matematica di Fix/Move verificata a mano con esempi in Hz.
+- **Scoperto un bug nel MIO stesso design prima di consegnarlo**, non dall'utente: il primo tentativo di implementazione (passo incondizionato di un semitono oltre la soglia) rimbalza avanti e indietro ad ogni blocco durante uno scivolamento lento — provato scrivendo apposta un test "nessun rimbalzo" (test 4) e vedendolo fallire prima ancora di integrare il codice nel plugin. Corretto bloccando lo scatto al risultato di un arrotondamento standard (`std::min`/`std::max`), che non puo' mai superare la nota di destinazione. Lezione per le prossime sessioni: quando un test esplicito di un caso limite fallisce PRIMA dell'integrazione, e' esattamente il momento in cui costa meno correggerlo.
+- Il piano di sessione 10 (finestra temporale) e' stato sovrascritto con quello di sessione 11 (isteresi in cent) dopo la correzione dell'utente, come da istruzioni del sistema di planning per un task diverso ma correlato.
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -506,11 +534,12 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Immediato — riprendere il test in Ableton con le correzioni di sessione 10:**
+**Immediato — riprendere il test in Ableton con le correzioni di sessione 11:**
 1. Ricaricare "Harmonizer" (VST3 ricompilato in questa sessione).
-2. **Riverificare i punti 1, 3, 5 del test precedente**: label "Fix/Move" e "Fmt/Voice" ora visibili; con "Keep Tails" OFF (default) suonare note diverse in sequenza NON deve piu' accumulare voci/preset (contatore "Active" deve tornare a un valore coerente con `numVoices`, non salire indefinitamente); con "Keep Tails" ON deve tornare il comportamento precedente (frasi vecchie restano vive) — utile per capire se quel comportamento serva mai davvero prima del Pattern Ritmico.
-3. **Osservare la nuova label "Detected"** (nome nota + confidenza + stabile/instabile) durante i test dei punti 2 e 5 originali (sample non riconosciuti, primo attacco a "0 voci"): serve a raccogliere dati reali sulla causa (sospetto: corsa fra onset e aggancio del pitch) prima di decidere un fix — vedi §2 sessione 10.
-4. Poi proseguire con gli ascolti ancora non fatti prima dell'interruzione per i bug: motore PSOLA (voicing a -12 semitoni e sotto, Fix/Move, cambio Stability — mappatura `{165,130,100,85,70}` Hz in `PsolaShifter.cpp` da tarare se serve), Formanti (costante `k=0.3` in `Voice.cpp` da tarare se serve), controllo MIDI CC con hardware/automazioni reali (FR-36/37), modalita' Play (setup PRD §3.4, verificare FR-27/28).
+2. **Ripetere il test C→D→E cantato legato** (o una frase propria simile): ogni nota nuova deve aggiornare l'armonizzazione secondo la tabella del preset in uso, senza bisogno di uno stacco netto. Provare anche un vibrato normale su una nota tenuta (non deve far sfarfallare l'armonizzazione) ed eventualmente un vibrato deliberatamente ampio (dovrebbe sentirsi l'alternanza fra le note vicine, comportamento voluto).
+3. Se il comportamento non convince, la soglia di ±25 cent (`kHysteresisSemitones` in `PitchLatch.h`) e' il primo parametro da tarare.
+4. **Osservare la label "Detected"** (nome nota + confidenza + stabile/instabile, sessione 10) durante i test dei punti 2/5 originali (sample non riconosciuti da alcuni synth, primo attacco a "0 voci"): ancora da diagnosticare, vedi limiti noti sotto.
+5. Poi proseguire con gli ascolti ancora non fatti: motore PSOLA (voicing a -12 semitoni e sotto, Fix/Move, cambio Stability — mappatura `{165,130,100,85,70}` Hz in `PsolaShifter.cpp` da tarare se serve), Formanti (costante `k=0.3` in `Voice.cpp` da tarare se serve), controllo MIDI CC con hardware/automazioni reali (FR-36/37), modalita' Play (setup PRD §3.4, verificare FR-27/28).
 
 **Prossima area di sviluppo — da ridiscutere con l'utente** una volta chiuso il giro di prova sopra:
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
@@ -527,6 +556,8 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - **Modalita' Play (FR-24..28) implementata ma mai provata con hardware/host reale**: stesso limite del controllo CC — nessun test dedicato (coinvolge `juce::MidiBuffer`/`juce::MidiMessage`), verificata solo a lettura e con `pluginval`. Nessuna regola di furto definita per oltre 8 note simultanee (il PRD non la specifica per Play, a differenza di FR-51/52 per Harmonizer): le eccedenti restano semplicemente mute. FR-28 (nessun click nel passaggio di modalita') non verificato all'ascolto.
 - **"Keep Tails" (sessione 10) e' binario oggi**: tronca subito o lascia vivere per sempre. Il significato pieno descritto dall'utente (tronca solo la coda non ancora suonata di una frase, lascia finire il resto) richiede il Pattern Ritmico (FR-47..49, `[V1.1]`), non costruito qui — vedi `Phrase.h`.
 - **Mancato riconoscimento pitch con alcuni synth / primo attacco a "0 voci" (sessione 10, punti 2/5 del test)**: NON risolto, solo reso osservabile con la nuova label "Detected". Serve un secondo giro di ascolto con quella label visibile per decidere il fix vero (sospetto: corsa fra `OnsetDetector` e `PitchDetector`, non verificabile senza dati).
+- **Isteresi di intonazione (sessione 11) non ancora provata all'ascolto in questa forma**: soglia ±25 cent indicata dall'utente, verificata solo numericamente (`pitch_latch_test`). Un salto ampio senza un nuovo onset (raro, es. un portamento strumentale su un intervallo molto largo) attraversa le note intermedie un semitono a blocco: con blocchi host molto grandi (fino a 4096 campioni, NFR-03) potrebbe risultare percepibilmente piu' lento che con blocchi piccoli — non testato.
+- **Ipotesi "instabilita' -> `freeAllPhrases()`" (prima diagnosi di sessione 11, poi corretta dall'utente) resta non verificata e non toccata**: se l'isteresi da sola non risolve completamente il canto legato, questa e' la prossima pista da esplorare, questa volta con dati invece che a priori.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).

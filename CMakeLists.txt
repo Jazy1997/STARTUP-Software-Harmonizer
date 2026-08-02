@@ -109,6 +109,15 @@ add_executable(override_manager_test
 target_include_directories(override_manager_test PRIVATE src)
 target_compile_features(override_manager_test PRIVATE cxx_std_20)
 
+# Verifica numerica dell'isteresi di intonazione (sessione 11, FR-16/17):
+# header-only, nessuna dipendenza JUCE.
+add_executable(pitch_latch_test
+    tests/pitch_latch_test.cpp
+)
+target_include_directories(pitch_latch_test PRIVATE src)
+target_compile_features(pitch_latch_test PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
+add_test(NAME pitch_latch COMMAND pitch_latch_test)

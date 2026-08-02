@@ -29,6 +29,11 @@ jobs:
           g++ -O2 -std=c++20 -Wall -Wextra -Isrc tests/override_manager_test.cpp src/midi/OverrideManager.cpp -o override_manager_test
           ./override_manager_test
 
+      - name: Compile and run pitch latch test suite
+        run: |
+          g++ -O2 -std=c++20 -Wall -Wextra -Isrc tests/pitch_latch_test.cpp -o pitch_latch_test
+          ./pitch_latch_test
+
   build:
     needs: dsp-tests
     strategy:

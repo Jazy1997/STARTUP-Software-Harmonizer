@@ -5,6 +5,7 @@
 #include "dsp/PitchDetector.h"
 #include "dsp/OnsetDetector.h"
 #include "harmony/HarmonyEngine.h"
+#include "harmony/PitchLatch.h"
 #include "harmony/PresetLibrary.h"
 #include "voices/PhraseScheduler.h"
 #include "midi/CcRouter.h"
@@ -100,6 +101,9 @@ private:
 
     PitchDetector pitchDetector;
     OnsetDetector onsetDetector;
+    // FR-16/17 (sessione 11): isteresi sulla nota usata per il lookup nella
+    // tabella armonica — vedi PitchLatch.h per il perche'. Solo audio thread.
+    harmony::PitchLatch pitchLatch;
     PhraseScheduler phraseScheduler;
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
 
