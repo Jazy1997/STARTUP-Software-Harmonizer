@@ -26,6 +26,26 @@ public:
     // chiamare processAdd senza sentire un salto.
     void setMuted (bool shouldBeMuted) noexcept
     {
+        // Sessione 14 (click "a inizio nota", specialmente su note legate):
+        // finche' la voce resta silenziosa, processAdd() non chiama piu'
+        // shifter->process() (vedi sotto) — il PitchShifter resta congelato
+        // con qualunque contenuto avesse nella sua pipeline interna in quel
+        // momento (buffer PSOLA, epoch). La dissolvenza anti-click dura solo
+        // kDeclickMs (8ms), ma la latenza dichiarata del motore e' SEMPRE
+        // piu' lunga (13.6-30ms secondo Stability): la pipeline non fa in
+        // tempo a svuotarsi del tutto. Se lo stesso slot fisico viene poi
+        // riassegnato a una nuova nota/frase (routine, mai successo un reset
+        // fra l'una e l'altra prima d'ora), i primi campioni della nuova
+        // nota sono in parte ancora contenuto residuo di quella precedente.
+        // Fix: alla transizione silenzio->attiva (non a ogni chiamata: la
+        // maggior parte delle chiamate qui non cambia nulla), si resetta lo
+        // stato interno dello shifter — verificato numericamente in
+        // tests/psola_test.cpp Test 9 (senza reset: scostamento misurabile
+        // dal riferimento pulito; con reset: uscita bit-per-bit identica a
+        // uno slot mai usato prima).
+        if (! shouldBeMuted && isSilent() && shifter != nullptr)
+            shifter->reset();
+
         muted = shouldBeMuted;
         ampGlide.setTarget (shouldBeMuted ? 0.0f : 1.0f);
     }

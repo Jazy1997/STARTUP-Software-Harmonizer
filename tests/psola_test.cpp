@@ -484,6 +484,108 @@ int main()
         }
     }
 
+    // -----------------------------------------------------------------------
+    // TEST 9 (sessione 14 — feedback utente "un click solo a inizio nota,
+    // specialmente legato"). Ipotesi: quando una voce fisica smette di
+    // essere processata (dissolvenza anti-click completata, isSilent()),
+    // Voice::processAdd smette di chiamare shifter->process() — il PSOLA
+    // resta congelato con qualunque contenuto avesse in quel momento nella
+    // sua pipeline interna (inBuf/outBuf/envBuf, epoch). La dissolvenza dura
+    // solo kDeclickMs=8ms (353 campioni a 44.1kHz), ma la latenza dichiarata
+    // del motore (2*maxPeriod+maxBlock) e' SEMPRE piu' lunga — 13.6ms a
+    // Fast, 21.5ms a Balanced, 30ms ad Accurate: la pipeline non fa in tempo
+    // a svuotarsi del tutto prima che la voce venga considerata silenziosa.
+    // Se quello stesso slot fisico viene poi riassegnato a una nuova nota
+    // (routine, mai resettato fra una frase e l'altra — vedi handsoff.md),
+    // i primi campioni della nuova nota sono ancora, in parte, contenuto
+    // residuo della nota PRECEDENTE che quello slot stava sintetizzando.
+    std::printf ("\nTEST 9 - riattivazione di uno slot fisico dopo un periodo di inattivita'\n"
+                 "         (nessuna chiamata a process() durante il 'mute', nessun reset)\n");
+    {
+        const auto signalA = makeVowel (350.0, 0.3, 1800.0); // nota "precedente", timbro diverso
+        const auto signalB = makeVowel (220.0, 0.3, 1100.0); // nota "nuova"
+
+        // Baseline: uno shifter MAI usato prima (equivalente a uno slot
+        // fisico fresco, o a uno slot correttamente resettato) che processa
+        // solo il segnale B dall'inizio.
+        PsolaShifter fresh;
+        fresh.prepare (SR, BLOCK, Stability::defaultLevel);
+        fresh.setPitchShiftSemitones (0.0f);
+        std::vector<float> outFresh (signalB.size(), 0.0f);
+        for (size_t i = 0; i + BLOCK <= signalB.size(); i += BLOCK)
+        {
+            fresh.setInputF0Hz (220.0);
+            fresh.process (&signalB[i], &outFresh[i], BLOCK);
+        }
+
+        // "Sporco": uno shifter che ha gia' processato il segnale A (stato
+        // interno reale, non banale), poi smette di essere chiamato per un
+        // po' (il 'mute' — nessuna chiamata a process(), esattamente come
+        // Voice::processAdd quando isSilent()), poi riprende sul segnale B
+        // SENZA reset() — il bug come si presenta oggi.
+        PsolaShifter stale;
+        stale.prepare (SR, BLOCK, Stability::defaultLevel);
+        stale.setPitchShiftSemitones (0.0f);
+        for (size_t i = 0; i + BLOCK <= signalA.size(); i += BLOCK)
+        {
+            stale.setInputF0Hz (350.0);
+            std::vector<float> scratch (BLOCK, 0.0f);
+            stale.process (&signalA[i], scratch.data(), BLOCK);
+        }
+        // (il "mute" e' semplicemente il fatto di non chiamare process()
+        // per un intervallo: nessun tempo passa internamente per lo shifter,
+        // esattamente come una Voice inattiva)
+        std::vector<float> outStale (signalB.size(), 0.0f);
+        for (size_t i = 0; i + BLOCK <= signalB.size(); i += BLOCK)
+        {
+            stale.setInputF0Hz (220.0);
+            stale.process (&signalB[i], &outStale[i], BLOCK);
+        }
+
+        // Stessa storia di "stale", ma con reset() prima di riprendere sul
+        // segnale B — questo e' il fix proposto (Voice::setMuted chiamera'
+        // shifter->reset() alla riattivazione da uno stato silenzioso).
+        PsolaShifter resetThenResume;
+        resetThenResume.prepare (SR, BLOCK, Stability::defaultLevel);
+        resetThenResume.setPitchShiftSemitones (0.0f);
+        for (size_t i = 0; i + BLOCK <= signalA.size(); i += BLOCK)
+        {
+            resetThenResume.setInputF0Hz (350.0);
+            std::vector<float> scratch (BLOCK, 0.0f);
+            resetThenResume.process (&signalA[i], scratch.data(), BLOCK);
+        }
+        resetThenResume.reset();
+        std::vector<float> outReset (signalB.size(), 0.0f);
+        for (size_t i = 0; i + BLOCK <= signalB.size(); i += BLOCK)
+        {
+            resetThenResume.setInputF0Hz (220.0);
+            resetThenResume.process (&signalB[i], &outReset[i], BLOCK);
+        }
+
+        double maxDiffStaleVsFresh = 0.0, maxDiffResetVsFresh = 0.0;
+        for (size_t i = 0; i < outFresh.size(); ++i)
+        {
+            maxDiffStaleVsFresh = std::max (maxDiffStaleVsFresh, (double) std::fabs (outStale[i] - outFresh[i]));
+            maxDiffResetVsFresh = std::max (maxDiffResetVsFresh, (double) std::fabs (outReset[i] - outFresh[i]));
+        }
+
+        // reset() deve riportare lo shifter ESATTAMENTE allo stesso stato di
+        // uno mai usato: stessa sequenza di ingresso, stessi parametri ->
+        // uscita bit-per-bit identica (nessuna dipendenza residua nascosta).
+        const bool resetMatchesFresh = maxDiffResetVsFresh < 1.0e-6;
+        std::printf ("  con reset() prima di riprendere: scostamento massimo dal riferimento pulito %.8f  %s\n",
+                     maxDiffResetVsFresh, resetMatchesFresh ? "OK" : "FALLITO");
+        if (! resetMatchesFresh) ++failures;
+
+        // Senza reset(), la nota precedente lascia una traccia misurabile:
+        // questo e' esattamente il click "a inizio nota" segnalato
+        // dall'utente, riprodotto qui numericamente.
+        const bool staleDiffersMeasurably = maxDiffStaleVsFresh > 0.02;
+        std::printf ("  SENZA reset() (comportamento attuale): scostamento massimo dal riferimento pulito %.6f  %s\n",
+                     maxDiffStaleVsFresh, staleDiffersMeasurably ? "OK (bug confermato)" : "FALLITO (bug non riprodotto)");
+        if (! staleDiffersMeasurably) ++failures;
+    }
+
     std::printf ("\n===================================\n");
     std::printf ("%s  (%d verifiche fallite)\n",
                  failures == 0 ? "TUTTI I TEST SUPERATI" : "TEST FALLITI", failures);
