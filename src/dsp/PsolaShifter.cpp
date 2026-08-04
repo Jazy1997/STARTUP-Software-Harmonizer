@@ -241,7 +241,27 @@ void PsolaShifter::emitGrain (long long analysisEpoch, long long synthEpoch, dou
     constexpr double kOverlapMargin = 1.2;
     const double W = kOverlapMargin * std::max ((double) P, (double) P / (2.0 * alpha));
 
-    const int Lg = (int) std::lround (2.0 * W / beta);
+    // Sessione 12 (feedback utente: suono "granuloso, non fedele al
+    // sorgente"): la derivazione sopra (2W >= synthPeriod) garantisce la
+    // sovrapposizione SOLO se Lg = 2W, cioe' assume implicitamente beta = 1.
+    // Voice.cpp pero' applica la correzione formantica automatica di
+    // DEFAULT (formantSpread = 1.0): qualunque voce shiftata verso il basso
+    // ha beta > 1 (schiarimento) in condizioni normali, non come caso
+    // limite. Con beta > 1, Lg = 2W/beta si accorcia sotto il minimo
+    // richiesto per la sovrapposizione — misurato (Test 8, psola_test.cpp):
+    // a -14.5/-17 semitoni con la beta reale di Voice.cpp l'inviluppo crolla
+    // sotto la soglia 0.25 che gia' protegge il caso beta=1 (Test 6).
+    // Il fix e' un FLOOR sulla lunghezza del grano in uscita (Lg), non un
+    // allargamento di W: W resta legato solo ad alpha, perche' allargarlo
+    // reintrodurrebbe l'artefatto di ottava del Test 1 (vedi ATTENZIONE
+    // sopra) — W controlla quanto segnale SORGENTE finisce in un grano,
+    // synthMinLg controlla solo quanto e' LUNGO il grano nel dominio di
+    // uscita, che e' cio' che serve davvero per toccare il grano successivo
+    // a prescindere da come beta lo ha ricampionato.
+    const double synthPeriod = (double) P / alpha;
+    const double synthMinLg  = kOverlapMargin * synthPeriod;
+
+    const int Lg = (int) std::max (std::lround (2.0 * W / beta), std::lround (synthMinLg));
     if (Lg < 4) return;
 
     const long long halfI = Lg / 2;

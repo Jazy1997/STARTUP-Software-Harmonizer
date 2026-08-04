@@ -31,7 +31,7 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. NON ANCORA CONFERMATO ALL'ASCOLTO.**
 
 **Novita' sessione 12 — note saltate: corsa fra onset e rilevamento di pitch (FR-43/45/46):**
 
@@ -46,12 +46,23 @@ A fine sessione 11 l'utente aveva segnalato, senza altro dettaglio, che il plugi
 - **Verificato**: build VST3 e Standalone riuscite (solo il consueto fallimento di copia post-build per permessi, atteso e documentato dalla sessione 4), `pluginval --strictness-level 10` **SUCCESS** (exit code 0, nessuna occorrenza di fail/error/crash nel log completo), tutte e 3 le suite verdi via `ctest` (`psola_test`, `override_manager_test`, `pitch_latch_test` — nessuna tocca `PhraseScheduler`, riverificate per scrupolo dato che questo e' proprio il file modificato).
 - **NON ancora verificato all'ascolto** (CLAUDE.md regola 12): l'utente deve suonare note staccate ripetute in Ableton e controllare che (a) nessuna venga saltata, (b) "Active" non resti a 0 sul primo attacco, (c) `late-bindings` salga davvero, (d) nessuna nota venga armonizzata sull'accordo della nota precedente. Solo dopo questa conferma il fix puo' considerarsi completo, non solo compilato.
 
-**Segnalato dall'utente ma FUORI SCOPE in questa sessione — timbro "poco fedele, robotico e granuloso":**
+**Novita' sessione 12 (continuazione) — timbro "robotico e granuloso": bug reale trovato e corretto in `PsolaShifter::emitGrain`:**
 
-L'utente ha scelto di lavorare sulla corsa onset/pitch, non sul timbro, in questa sessione. Letto comunque `PsolaShifter.cpp` per non ripartire da zero la prossima volta — tre candidati concreti, NESSUNO gia' verificato come causa, solo misurabili prima di agire (regola 12):
-1. `PsolaShifter.cpp`, normalizzazione d'inviluppo in uscita (`out[i] = outBuf[idx] / max(e, 1.0f)`): si divide solo quando l'inviluppo supera 1. Per `alpha < 1` (voci verso il basso) l'inviluppo puo' scendere fino a ~0.25 (soglia accettata dal test 6 della suite) — fino a ~12dB di ripple periodico di ampiezza al ritmo dei grani, la firma acustica di "granuloso". Soglia del test lasca: candidato misurabile senza ascoltare.
-2. Individuazione degli epoch come massimo di `|x|` in una finestra ±P/4 (`detectEpochs`): su segnali non impulsivi (synth, fiati) puo' posizionare male gli epoch, incoerenza di fase fra grani = "robotico".
-3. Otto istanze PSOLA indipendenti sullo stesso ingresso: artefatti correlati che si sommano invece di mediarsi.
+Dopo la conferma all'ascolto del fix precedente, l'utente ha chiesto di passare al feedback di qualita' lasciato in sospeso: "non fedele al segnale sorgente, robotico e granuloso". Dei tre candidati annotati a fine sessione precedente (vedi sotto la versione originale di questa nota), il primo si e' rivelato un bug reale, verificato per calcolo PRIMA di toccare il codice e poi confermato empiricamente con un test scritto apposta.
+
+- **Diagnosi**: la garanzia di sovrapposizione dei grani in `emitGrain` (`2W >= synthPeriod`, commento originale nel codice) e' derivata assumendo implicitamente `beta = 1` — `Lg = 2W` nella derivazione. Il codice pero' calcola `Lg = round(2W/beta)`, per la correzione formantica (FR-39/41), senza mai ricompensare la sovrapposizione quando `beta != 1`. `Voice.cpp` applica la correzione formantica automatica **di default** (`formantSpread = 1.0`, non un caso limite): qualunque voce shiftata verso il basso ha `beta > 1` (schiarimento) in condizioni normali. Calcolo a mano: a -12 semitoni (il confine esatto dove il margine originale e' gia' teso al limite) con `beta` reale prodotto da `Voice.cpp` (k=0.3) il grano risulta ~19% piu' corto del minimo gia' provato appena sufficiente — a scostamenti maggiori (-14.5/-17 semitoni, dove sia `alpha` cala sia `beta` cresce) il deficit peggiora.
+- **Verifica PRIMA del fix (coerente con l'abitudine di sessione 11 — scrivere il test che fallisce prima di correggere)**: aggiunto **Test 8** a `tests/psola_test.cpp`, stessa misura del Test 6 (RMS a breve termine minimo/medio) ma con la `beta` REALE che `Voice.cpp` produrrebbe (stessa formula, k=0.3, spread=1.0) invece di `beta=1` fisso. Eseguito sul codice non ancora corretto: **FALLITO su -14.5 e -17 semitoni** (ratio 0.222 e 0.146, sotto la soglia 0.25) — il bug non era solo teorico, era misurabile.
+- **Fix**: aggiunto un floor a `Lg` basato su `synthPeriod` (indipendente da `beta`), invece di allargare `W` (la semiampiezza in campioni SORGENTE). Scelta deliberata: allargare `W` invece del floor su `Lg` avrebbe fatto piu' contenuto sorgente entrare in ogni grano, rischiando di reintrodurre esattamente l'artefatto di ottava del Test 1 (sessione 9) che l'attuale margine minimo su `W` evita di proposito. Il floor su `Lg` agisce solo nel dominio di uscita, dove serve davvero (far toccare grani consecutivi), senza toccare quanto segnale sorgente ciascun grano contiene.
+- **Verifica DOPO il fix**: Test 8 ora passa (ratio 0.540/0.439/0.379). **Test 1 e Test 6 (il caso `beta=1` gia' validato) restano numericamente identici, cifra per cifra**, a prima del fix — conferma per calcolo (non solo per assenza di regressioni nei test) che il floor e' un no-op quando `beta=1`, esattamente come previsto analiticamente prima di scrivere la modifica.
+- **`src/dsp/PsolaShifter.cpp`**: `emitGrain`, floor su `Lg` (vedi sopra).
+- **`tests/psola_test.cpp`**: nuovo Test 8. Nota nel codice: la formula di `beta` e' una copia intenzionale di quella in `Voice.cpp` — se `k` cambia la', va aggiornato anche qui.
+- **Non toccato**: `Voice.cpp`, `PitchDetector`, `OnsetDetector`, `PhraseScheduler`, `HarmonyEngine` — nessuno di questi era in causa per questo bug specifico.
+- **Verificato**: build VST3 e Standalone riuscite, tutte e 3 le suite verdi via `ctest`, `pluginval --strictness-level 10` SUCCESS (exit code 0, log completo senza fail/error/crash).
+- **NON ancora verificato all'ascolto** (regola 12): questo e' un fix di un bug numericamente reale e misurabile, ma non e' garanzia che risolva TUTTO il feedback "robotico e granuloso" — restano gli altri due candidati sotto, non ancora esplorati.
+
+**Rimangono FUORI SCOPE — altri due candidati per il timbro, non ancora esplorati:**
+1. Individuazione degli epoch come massimo di `|x|` in una finestra ±P/4 (`detectEpochs`): su segnali non impulsivi (synth, fiati) puo' posizionare male gli epoch, incoerenza di fase fra grani = "robotico".
+2. Otto istanze PSOLA indipendenti sullo stesso ingresso: artefatti correlati che si sommano invece di mediarsi.
 
 **Novita' sessione 11 — isteresi di intonazione per note legate (FR-16/17):**
 
@@ -453,6 +464,14 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `src/PluginEditor.cpp` | modificato | Label "Detected" mostra anche `gate open/closed` e `late-bindings N` |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 12 (continuazione — timbro robotico/granuloso, fix `emitGrain`):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/dsp/PsolaShifter.cpp` | modificato | `emitGrain`: floor su `Lg` (lunghezza del grano in uscita) basato su `synthPeriod`, indipendente da `beta` |
+| `tests/psola_test.cpp` | modificato | Nuovo Test 8: sovrapposizione dei grani con la `beta` reale prodotta dalla correzione formantica di default di `Voice.cpp` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -551,6 +570,12 @@ Nessuna modifica al PRD.
 - Il secondo dettaglio (timbro) e' stato deliberatamente lasciato fuori scope per questa sessione (l'utente ha scelto l'altra area) ma tre candidati concreti in `PsolaShifter.cpp` sono stati annotati per non ripartire da zero — vedi §2.
 - Build, ctest, `pluginval` eseguiti ed esito riportato per intero (regola 8); nessun ascolto possibile da questa sessione (regola 12) — il fix resta "da confermare", non "completo".
 
+**Sessione 12 (continuazione) — timbro, bug reale trovato e corretto in `PsolaShifter`:**
+- L'utente ha confermato all'ascolto il fix precedente (note saltate) e ha chiesto di passare al feedback sul timbro lasciato in sospeso.
+- Letto `PsolaShifter.cpp`/`Voice.cpp` insieme, non isolatamente: il bug e' emerso proprio dall'incrocio fra i due file (la formula di `beta` in `Voice.cpp`, che di per se' e' corretta, interagisce male con un'assunzione implicita in `PsolaShifter::emitGrain` che nessuno dei due file da solo rendeva visibile).
+- **Verificato per calcolo A MANO prima di scrivere qualunque codice** (il deficit di ~19% a -12 semitoni), poi **verificato empiricamente scrivendo un test che fallisce sul codice non ancora corretto** (Test 8), poi corretto, poi riverificato che lo stesso test passa E che nulla di preesistente e' cambiato (Test 1/6 identici cifra per cifra) — stessa disciplina di sessione 11 (regola 13: un test che fallisce dopo un fix va capito, non scartato; e viceversa, un test che ora passa va controllato che non sia passato "per caso" riducendo la soglia).
+- Deliberatamente NON esplorati in questa sessione gli altri due candidati (posizionamento epoch, correlazione fra le 8 istanze): un bug alla volta, verificato, per poter attribuire correttamente un eventuale miglioramento (o assenza di miglioramento) all'ascolto.
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -597,7 +622,11 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 **Sessione 12 — CONFERMATO all'ascolto:** fix della corsa onset/pitch — l'utente ha verificato in Ableton che "Active" non resta piu' a zero sul primo attacco, armonizza sempre tutte le note, nessuna persa per strada. Feedback esplicito ma non dettagliato voce per voce: non e' stato confermato singolarmente ne' il contatore "late-bindings" (se sale davvero) ne' il caso specifico "nota armonizzata sull'accordo della nota precedente" (causa 2 della diagnosi, `pitchDetector` stantio) — nessun segnale che sia ancora un problema, solo non verificato in modo esplicito e separato. Se in futuro dovesse ricomparire un caso limite (es. attacchi molto ravvicinati, staccato molto rapido), ripartire da li'.
 
-**Feedback esplicito dell'utente (sessione 12), timbro — NON ancora affrontato**: "non fedele al segnale sorgente, robotico e granuloso". Tre candidati concreti gia' annotati in `PsolaShifter.cpp` (vedi §2 sessione 12: normalizzazione d'inviluppo sotto `alpha<1`, posizionamento degli epoch su segnali non impulsivi, correlazione fra le 8 istanze) — nessuno ancora verificato come causa reale, da misurare prima di agire (regola 12).
+**Sessione 12 (continuazione) — DA CONFERMARE ALL'ASCOLTO (priorita' immediata della prossima sessione):** fix del deficit di sovrapposizione dei grani in `PsolaShifter::emitGrain` quando la correzione formantica di default e' attiva (vedi §2). Bug reale confermato per calcolo e con un test che falliva prima del fix — ma non e' garanzia che risolva l'intero feedback "robotico e granuloso": l'utente deve riascoltare in Ableton, in particolare su voci shiftate parecchio verso il basso (ottava o piu'), e confermare se il suono e' piu' pulito o se resta un problema.
+
+Se dopo l'ascolto il problema persiste (in tutto o in parte), i due candidati seguenti restano da esplorare, in ordine di probabilita':
+1. Individuazione degli epoch come massimo di `|x|` in una finestra ±P/4 (`detectEpochs` in `PsolaShifter.cpp`): su segnali non impulsivi (synth, fiati, voce) puo' posizionare male gli epoch, incoerenza di fase fra grani percepita come "robotico".
+2. Otto istanze PSOLA indipendenti sullo stesso ingresso: artefatti correlati che si sommano invece di mediarsi tra le voci.
 
 **Prossimi passi possibili — da ridiscutere con l'utente:**
 - **Timbro robotico/granuloso** (vedi sopra): prossimo candidato naturale, ha gia' indizi concreti da cui partire.
@@ -618,7 +647,7 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - **Mancato riconoscimento pitch con alcuni synth / primo attacco a "0 voci" (sessione 10, punti 2/5 del test)**: causa confermata e corretta in sessione 12 (corsa `OnsetDetector`/`PitchDetector`, vedi §2) — **CONFERMATO risolto all'ascolto** dall'utente.
 - **Isteresi di intonazione + `signalPresent` (sessione 11): CONFERMATI all'ascolto** — canto legato C→D→E armonizza correttamente ogni nota. Soglia ±25 cent e soglie del gate (-24/-30/-36 dB, ereditate dal rilevamento onset di sessione 7) restano comunque punti da tarare ulteriormente se emergono altri casi limite (es. un portamento su un intervallo molto ampio, o un legato molto piano/debole).
 - **Note saltate senza logica precisa (sessione 12)**: causa confermata a lettura di codice (corsa onset/pitch + `pitchDetector` mai resettato), fix scritto, verificato con build/test/pluginval e **CONFERMATO all'ascolto** — nessuna nota persa, "Active" mai a zero al primo attacco. Non verificato singolarmente il caso "accordo della nota precedente" (causa 2) ne' il contatore "late-bindings": nessun segnale che sia un problema, solo non isolato esplicitamente.
-- **Qualità del suono — timbro robotico/granuloso (sessione 12)**: l'utente ha ora specificato il dettaglio mancante ("non fedele al segnale sorgente, robotico e granuloso") — tre candidati concreti annotati in `PsolaShifter.cpp` (§2 sessione 12), nessuno ancora verificato come causa reale.
+- **Qualità del suono — timbro robotico/granuloso (sessione 12)**: un bug reale trovato e corretto in `PsolaShifter::emitGrain` (deficit di sovrapposizione dei grani quando la correzione formantica di default e' attiva), verificato per calcolo e con un test (Test 8) che falliva prima del fix — **NON ancora confermato all'ascolto**. Restano due candidati non esplorati se il problema persiste in tutto o in parte: posizionamento degli epoch su segnali non impulsivi, correlazione fra le 8 istanze PSOLA.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).

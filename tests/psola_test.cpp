@@ -453,6 +453,37 @@ int main()
                      ok ? "OK" : "FALLITO");
     }
 
+    // -----------------------------------------------------------------------
+    // TEST 8 (sessione 12 — feedback utente "granuloso, non fedele al
+    // sorgente"): il test 6 misura la sovrapposizione dei grani SOLO a
+    // beta = 1, ma Voice.cpp applica la correzione formantica automatica
+    // (FR-39) di DEFAULT (formantSpread = 1.0), quindi beta != 1 su
+    // qualunque voce shiftata e' il caso normale in produzione, non un
+    // caso limite. La formula qui e' una copia intenzionale di quella in
+    // Voice::processAdd — se k cambia la', va aggiornata anche qui.
+    std::printf ("\nTEST 8 - inviluppo minimo di sovrapposizione CON la "
+                 "correzione formantica automatica di Voice.cpp (beta != 1)\n");
+    {
+        constexpr double kFormantSpreadK = 0.3; // deve restare uguale a Voice.cpp
+        const int win = (int) (0.005 * SR);
+        for (double st : { -12.0, -14.5, -17.0 })
+        {
+            const double autoFormantSemitones = -kFormantSpreadK * 1.0 * st; // spread=1.0 default
+            const double beta = std::pow (2.0, autoFormantSemitones / 12.0);
+
+            const auto out = runShifter (input, f0in, st, beta);
+
+            const double minR = minShortTimeRms (out, anaFrom, anaLen, win);
+            const double avgR = rms (out, anaFrom, anaLen);
+            const double ratio = (avgR > 0.0) ? minR / avgR : 0.0;
+
+            const bool ok = ratio > 0.25;
+            if (! ok) ++failures;
+            std::printf ("  %+.1f st (beta %.3f): RMS minimo/medio = %.3f  %s\n",
+                         st, beta, ratio, ok ? "OK" : "FALLITO");
+        }
+    }
+
     std::printf ("\n===================================\n");
     std::printf ("%s  (%d verifiche fallite)\n",
                  failures == 0 ? "TUTTI I TEST SUPERATI" : "TEST FALLITI", failures);
