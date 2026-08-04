@@ -43,7 +43,13 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
     if (shifter == nullptr || isSilent())
         return;
 
-    const float amp = ampGlide.process (numSamples);
+    // Sessione 13 (click residui): con un buffer host piu' lungo della
+    // rampa (8ms = 353 campioni a 44.1kHz; l'utente ha misurato 4096
+    // campioni con MME/DirectX in Ableton) ampGlide.process(numSamples)
+    // faceva scattare l'intera dissolvenza in un solo campione — il fix di
+    // sessione 12 era di fatto un no-op in quella configurazione. Vedi
+    // Glide::processRamp e tests/glide_test.cpp.
+    const auto ampRamp = ampGlide.processRamp (numSamples);
     const float smoothedOffset = offsetGlide.process (numSamples);
 
     float semitonesToApply;
@@ -89,6 +95,17 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
     shifter->setPitchShiftSemitones (semitonesToApply);
     shifter->process (monoIn, scratch.data(), numSamples);
 
-    for (int i = 0; i < numSamples; ++i)
+    // Guadagno campione-per-campione: ampRamp.rampSamples puo' essere minore
+    // di numSamples (la rampa finisce dentro questo blocco), nel qual caso i
+    // campioni restanti restano fermi al target (ampRamp.startValue +
+    // rampSamples*increment, gia' pari a ampGlide.getCurrentValue()).
+    float amp = ampRamp.startValue;
+    int i = 0;
+    for (; i < ampRamp.rampSamples; ++i)
+    {
+        mixOutput[i] += scratch[(size_t) i] * amp;
+        amp += ampRamp.increment;
+    }
+    for (; i < numSamples; ++i)
         mixOutput[i] += scratch[(size_t) i] * amp;
 }

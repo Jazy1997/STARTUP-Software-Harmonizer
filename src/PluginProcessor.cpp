@@ -381,6 +381,7 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     lastDetectedConfidence.store (pitchDetector.getConfidence(), std::memory_order_relaxed);
     lastInputStable.store (inputIsStable, std::memory_order_relaxed);
     lastGateOpen.store (signalPresent, std::memory_order_relaxed);
+    lastBlockSize.store (numSamples, std::memory_order_relaxed);
 
     if (! playModeEnabled && inputIsStable)
     {
@@ -433,20 +434,33 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Sessione 12 (fix click): il target del parametro puo' saltare da un
     // blocco all'altro (automazione, CC bypass, il bottone Bypass stesso) —
-    // dryGlide/wetGlide smorzano quel salto su una rampa breve invece di
-    // applicarlo di netto a tutto il buffer. Va chiamato UNA sola volta per
-    // blocco (Glide::process muta stato interno): il valore va calcolato
-    // prima del ciclo sui canali, non dentro.
+    // dryGlide/wetGlide smorzano quel salto invece di applicarlo di netto a
+    // tutto il buffer. Va chiamato UNA sola volta per blocco (Glide muta
+    // stato interno): il valore va calcolato prima del ciclo sui canali, non
+    // dentro. Sessione 13: con un buffer host lungo (4096 campioni misurati
+    // dall'utente in Ableton, MME/DirectX) una singola chiamata a process()
+    // faceva scattare il salto in un solo campione, uguale al bug su
+    // ampGlide in Voice.cpp — stesso fix, processRamp campione-per-campione.
     dryGlide.setTarget (effectiveDryLevel);
     wetGlide.setTarget (effectiveWetLevel);
-    const float smoothedDry = dryGlide.process (numSamples);
-    const float smoothedWet = wetGlide.process (numSamples);
+    const auto dryRamp = dryGlide.processRamp (numSamples);
+    const auto wetRamp = wetGlide.processRamp (numSamples);
 
     for (int ch = 0; ch < numOutputChannels; ++ch)
     {
         auto* out = buffer.getWritePointer (ch);
-        for (int i = 0; i < numSamples; ++i)
-            out[i] = smoothedDry * mono[i] + smoothedWet * voicesMix[i];
+        float dry = dryRamp.startValue;
+        float wet = wetRamp.startValue;
+        const int rampSamples = juce::jmax (dryRamp.rampSamples, wetRamp.rampSamples);
+        int i = 0;
+        for (; i < rampSamples; ++i)
+        {
+            out[i] = dry * mono[i] + wet * voicesMix[i];
+            if (i < dryRamp.rampSamples) dry += dryRamp.increment;
+            if (i < wetRamp.rampSamples) wet += wetRamp.increment;
+        }
+        for (; i < numSamples; ++i)
+            out[i] = dry * mono[i] + wet * voicesMix[i];
     }
 }
 

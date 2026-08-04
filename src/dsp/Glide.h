@@ -67,6 +67,51 @@ public:
     // dall'esterno (confronto in virgola mobile fragile su un valore calcolato).
     bool isSettled() const noexcept { return remainingSamples <= 0; }
 
+    // Sessione 13: process() ritorna un solo valore per l'intero blocco, per
+    // costruzione (necessario per l'offset armonico, FR-17: PitchShifter
+    // accetta un unico rapporto per chiamata a process()). Ma un chiamante
+    // che deve applicare quel valore come GUADAGNO campione-per-campione
+    // (dissolvenza anti-click, dry/wet) non puo' usarlo direttamente: con un
+    // blocco host piu' lungo della rampa (es. 4096 campioni a 44.1kHz contro
+    // una rampa di 353), process() fa scattare il salto intero in un solo
+    // campione — lo stesso identico problema che la rampa doveva eliminare.
+    //
+    // processRamp() espone la retta INTERA che process() gia' calcola
+    // internamente (start/target/durata fissati da setTarget, mai
+    // ricalcolati per blocco), cosi' il chiamante puo' interpolare campione
+    // per campione. Il calcolo dell'incremento usa i valori CORRENTI
+    // (current/remainingSamples) invece che quelli originali del setTarget:
+    // per costruzione current e' sempre esattamente sulla retta originale
+    // (vedi process()), quindi (target-current)/remainingSamples e'
+    // algebricamente identico a (target-start)/totalGlideSamples in
+    // qualunque punto della rampa — nessuna deriva quando la stessa rampa e'
+    // spezzata su piu' blocchi di dimensione diversa (verificato in
+    // tests/glide_test.cpp, TEST 3).
+    //
+    // rampSamples puo' essere minore di numSamples (la rampa finisce dentro
+    // questo blocco: il chiamante deve tenere il valore fermo al target per
+    // i campioni restanti) o uguale a numSamples (la rampa continua oltre
+    // la fine del blocco). Muta lo stato interno esattamente come process()
+    // (infatti lo richiama): va chiamata una sola volta per blocco.
+    struct Ramp
+    {
+        float startValue;
+        float increment;
+        int rampSamples;
+    };
+
+    Ramp processRamp (int numSamples) noexcept
+    {
+        Ramp r { current, 0.0f, 0 };
+        if (remainingSamples <= 0)
+            return r;
+
+        r.rampSamples = remainingSamples < numSamples ? remainingSamples : numSamples;
+        r.increment = (target - current) / (float) remainingSamples;
+        process (numSamples); // avanza lo stato interno esattamente come prima
+        return r;
+    }
+
 private:
     static int juce_max1 (int v) noexcept { return v > 1 ? v : 1; }
 

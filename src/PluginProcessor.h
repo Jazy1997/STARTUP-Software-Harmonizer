@@ -93,6 +93,14 @@ public:
     // presenza del segnale) — vedi il commento su signalPresent in
     // processBlock per il perche' sono due domande diverse.
     bool  getLastGateOpen() const noexcept { return lastGateOpen.load (std::memory_order_relaxed); }
+    // Sessione 13 (indagine click/wobbling): dimensione del blocco ricevuto
+    // dall'host in questo processBlock. Tutta la catena di controllo (Glide,
+    // parametri del PitchShifter) aggiorna una volta per blocco — con host
+    // configurati su buffer grandi (es. MME/DirectX senza ASIO) questo puo'
+    // essere la causa diretta di artefatti percepiti come click o
+    // ondeggiamento, non un bug nel calcolo in se'. Va misurato, non assunto
+    // (CLAUDE.md regola 12).
+    int   getLastBlockSize() const noexcept { return lastBlockSize.load (std::memory_order_relaxed); }
     // Contatore cumulativo: quante volte PhraseScheduler ha dovuto completare
     // l'allocazione di uno slot dopo il trigger, perche' il pitch non era
     // ancora confidente al momento dell'onset. Serve a confermare all'ascolto
@@ -147,6 +155,7 @@ private:
     std::atomic<float> lastDetectedConfidence { 0.0f };
     std::atomic<bool> lastInputStable { false };
     std::atomic<bool> lastGateOpen { false }; // sessione 12, vedi getter pubblico
+    std::atomic<int> lastBlockSize { 0 }; // sessione 13, vedi getter pubblico
 
     // FR-24..28: modalita' Play, VoicePool dedicato separato (vedi
     // PlayModeInput.h per il perche' non condivide phraseScheduler).

@@ -117,7 +117,16 @@ add_executable(pitch_latch_test
 target_include_directories(pitch_latch_test PRIVATE src)
 target_compile_features(pitch_latch_test PRIVATE cxx_std_20)
 
+# Verifica numerica della rampa campione-per-campione di Glide (sessione 13,
+# click residui): header-only, nessuna dipendenza JUCE.
+add_executable(glide_test
+    tests/glide_test.cpp
+)
+target_include_directories(glide_test PRIVATE src)
+target_compile_features(glide_test PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
 add_test(NAME pitch_latch COMMAND pitch_latch_test)
+add_test(NAME glide COMMAND glide_test)
