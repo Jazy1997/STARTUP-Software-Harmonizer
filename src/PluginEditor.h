@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "ui/PresetTableEditor.h"
 
 // M0/M1/M2 — editor minimo con controlli diretti (ComboBox/Slider/bottoni),
 // sufficiente per gestire la libreria preset e testare l'armonizzazione in un
@@ -38,6 +39,13 @@ private:
     juce::Slider formantSpreadSlider; // FR-40
     juce::TextEditor presetNameEditor;
     juce::Label activeVoicesValueLabel; // FR-53: aggiornata dal timer, non un parametro
+
+    // Sessione M5 (editor tabella preset, §8.2): griglia 12x8 editabile per
+    // il preset correntemente selezionato. Si ricarica da showPreset(),
+    // chiamata da syncPresetSelectionFromParameter() a ogni cambio di
+    // selezione (che copre gia' add/duplicate/delete/import/load-global,
+    // perche' tutti quei percorsi chiamano selectPresetIndex() a valle).
+    ui::PresetTableEditor presetTableEditor;
 
     // FR-23: Fix/Move per singola voce — un bottone a due stati per voce.
     std::array<juce::ToggleButton, harmony::numVoices> voiceFixButtons;

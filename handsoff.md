@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-02 (sessione 12)
+> Ultimo aggiornamento: 2026-08-04 (sessione 15)
 
 ---
 
@@ -31,7 +31,215 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). NON ANCORA CONFERMATO ALL'ASCOLTO.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 15 — inizio M5 (UI): editor tabella preset armonici 12x8:**
+
+Chiesto esplicitamente all'utente quale fosse il prossimo passo rispetto al PRD. Riletta
+integralmente la roadmap (§12) e la sezione UI (§8): M0-M4 sono tecnicamente completi o in
+sola verifica (M1: click in stand-by; M4: verifica hardware demandata all'utente, non
+blocca lavoro strutturale), **M5 (UI) non era mai stato iniziato in modo strutturato** —
+l'editor era un pannello piatto a riga singola, non le tre schermate del PRD. Discusso con
+l'utente (che ha chiesto giustamente se non fosse meglio aspettare, dato che restano test
+aperti): chiarito che nessuno dei problemi aperti (click, verifica CC/Play) tocca la
+struttura della UI — sono comportamento interno, non aggiungono/tolgono controlli — mentre
+il gap piu' concreto trovato e' proprio l'**editor dei preset (§8.2)**: prima di questa
+sessione l'unico modo di popolare la tabella 12x8 di un preset era importare un CSV
+esterno; il bottone "Add" creava un preset vuoto (96 celle mute) senza alcun modo di
+editarlo dall'interfaccia. L'utente ha scelto questo come primo slice di M5, da inserire
+nel pannello esistente (non aspettando lo scaffold delle 3 schermate, passo successivo di
+M5, non toccato qui).
+
+- **`src/harmony/PresetLibrary.{h,cpp}`**: nuovo `setCell(presetIndex, degree, voice, Cell)`,
+  unico mutatore diretto di una cella — prima non esisteva alcun modo di modificare la
+  tabella di un preset esistente (solo `addPreset`, che ne crea uno nuovo). Stesso schema
+  di `renamePreset` (bound-check, nessuna eccezione).
+- **`src/ui/CellInputParser.h`** (nuovo, header-only, nessuna dipendenza JUCE/harmony — stesso
+  principio di `Glide.h`/`PitchLatch.h`): parser di input validato per le celle. Esiste per
+  evitare una trappola gia' presente in `CsvIo::parseCsv`: `juce::String::getIntValue()`
+  ritorna silenziosamente `0` per qualunque testo non numerico ("abc", "12x", "--3"
+  diventerebbero tutti 0 = unisono) — solo la stringa vuota diventa cella muta. Confondere
+  un refuso di battitura con un unisono vero e' esattamente la confusione vietata da
+  CLAUDE.md regola 3. Il parser invece **rifiuta** esplicitamente l'input non valido (l'editor
+  ripristina il valore precedente, non scrive nulla), entro un range sano di ±48 semitoni
+  (4 ottave, protezione contro refusi come "1200" invece di "12").
+- **`tests/cell_input_parser_test.cpp`** (nuovo, stesso schema di `pitch_latch_test`): 19
+  verifiche — vuoto/spazi→muto, **"0"→valore esplicito zero, distinto dalla cella vuota**
+  (verifica diretta di CLAUDE.md regola 3), interi positivi/negativi entro range, fuori
+  range rifiutato, testo spazzatura rifiutato esplicitamente (mai coerto a 0, il contrario
+  esatto della trappola in `CsvIo`). Tutte verdi.
+- **`src/ui/DegreeNames.h`** (nuovo): tabella statica dei nomi di grado leggibili (R, b2, 2,
+  b3, 3, 4, b5, 5, b6, 6, b7, 7 — convenzione standard di teoria), richiesta esplicitamente
+  dal PRD (§8.2, "intestazioni di colonna che mostrano il grado in forma leggibile"). Non
+  esisteva prima. Solo presentazione: `HarmonyEngine` continua a ragionare in interi 0-11.
+- **`src/ui/PresetTableEditor.{h,cpp}`** (nuovo, primo componente custom del progetto — fin
+  qui tutto era `juce::Rectangle::removeFromTop/Left` a mano dentro `PluginEditor`, coerenza
+  mantenuta: niente `TableListBox`/`Grid`, solo una griglia di `juce::Label` editabili con lo
+  stesso stile): 12 colonne (gradi) x 8 righe (voci), stessa indicizzazione di
+  `harmony::Table` (`table[grado][voce]`, nessuna traduzione di indici). `showPreset(idx)`
+  ricarica le 96 celle dal modello; ogni cella valida l'input via `CellInputParser` al
+  commit e scrive con `PresetLibrary::setCell` tramite `editPresetLibrary` (stesso pattern
+  gia' usato da tutti gli altri bottoni preset).
+- **`src/PluginEditor.{h,cpp}`**: nuovo membro `presetTableEditor`, aggiunto sotto il campo
+  nome preset. **Un solo punto di aggancio** per il refresh: dentro
+  `syncPresetSelectionFromParameter()` (chiamata da tutti i percorsi che cambiano
+  selezione/contenuto — add/duplicate/delete/move/import CSV/load global chiamano gia'
+  `selectPresetIndex()` a valle, che forza il passaggio li'). Non serve agganciarsi anche a
+  `refreshPresetBoxFromLibrary()` come inizialmente pianificato: verificato leggendo ogni
+  singolo `onClick` che tutti i percorsi rilevanti gia' passano da `selectPresetIndex()`.
+  Finestra ingrandita per fare spazio alla griglia (~214px): `setResizeLimits` da
+  `(460,950)-(1200,1230)` a `(500,1170)-(1200,1450)`, `setSize` da `500x990` a `520x1200`.
+- **`CMakeLists.txt`**: `src/ui/PresetTableEditor.cpp` aggiunto ai sorgenti del target
+  principale (non c'e' glob nel progetto); nuovo target/test `cell_input_parser_test`.
+- **Non toccato**: `HarmonyEngine`, `CsvIo` (la trappola descritta sopra resta nel suo
+  dominio originale, l'I/O di file esterni — cambiarne il comportamento avrebbe impatto
+  sulla retrocompatibilita' delle sessioni salvate, fuori scope), `PsolaShifter`,
+  `PitchDetector`, `PhraseScheduler`, `PlayModeInput` — nessuno di questi era in causa.
+- **Verificato**: le 5 suite di test verdi (`cell_input_parser_test` nuovo, le altre 4
+  invariate), build VST3 e Standalone riuscite (solo il consueto fallimento di copia
+  post-build per permessi), `pluginval --strictness-level 10` **SUCCESS** su VST3 (incluso
+  "Editor Automation", che apre/ridimensiona l'editor senza errori — nessuna occorrenza di
+  fail/error/crash nel log completo).
+- **Verifica visiva tentata ma NON conclusiva**: lanciata la Standalone appena compilata e
+  catturato uno screenshot via `PrintWindow` (API Win32). **Risultato positivo**: i valori
+  mostrati nella griglia per il preset di default ("Maj") corrispondono ESATTAMENTE al
+  calcolo a mano dell'algoritmo (`generateDropVoicingTable` con toni {0,4,7,11}) su tutte le
+  colonne visibili — prova diretta che indicizzazione e lettura dal modello sono corrette,
+  non solo che "compila". **Risultato inconcludente**: lo screenshot mostra solo 10 delle 12
+  colonne (e, nelle righe preesistenti Fix/Move e Fmt/Voice mai toccate in questa sessione,
+  solo 7-8 degli 8 controlli) — il taglio resta IDENTICO anche ridimensionando la finestra
+  fisica da 520 a 900 a 1200px, il che esclude un problema di spazio reale (a 1200px di
+  larghezza ci sarebbe abbondanza di margine per 12 colonne da ~40px l'una). Precedente
+  diretto in `handsoff.md` sessione 10: lo stesso identico sintomo sugli 8 knob Fmt/Voice fu
+  **confermato dall'utente come bounds validi, solo piccoli** — cioe' funzionavano davvero,
+  il problema era percettivo (sessione 10), non di rendering. Ipotesi piu' probabile:
+  `PrintWindow` non cattura in modo affidabile il contenuto renderizzato via accelerazione
+  hardware di JUCE (limite noto di quell'API Win32 con Direct2D/OpenGL), non un bug del
+  layout. **Non e' pero' una prova**, solo un'ipotesi con precedente a favore — CLAUDE.md
+  regola 12 vieta di dichiarare "verificato" qualcosa che non e' stato davvero verificato:
+  serve la conferma dell'utente in Ableton/Standalone con i propri occhi, vedi §6.
+- **NON ancora verificato dall'utente** (CLAUDE.md regola 12 — per la UI, non il suono):
+  aprire il plugin e controllare che tutte e 12 le colonne/8 righe siano visibili e
+  leggibili senza sovrapposizioni; editare una cella a mano e verificare che l'armonizzazione
+  dal vivo la rispetti; verificare che "0" e cella vuota si comportino in modo diverso;
+  Export CSV di un preset editato a mano e reimportarlo (round-trip).
+
+**Novita' sessione 14 — "un click solo a inizio nota, specialmente legato": stato PSOLA mai resettato fra una nota e l'altra sullo stesso slot fisico:**
+
+L'utente ha riascoltato il fix di sessione 13 (dissolvenza campione-per-campione): "Migliorato ma non al 100%. Ora alle volte capita che ci sia un solo click solo ad inizio nota (specialmente quando viene suonata legata)." Sintomo distinto da quelli gia' corretti (non piu' un salto di ampiezza al rilascio/mix — quelli erano gia' stati sistemati) — la posizione ("a inizio nota") e la ricorrenza ("specialmente legato") hanno indirizzato l'indagine altrove: cosa succede quando uno slot fisico gia' usato viene RIASSEGNATO a una nuova nota.
+
+- **Diagnosi**: `Voice::processAdd` esce subito (`if (shifter == nullptr || isSilent()) return;`) quando la voce e' completamente silenziosa — cioe' smette del tutto di chiamare `shifter->process()`. Il `PsolaShifter` di quello slot fisico resta quindi CONGELATO con qualunque contenuto avesse nella sua pipeline interna (`inBuf`/`outBuf`/`envBuf`, epoch) nel momento esatto in cui si e' azzittito. Verificato per `grep` che `shifter->reset()` non viene MAI chiamato durante la vita normale del plugin — solo a `prepareToPlay` (dentro `Voice::prepare`, che chiama gia' `reset()` internamente a fine `PsolaShifter::prepare()`) e nel path di reset completo del plugin, mai fra una frase e la successiva quando lo stesso slot fisico viene riassegnato a una nuova nota (`PhraseScheduler::triggerNewPhrase` → `allocateFreeSlot`).
+- **Perche' e' un problema reale, non solo teorico**: la dissolvenza anti-click dura `kDeclickMs = 8ms` (353 campioni a 44.1kHz), ma la latenza dichiarata del motore PSOLA (`2*maxPeriod + maxBlock`) e' SEMPRE piu' lunga — calcolato per ogni livello di Stability: Fast 13.6ms, Balanced 21.5ms, Accurate 30ms. In OGNI configurazione, la dissolvenza si considera "finita" (`isSilent()==true`, si smette di chiamare `process()`) MOLTO prima che la pipeline interna del motore abbia davvero finito di smaltire il contenuto della nota precedente (fino a ~22ms di "resto" a Balanced). Quando quello slot viene poi riassegnato a una nuova nota, i primi campioni della nuova nota sono in parte ancora sintesi residua di quella vecchia.
+- **Perche' "specialmente legato"**: la dissolvenza (8ms) e' molto piu' breve della durata tipica di una nota, quindi uno slot fisico si libera e viene riassegnato quasi ad ogni nuova nota gia' dalla seconda/terza nota di una frase — non e' un caso raro. In legato l'orecchio si aspetta continuita' assoluta (nessun transiente d'attacco reale a mascherare un piccolo difetto), mentre in staccato il vero attacco della nota maschera parzialmente un glitch della stessa entita'.
+- **Verificato PRIMA di scrivere il fix (CLAUDE.md regola 12/13)**: nuovo Test 9 in `tests/psola_test.cpp`. Confronta tre esecuzioni dello stesso `PsolaShifter`: (a) "fresco" (mai usato, processa solo il segnale B), (b) "sporco" (ha gia' processato un segnale A con timbro diverso, poi smette di essere chiamato per un po' — il "mute" — poi riprende su B SENZA `reset()`, esattamente il comportamento attuale), (c) "reset-then-resume" (come (b) ma con `reset()` prima di riprendere — il fix proposto). Risultato **misurato PRIMA di toccare `Voice.h`**: (b) diverge da (a) di uno scostamento massimo di **0.214** (sostanziale, non rumore numerico) — il bug e' reale e misurabile, non solo un'ipotesi plausibile; (c) e' **bit-per-bit identico** ad (a) (scostamento 0.00000000) — conferma che `reset()` riporta davvero lo shifter allo stesso stato di uno slot mai usato, non un rimedio parziale.
+- **Fix**: `Voice::setMuted(bool)` (`src/voices/Voice.h`) ora chiama `shifter->reset()` alla transizione silenzio→attiva (`!shouldBeMuted && isSilent()`), non ad ogni chiamata (la maggior parte non cambia nulla, resta economica). Un solo punto, copre uniformemente tutti i percorsi di riattivazione: nuova frase su uno slot libero, cella FR-17 ripopolata su una frase ancora viva, `PlayModeInput` che riusa uno slot per una nuova nota MIDI — nessuno di questi richiede modifiche separate, tutti passano da `setMuted(false)`.
+- **`src/voices/Voice.h`**: `setMuted` modificato (vedi sopra). Nessuna nuova dipendenza, `shifter->reset()` gia' esposto dall'interfaccia `PitchShifter`.
+- **`tests/psola_test.cpp`**: nuovo Test 9 (vedi sopra).
+- **Non toccato**: `PsolaShifter` (il motore stesso, `reset()` gia' corretto — il bug era SOLO nel non chiamarlo mai al momento giusto), `PhraseScheduler`, `PlayModeInput`, `Glide`, `PluginProcessor` — nessuno di questi era in causa.
+- **Verificato**: `psola_test` verde incluso il nuovo Test 9 (9/9 gruppi), le altre 3 suite invariate, build VST3 e Standalone riuscite (solo il consueto fallimento di copia post-build per permessi), `pluginval --strictness-level 10` SUCCESS su VST3 (nessuna occorrenza di fail/error/crash nel log completo).
+- **SMENTITO ALL'ASCOLTO**: l'utente ha riascoltato e riportato "non è cambiato niente. Rimane comunque qualche click all'inizio." Il meccanismo diagnosticato (stato PSOLA congelato, mai resettato fra note sullo stesso slot fisico) resta VERO e MISURATO numericamente (Test 9), e il fix resta corretto per QUEL meccanismo specifico — ma evidentemente **non e', o non e' l'unica, causa del click che l'utente sente**. Non toccato oltre in questa sessione su richiesta esplicita dell'utente ("lasciamo in stand by questo punto") — vedi §6 per lo stato e le ipotesi ancora da esplorare quando si riprende.
+
+**Novita' sessione 13 — click residui + wobbling: la causa reale era il block size dell'host, non una nuova dissolvenza mancante:**
+
+A inizio sessione l'utente ha condiviso uno screenshot delle impostazioni audio di Ableton
+usate per il test di sessione 12: **buffer d'uscita 4096 campioni, driver MME/DirectX (non
+ASIO), 44.1kHz, 92.9ms di latenza dichiarata**. Test con Fix/Move tutte su Move (default),
+sorgente una clip MIDI su un synth, non ingresso live. Questo singolo dato ha permesso di
+diagnosticare ENTRAMBI i residui riportati a fine sessione 12 per calcolo diretto, senza
+bisogno di nuove ipotesi: `processBlock` riceve blocchi fino a 4096 campioni, e OGNI
+controllo del progetto (Glide, parametri del PitchShifter) si aggiorna una volta per
+blocco.
+
+- **Causa dei click residui**: `Glide::process(numSamples)` (`src/dsp/Glide.h`) ritorna un
+  SOLO valore per l'intero blocco — `Voice::processAdd` lo applicava come guadagno
+  costante su tutto il buffer. `kDeclickMs = 8ms` a 44.1kHz sono 353 campioni: con
+  `numSamples = 4096`, `remainingSamples (353) - numSamples (4096) <= 0` fa scattare
+  `current = target` all'INTERNO della stessa chiamata — la dissolvenza di sessione 12 era
+  quindi un **no-op completo** in questa configurazione, il salto restava pieno-scala in
+  un solo campione, esattamente il click che doveva eliminare. Stesso identico difetto su
+  `dryGlide`/`wetGlide` (`PluginProcessor.cpp`) e sul glide musicale FR-17 (30ms = 1323
+  campioni, comunque molto meno di 4096).
+- **Causa del wobbling**: `Voice::processAdd` chiama `setPitchShiftSemitones`/
+  `setInputF0Hz`/`setFormantRatio` una volta per blocco, e `PsolaShifter` li applica con
+  assegnazione diretta, senza interpolazione. A 4096 campioni, `continuousInputMidiNote`
+  viene letta una volta ogni 92.9ms (l'ULTIMA delle ~17 stime che Cycfi Q produce nel
+  frattempo, le altre scartate); `currentPeriod()` e' un intero arrotondato che si muove a
+  gradini; `synthPos` e' un accumulatore di fase persistente che cambia passo bruscamente
+  a ogni aggiornamento di `P`/`alpha`. Risultato: il pitch d'uscita e' una scalinata
+  aggiornata a ~10.8 Hz — un ondeggiamento a quella frequenza e' precisamente cio' che si
+  percepisce come "wobbeling". Analisi completa fatta leggendo il codice (nessuna modifica
+  in questa sessione, vedi §6 per il fix previsto).
+- **Nota per l'utente**: MME/DirectX a 4096 campioni e' il caso peggiore possibile su
+  Windows, e amplifica ogni difetto di ~32x rispetto a un ASIO a 128 campioni. Il codice
+  andava comunque corretto (un plugin deve suonare bene a qualunque buffer size), ma resta
+  utile provare con ASIO4ALL/FlexASIO a 128-256 campioni per separare "bug del plugin" da
+  "artefatto di configurazione" nei test futuri.
+- **Fix (solo per i click, non ancora per il wobbling — vedi sotto)**: nuova
+  `Glide::processRamp(numSamples)` (`src/dsp/Glide.h`), che espone la STESSA retta che
+  `process()` gia' calcola internamente (start/target/durata fissati da `setTarget`, mai
+  ricalcolati per blocco) come struct `{ startValue, increment, rampSamples }`, cosi' il
+  chiamante puo' interpolare campione per campione invece di applicare un unico scalare.
+  `increment` e' algebricamente identico a `(target-start)/totalGlideSamples` in qualunque
+  punto della rampa (dimostrato: `current` e' sempre esattamente sulla retta originale),
+  quindi nessuna deriva quando la stessa rampa e' spezzata su piu' blocchi di dimensione
+  diversa — verificato numericamente, non solo argomentato (vedi test sotto).
+  `Glide::process()` resta INVARIATA e continua a essere usata per `offsetGlide` (FR-17):
+  il pitch shift deve restare un valore per blocco, perche' `PitchShifter::setPitchShiftSemitones`
+  accetta un solo rapporto per chiamata a `process()` — la sua granularita' e' il problema
+  del wobbling, non di questo fix.
+- **`src/voices/Voice.cpp`**: `ampGlide.process(numSamples)` sostituito da
+  `ampGlide.processRamp(numSamples)`; il ciclo finale di mixing applica il guadagno
+  campione per campione (rampa fino a `rampSamples`, poi fermo al target per il resto del
+  blocco). Un solo punto, copre tutte e quattro le sedi di dissolvenza gia' esistenti
+  (fine frase, cella svuotata su nota tenuta, uscita Play mode — tutte passano da
+  `processAdd`).
+- **`src/PluginProcessor.cpp`**: stesso schema per `dryGlide`/`wetGlide` nel ciclo sui
+  canali di uscita (copre anche il bypass, che li sostituisce di netto).
+- **`tests/glide_test.cpp`** (nuovo, header-only, stesso schema di `pitch_latch_test.cpp`):
+  6 gruppi di verifiche. **Verificato PRIMA di scrivere il fix (CLAUDE.md regola 12/13)**:
+  il file, scritto per chiamare la non ancora esistente `processRamp`, non compilava
+  (`error C2039: 'processRamp': non e' un membro di 'Glide'`) — confermato che il test
+  fallisce "prima" nel senso piu' forte possibile. Dopo l'aggiunta di `processRamp`: 15/15
+  verifiche verdi, incluso un TEST 1 che riproduce e misura numericamente il bug originale
+  (`process()` applicato come costante su un blocco da 4096 campioni: salto dell'88%+ di
+  fondoscala in un solo campione) per confronto diretto con il comportamento corretto.
+- **Diagnostica**: nuovo `getLastBlockSize()` (atomico, scritto ogni blocco in
+  `PluginProcessor::processBlock`), mostrato nella label "Detected" dell'editor (`blk N`)
+  — permette di confermare all'ascolto/a vista che l'host sta davvero usando il buffer che
+  si sospetta, invece di assumerlo dallo screenshot di una singola sessione.
+- **Non toccato**: `PsolaShifter`, `PitchDetector`, `OnsetDetector`, `PhraseScheduler`,
+  `PlayModeInput`, `HarmonyEngine`, `VoicePool` — nessuno di questi era in causa per il
+  fix dei click (il wobbling, che li coinvolge, resta un problema aperto, vedi §6).
+- **Verificato**: `glide_test` verde (falliva a non compilare prima), le altre 3 suite
+  invariate (`psola_test` bit-per-bit identico), build VST3 e Standalone riuscite (solo il
+  consueto fallimento di copia post-build per permessi), `pluginval --strictness-level 10`
+  **SUCCESS** su VST3 (nessuna occorrenza di fail/error/crash nel log completo) — non
+  eseguito su Standalone, che pluginval non sa scansionare come bundle di plugin (coerente
+  con `.github/workflows/build.yml`, che lo esclude anche in CI).
+- **NON ancora verificato all'ascolto** (CLAUDE.md regola 12): l'utente deve riascoltare in
+  Ableton nella STESSA configurazione (4096 campioni, MME/DirectX) e confermare se i click
+  residui sono spariti. Il wobbling NON e' stato toccato in questa sessione (fix piu'
+  invasivo, da discutere prima — vedi §6): resta atteso finche' non si interviene sulla
+  Fase 4.
+
+**Trovati durante l'indagine ma FUORI SCOPE di questa sessione, non corretti — da
+discutere prima di toccarli:**
+1. **Swap di Stability senza dissolvenza** (`VoicePool::applyPendingStabilityChangeIfSafe`
+   → `Voice::swapShifterNoAlloc`): lo shifter attivo viene sostituito con uno nuovo a
+   buffer azzerati e latenza diversa, a piena ampiezza, senza rampa — un salto vero, ma
+   solo quando l'utente cambia il controllo Stability mentre le voci suonano.
+2. **`setLatencySamples()` chiamata dall'audio thread** (`PluginProcessor.cpp`, dopo lo
+   swap di Stability): non e' documentata come RT-safe in JUCE — potenziale violazione di
+   CLAUDE.md regola 1 / PRD §9.4, mai notato prima perche' nessuno aveva ancora tracciato
+   questo percorso in dettaglio.
+3. **`quantizedPlayedNote` azzerato a 0 ogni blocco** (`PluginProcessor.cpp`) e
+   riassegnato solo se `inputIsStable`: in modalita' **Fix** (non provata dall'utente in
+   questo giro, ha testato solo Move), un blocco con confidenza bassa produce
+   `semitonesToApply ≈ −(nota corrente)`, un salto di decine di semitoni clampato a −36 da
+   `PsolaShifter::setPitchShiftSemitones`. Latente oggi, potenzialmente reale in Fix.
+4. **`applyPendingStabilityChangeIfSafe` ritorna `true` spurio** se il pool ha zero slot
+   (caso non raggiungibile nell'uso normale, solo teorico), causando un
+   `setLatencySamples(0)` non voluto.
 
 **Novita' sessione 12 — note saltate: corsa fra onset e rilevamento di pitch (FR-43/45/46):**
 
@@ -475,6 +683,45 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `src/PluginProcessor.{h,cpp}` | modificato | `signalPresent` da `onsetDetector.isGateOpen()`; `pitchLatch.reset()` legato a `signalPresent`; Play mode forza entrambi i segnali |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 15 (inizio M5 — editor tabella preset 12x8):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/harmony/PresetLibrary.{h,cpp}` | modificato | Nuovo `setCell(presetIndex, degree, voice, Cell)` |
+| `src/ui/CellInputParser.h` | nuovo | Parser di input validato per le celle (0 vs vuoto vs rifiutato) |
+| `src/ui/DegreeNames.h` | nuovo | Nomi di grado leggibili per le intestazioni di colonna |
+| `src/ui/PresetTableEditor.{h,cpp}` | nuovo | Griglia 12x8 editabile, primo componente custom del progetto |
+| `src/PluginEditor.{h,cpp}` | modificato | Nuovo membro `presetTableEditor`; aggancio in `syncPresetSelectionFromParameter()`; finestra ingrandita |
+| `tests/cell_input_parser_test.cpp` | nuovo | 19 verifiche, tutte verdi |
+| `CMakeLists.txt` | modificato | `src/ui/PresetTableEditor.cpp` nei sorgenti principali; nuovo target `cell_input_parser_test` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
+Nessuna modifica a `HarmonyEngine`, `CsvIo`, `PsolaShifter`, `PitchDetector`, `PhraseScheduler`, `PlayModeInput`.
+
+**Sessione 14 (click "a inizio nota" — PSOLA mai resettato fra una nota e la successiva):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/voices/Voice.h` | modificato | `setMuted(bool)`: chiama `shifter->reset()` alla transizione silenzio→attiva |
+| `tests/psola_test.cpp` | modificato | Nuovo Test 9: riattivazione di uno slot dopo inattivita', con/senza `reset()`, confrontato con un riferimento "mai usato" |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
+Nessuna modifica a `PsolaShifter`, `PhraseScheduler`, `PlayModeInput`, `Glide`, `PluginProcessor`.
+
+**Sessione 13 (click residui + diagnosi wobbling — causa: block size dell'host):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/dsp/Glide.h` | modificato | Nuovo `processRamp(numSamples)`: espone la rampa gia' calcolata da `process()` come struct `{startValue, increment, rampSamples}`, per interpolazione campione-per-campione; `process()` invariata |
+| `src/voices/Voice.cpp` | modificato | `ampGlide.process()` → `ampGlide.processRamp()`; guadagno applicato campione per campione nel ciclo di mixing finale |
+| `src/PluginProcessor.{h,cpp}` | modificato | `dryGlide`/`wetGlide` idem; nuovo atomico `lastBlockSize`/`getLastBlockSize()` (diagnostica) |
+| `src/PluginEditor.cpp` | modificato | Label "Detected" mostra anche `blk N` (block size dell'host in questo blocco) |
+| `tests/glide_test.cpp` | nuovo | 6 gruppi di verifiche (15 controlli): rampa in un blocco grande, rampa spezzata su piu' blocchi piccoli (nessuna deriva), re-target a meta' rampa, `process()` invariata per `offsetGlide` |
+| `CMakeLists.txt` | modificato | Nuovo target/test `glide_test` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
+Nessuna modifica a `PsolaShifter`, `PitchDetector`, `OnsetDetector`, `PhraseScheduler`, `PlayModeInput` — il wobbling, diagnosticato ma non corretto in questa sessione, li coinvolgerebbe (vedi §6, Fase 4).
+
 **Sessione 12 (note saltate — corsa onset/pitch, FR-43/45/46):**
 
 | File | Stato | Scopo |
@@ -656,6 +903,96 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
+**Sessione 15 — DA VERIFICARE VISIVAMENTE (priorita' immediata della prossima sessione):**
+l'editor tabella preset 12x8 (M5, §8.2) e' scritto, compila, passa `pluginval`, e i dati
+mostrati corrispondono al calcolo atteso (verificato per calcolo su uno screenshot, vedi
+§2) — ma un tentativo di catturare uno screenshot completo della Standalone per verificare
+visivamente il layout e' risultato inconcludente (probabile limite dello strumento di
+cattura, `PrintWindow` su rendering accelerato JUCE, non un bug — vedi §2 per il
+ragionamento e il precedente diretto di sessione 10). **L'utente deve aprire il plugin
+(Standalone o Ableton) e controllare a occhio**: tutte e 12 le colonne (R, b2, 2, b3, 3, 4,
+b5, 5, b6, 6, b7, 7) e le 8 righe (V1-V8) visibili senza sovrapposizioni o tagli, editare
+una cella a mano (provare sia un numero che una cella vuota) e sentire che l'armonizzazione
+dal vivo la rispetti, verificare che "0" e cella vuota si comportino in modo diverso (0 =
+voce all'unisono, vuota = voce muta), ed esportare/reimportare un preset editato a mano
+(round-trip CSV). Se il layout risultasse davvero tagliato (non solo nello screenshot), il
+problema piu' probabile e' la larghezza minima della finestra (attuale minimo 500px) non
+sufficiente su schermi piccoli — soluzione naturale sarebbe un `Viewport` con scroll,
+esplicitamente rimandato in sessione 15 (vedi piano) perche' non necessario a griglia fissa
+96 celle, da rivalutare se la conferma visiva lo richiede.
+
+**Prossimi slice di M5, non ancora iniziati (per quando questo sara' confermato):**
+drag&drop del riordino preset (FR-06, oggi Up/Down), scaffold delle 3 schermate del PRD
+(Main/Editor/Impostazioni — oggi tutto in un pannello piatto), griglia cromatica dei 12
+pulsanti per la fondamentale (oggi ComboBox), gain/pan per voce (assenti dall'UI), CC
+mostrato accanto al nome nella lista preset (§8.2, mitiga il rischio "CC posizionale
+confonde"), indicatore stato licenza (placeholder, la logica vera e' M6), evidenziazione
+primi 5 preset, scaling 70-200% (FR-59), tema chiaro/scuro (FR-61, `[SHOULD]`).
+
+**Sessione 14 — SMENTITO ALL'ASCOLTO, messo IN STAND-BY su richiesta esplicita dell'utente:**
+il fix di `Voice::setMuted` (reset dello shifter alla riattivazione) e' stato verificato
+numericamente (Test 9: scostamento 0.214 senza reset, 0.0 con reset — la carry-over di
+stato PSOLA fra una nota e la successiva sullo stesso slot fisico E' un bug reale, dimo-
+strato per calcolo) ma **l'utente riporta che il click "a inizio nota" persiste
+IDENTICO all'ascolto** dopo il fix. Conclusione, non ancora verificata: il meccanismo
+diagnosticato in sessione 14 e' un bug reale ma **non e', o non e' l'unica, causa del
+click udibile** — CLAUDE.md regola 13 (una correzione che non risolve il sintomo non
+significa che la diagnosi fosse sbagliata in senso assoluto, ma che va trattata come
+"causa insufficiente", non "causa confermata all'ascolto"). **Su richiesta esplicita
+dell'utente ("lasciamo in stand by questo punto"), NON approfondito oltre in questa
+sessione.** Il fix di sessione 14 RESTA nel codice (non e' dannoso, verificato pulito da
+regressioni: `pluginval`/build/4 suite verdi) ma non va considerato la soluzione.
+
+Quando si riprende il punto, ripartire da zero sulle ipotesi, non dare per assodato che il
+meccanismo di sessione 14 sia irrilevante — potrebbe essere una causa CONCORRENTE che da
+sola non basta a spiegare tutto il sintomo residuo. Candidati non ancora esplorati:
+- Lo swap di Stability senza dissolvenza (`VoicePool::applyPendingStabilityChangeIfSafe` →
+  `Voice::swapShifterNoAlloc`, trovato in sessione 13, mai corretto) — ma l'utente non ha
+  riportato di aver toccato il controllo Stability durante l'ascolto, quindi e' un
+  candidato debole per QUESTO specifico test, a meno che lo swap scatti per altri motivi
+  non ovvi.
+- Qualcosa non ancora identificato nel percorso di ONSET/trigger stesso (non nel motore
+  PSOLA): es. il primo blocco processato da una voce appena smutata potrebbe avere un
+  transiente indipendente dallo stato del PSOLA (l'ampiezza parte da 0 correttamente via
+  `ampGlide`, ma forse non e' l'ampiezza il problema — potrebbe essere il contenuto stesso
+  del primissimo grano sintetizzato, indipendentemente da quanto "pulito" sia lo stato
+  interno).
+- Non ancora chiesto esplicitamente all'utente: il click e' udibile SOLO sulle voci
+  armonizzate o anche sul segnale dry? Se anche sul dry, la causa non puo' essere nel
+  motore PSOLA per definizione (il dry non lo attraversa) — andrebbe cercata altrove
+  (dry/wet glide, gate di rilevamento onset, o a monte nel segnale stesso).
+
+**Sessione 13 — DA CONFERMARE ALL'ASCOLTO, ancora aperto:**
+fix dei click residui (vedi §2 per la diagnosi completa: il block size di Ableton, 4096
+campioni con MME/DirectX, rendeva no-op la dissolvenza di sessione 12). L'utente deve
+riascoltare **nella stessa identica configurazione audio** (stesso screenshot: 4096
+campioni, driver MME/DirectX) e confermare se "qualche click ogni tanto" e' sparito. Se
+persiste, i quattro candidati "fuori scope" elencati in §2 (swap di Stability senza
+dissolvenza, in particolare) sono il punto da cui ripartire — quello e' oggi il salto di
+ampiezza piu' probabile rimasto non coperto.
+
+**Il "wobbeling" NON e' stato toccato in questa sessione**, solo diagnosticato (§2): la
+causa e' la frequenza di controllo dell'intero motore, pari al reciproco del block size
+dell'host (~10.8 Hz a 4096 campioni/44.1kHz) — non un bug isolato in un singolo file, ma
+una conseguenza architetturale di come `processBlock` chiama `Voice::processAdd` una
+volta per blocco. Il fix previsto (Fase 4, non ancora iniziata): un ciclo a sotto-blocchi
+di dimensione fissa (64-128 campioni) dentro `PluginProcessor::processBlock`, sullo stesso
+principio gia' usato con successo dentro `PsolaShifter` (`kInternalChunk`, sessione 9).
+**Da decidere esplicitamente con l'utente prima di iniziare**: e' un intervento
+strutturale su `processBlock`, in particolare come trattare i messaggi MIDI (oggi
+consumati una volta per blocco da `ccRouter`/`playModeInput`) dentro il ciclo a
+sotto-blocchi. Misurare prima di implementare (nuovo test in `psola_test.cpp` con
+parametri aggiornati a intervalli di 4096 campioni, per confermare che la deviazione di
+pitch cresca con l'intervallo di aggiornamento, prima di scrivere il fix vero).
+
+**Sessione 13 — suggerimento per l'utente, non un blocco al lavoro**: la configurazione
+audio del test (buffer 4096, MME/DirectX) e' il caso peggiore possibile su Windows —
+amplifica ogni difetto di controllo-per-blocco di circa 32x rispetto a un ASIO a 128
+campioni. Vale la pena provare anche con ASIO4ALL o FlexASIO a 128-256 campioni nei
+prossimi test, per separare "bug del plugin" (da correggere qui) da "artefatto di una
+configurazione audio non ottimale per il palco" (comunque rilevante: il PRD punta a
+latenza ≤15ms nella modalita' piu' rapida, irraggiungibile con un buffer da 92.9ms).
+
 **CONFERMATO in sessione 11 all'ascolto:** il canto legato (C→D→E) armonizza correttamente ogni nota — isteresi PitchLatch + `signalPresent` separato da `inputIsStable`.
 
 **Sessione 12 — CONFERMATO all'ascolto:** fix della corsa onset/pitch — l'utente ha verificato in Ableton che "Active" non resta piu' a zero sul primo attacco, armonizza sempre tutte le note, nessuna persa per strada. Feedback esplicito ma non dettagliato voce per voce: non e' stato confermato singolarmente ne' il contatore "late-bindings" (se sale davvero) ne' il caso specifico "nota armonizzata sull'accordo della nota precedente" (causa 2 della diagnosi, `pitchDetector` stantio) — nessun segnale che sia ancora un problema, solo non verificato in modo esplicito e separato. Se in futuro dovesse ricomparire un caso limite (es. attacchi molto ravvicinati, staccato molto rapido), ripartire da li'.
@@ -666,11 +1003,20 @@ Se dopo l'ascolto il problema persiste (in tutto o in parte), i due candidati se
 1. Individuazione degli epoch come massimo di `|x|` in una finestra ±P/4 (`detectEpochs` in `PsolaShifter.cpp`): su segnali non impulsivi (synth, fiati, voce) puo' posizionare male gli epoch, incoerenza di fase fra grani percepita come "robotico".
 2. Otto istanze PSOLA indipendenti sullo stesso ingresso: artefatti correlati che si sommano invece di mediarsi tra le voci.
 
-**Sessione 12 (continuazione) — DA CONFERMARE ALL'ASCOLTO (priorita' immediata della prossima sessione):** fix dei click/scricchiolii — dissolvenza di ampiezza (8ms) su ogni transizione di voce (fine frase, silenzio, cella tornata vuota su nota tenuta/FR-17, uscita da Play mode), piu' lo stesso trattamento per dry/wet/bypass. L'utente deve riascoltare in Ableton e confermare se i click sono spariti e se la sensazione di "non stabile al 100%" e' migliorata — se persiste ANCHE dopo questo fix, la causa e' altrove (candidati Formanti/PSOLA sopra, o un quarto meccanismo non ancora trovato). La durata di 8ms e' un punto di partenza ragionevole, non tarata: se l'utente sente ancora un "pop" residuo (non un click secco ma percettibile) potrebbe servire allungarla; se sente un "fruscio"/sfarfallio innaturale sulle transizioni rapide potrebbe servire accorciarla.
+**Sessione 12 (continuazione) — RISULTATO DELL'ASCOLTO IN ABLETON, PRIORITA' IMMEDIATA della prossima sessione:** l'utente ha confermato un miglioramento reale ("va meglio") rispetto a prima del fix di dissolvenza, ma con due RESIDUI riportati testualmente, non ancora indagati (fermati qui su richiesta esplicita dell'utente — "per il momento fermiamoci qua... le prendiamo in considerazione in un secondo momento"):
+1. **"Continuo a sentire qualche click ogni tanto"** — meno frequenti di prima (il fix ha chiaramente eliminato la classe di click piu' grande, quella dei tagli di ampiezza netti), ma non azzerati. Nessuna diagnosi fatta in questa sessione. Prime ipotesi DA VERIFICARE, non da dare per buone (regola 12 — servono numeri/lettura di codice prima di agire):
+   - `kDeclickMs = 8.0f` potrebbe non bastare in tutti i casi, o il vero residuo potrebbe essere un meccanismo NON ancora coperto dal fix di sessione 12 (che copre: fine frase/silenzio, cella svuotata su nota tenuta, uscita Play mode, dry/wet/bypass) — es. lo swap di Stability (`VoicePool::swapShifterNoAlloc`, sessione 6): quando cambia, l'intero `PitchShifter` viene sostituito con uno NUOVO (buffer azzerati, zero storia) senza alcuna dissolvenza — mai toccato ne' in questa ne' in sessioni precedenti, e "sempre applicato in standalone" (nessun gate di transport fermo li'). Se l'utente cambia Stability mentre suona, o se lo swap scatta per un motivo non ovvio, questo resta un salto secco non coperto dal fix attuale.
+   - Il furto d'emergenza (FR-52, `hardFreePhrase`) resta deliberatamente istantaneo per design (vedi sopra) — se il pool di voci si esaurisce spesso nell'uso reale dell'utente (es. `maxSimultaneousVoices` alto con molte note rapide), questo potrebbe essere una fonte residua non coperta.
+2. **"Un po' di wobbeling nelle voci"** — sintomo NUOVO, non riportato prima di questa sessione, non indagato. Prime ipotesi DA VERIFICARE:
+   - `Glide::process()` aggiorna l'offset UNA VOLTA PER BLOCCO, non per campione: fra un blocco e l'altro il target si muove a scalini (quanti scalini dipende dal block size dell'host) invece che in modo continuo — possibile causa di un "ondeggiamento" percepito, mai investigata finora.
+   - In modalita' Fix (FR-22), `semitonesToApply` si ricalcola OGNI blocco da `continuousInputMidiNote` (la stima di pitch grezza, non filtrata) — se quella stima ha jitter blocco-per-blocco (rumore naturale del rilevatore), si traduce DIRETTAMENTE in micro-variazioni di `alpha` applicate al motore PSOLA, potenzialmente udibili come un tremolio di intonazione. Non verificato se le voci del test dell'utente fossero in Fix o Move.
+   - La correzione formantica automatica (FR-39, `beta` in `Voice::processAdd`) non e' glideata direttamente (segue `semitonesToApply` che a sua volta e' derivato dall'offset glideato, ma in Fix mode `semitonesToApply` include anche `continuousInputMidiNote` grezzo, non glideato) — stesso possibile canale di micro-variazione.
+   - Nessuna di queste e' verificata: sono ipotesi di partenza per non ripartire da zero, non diagnosi.
+3. **Timbro robotico/granuloso** (fix di sessione 12 sull'inviluppo dei grani): l'utente non ha commentato specificamente se questo aspetto e' migliorato — probabilmente da riverificare esplicitamente, dato che il feedback di questo giro si e' concentrato su click/wobbling.
 
 **Prossimi passi possibili — da ridiscutere con l'utente:**
-- **Timbro robotico/granuloso** (vedi sopra): prossimo candidato naturale, ha gia' indizi concreti da cui partire.
-- Ascolti ancora non fatti: Formanti (costante `k=0.3` in `Voice.cpp`), controllo MIDI CC con hardware/automazioni reali (FR-36/37), modalita' Play (setup PRD §3.4, verificare FR-27/28).
+- **Click residui + wobbling delle voci** (vedi sopra): priorita' segnalata dall'utente per la prossima sessione, ma nessuna decisione ancora presa su quale investigare per primo — chiedere.
+- Ascolti ancora non fatti: controllo MIDI CC con hardware/automazioni reali (FR-36/37), modalita' Play (setup PRD §3.4, verificare FR-27/28).
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
 - **Preset timbrici (FR-11..13)**: sistema di preset separato da quello armonico, non ancora iniziato — conterrebbe anche Formant Spread/offset per voce una volta esistente (oggi sono solo parametri APVTS piatti, come Stability/Dry/Glide).
 
@@ -688,7 +1034,9 @@ Se dopo l'ascolto il problema persiste (in tutto o in parte), i due candidati se
 - **Isteresi di intonazione + `signalPresent` (sessione 11): CONFERMATI all'ascolto** — canto legato C→D→E armonizza correttamente ogni nota. Soglia ±25 cent e soglie del gate (-24/-30/-36 dB, ereditate dal rilevamento onset di sessione 7) restano comunque punti da tarare ulteriormente se emergono altri casi limite (es. un portamento su un intervallo molto ampio, o un legato molto piano/debole).
 - **Note saltate senza logica precisa (sessione 12)**: causa confermata a lettura di codice (corsa onset/pitch + `pitchDetector` mai resettato), fix scritto, verificato con build/test/pluginval e **CONFERMATO all'ascolto** — nessuna nota persa, "Active" mai a zero al primo attacco. Non verificato singolarmente il caso "accordo della nota precedente" (causa 2) ne' il contatore "late-bindings": nessun segnale che sia un problema, solo non isolato esplicitamente.
 - **Qualità del suono — timbro robotico/granuloso (sessione 12)**: un bug reale trovato e corretto in `PsolaShifter::emitGrain` (deficit di sovrapposizione dei grani quando la correzione formantica di default e' attiva), verificato per calcolo e con un test (Test 8) che falliva prima del fix — **NON ancora confermato all'ascolto**. Restano due candidati non esplorati se il problema persiste in tutto o in parte: posizionamento degli epoch su segnali non impulsivi, correlazione fra le 8 istanze PSOLA.
-- **Click/scricchiolii + armonizzazione "non stabile al 100%" (sessione 12)**: bug architetturale confermato a lettura di codice — nessuna voce aveva mai una dissolvenza di ampiezza quando smetteva di essere processata (fine frase, silenzio, cella tornata vuota su nota tenuta/FR-17, uscita da Play mode); stesso problema su dry/wet/bypass. Fix scritto (dissolvenza fissa 8ms, rilascio morbido delle frasi con `Phrase::releasing`), verificato con build/test/pluginval — **NON ancora confermato all'ascolto**. Durata 8ms non tarata. Limite noto accettato: una frase in rilascio rubata da FR-52 prima di finire la dissolvenza si interrompe di netto (salto pero' molto piu' piccolo, dalla poca ampiezza residua).
+- **Click/scricchiolii + armonizzazione "non stabile al 100%" (sessione 12)**: bug architetturale confermato a lettura di codice — nessuna voce aveva mai una dissolvenza di ampiezza quando smetteva di essere processata (fine frase, silenzio, cella tornata vuota su nota tenuta/FR-17, uscita da Play mode); stesso problema su dry/wet/bypass. Fix scritto (dissolvenza fissa 8ms, rilascio morbido delle frasi con `Phrase::releasing`), verificato con build/test/pluginval. **PARZIALMENTE confermato all'ascolto**: l'utente riporta un miglioramento reale, ma con due residui non ancora indagati — click occasionali ancora presenti, e un "wobbeling" nelle voci (sintomo nuovo).
+- **Click residui (sessione 13)**: causa confermata per calcolo (non solo lettura di codice) — la dissolvenza di sessione 12 era un no-op completo con il block size reale dell'utente (4096 campioni, MME/DirectX in Ableton), perche' `Glide::process()` ritorna un solo valore per l'intero blocco. Fix scritto (`Glide::processRamp`, guadagno campione-per-campione in `Voice::processAdd` e nel mix dry/wet), verificato con un test dedicato (`glide_test`, 15/15 verifiche verdi, falliva a non compilare prima del fix) e con build/pluginval. **NON ancora confermato all'ascolto** — vedi §6. Se persiste, il candidato piu' probabile e' lo swap di Stability senza dissolvenza (`VoicePool::applyPendingStabilityChangeIfSafe` → `Voice::swapShifterNoAlloc`), trovato durante l'indagine ma non ancora corretto (fuori scope di sessione 13, da discutere).
+- **Wobbeling delle voci (sessione 12 → diagnosticato in sessione 13, non ancora corretto)**: causa confermata per calcolo — la frequenza di controllo dell'intero motore (pitch, formanti, f0) e' pari al reciproco del block size dell'host: ~10.8 Hz con 4096 campioni a 44.1kHz. Nessuna interpolazione fra un aggiornamento e il successivo in nessun punto della catena (`continuousInputMidiNote` letta una volta per blocco, `PsolaShifter::currentPeriod()` un intero arrotondato, `synthPos` un accumulatore di fase che cambia passo bruscamente). Fix previsto ma non scritto: ciclo a sotto-blocchi dentro `processBlock` (Fase 4, vedi §6) — intervento strutturale, da discutere con l'utente prima di iniziare, in particolare come trattare i messaggi MIDI nel ciclo a sotto-blocchi.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).

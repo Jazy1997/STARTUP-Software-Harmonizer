@@ -126,6 +126,16 @@ namespace harmony
             presets[(size_t) index].name = std::move (newName);
     }
 
+    void PresetLibrary::setCell (int presetIndex, int degree, int voice, Cell value)
+    {
+        if (presetIndex < 0 || presetIndex >= (int) presets.size())
+            return;
+        if (degree < 0 || degree >= numDegrees || voice < 0 || voice >= numVoices)
+            return;
+
+        presets[(size_t) presetIndex].table[(size_t) degree][(size_t) voice] = value;
+    }
+
     void PresetLibrary::removePreset (int index)
     {
         if (index >= 0 && index < (int) presets.size())

@@ -44,7 +44,7 @@ namespace
 }
 
 HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p)
+    : AudioProcessorEditor (&p), processorRef (p), presetTableEditor (p)
 {
     auto& apvtsRef = processorRef.apvts;
 
@@ -78,6 +78,8 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     addAndMakeVisible (nameLabel);
     presetNameEditor.onReturnKey = [this] { commitRename(); };
     presetNameEditor.onFocusLost = [this] { commitRename(); };
+
+    addAndMakeVisible (presetTableEditor);
 
     setupSlider (numVoicesSlider, numVoicesLabel, *this);
     setupSlider (dryLevelSlider, dryLevelLabel, *this);
@@ -311,8 +313,12 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
-    setResizeLimits (460, 950, 1200, 1230);
-    setSize (500, 990);
+    // Sessione M5: la griglia preset (12x8 + intestazione, ~214px) aggiunge
+    // circa 220px di altezza minima necessaria e richiede un minimo di
+    // larghezza maggiore (12 colonne + colonna di intestazione riga devono
+    // restare leggibili). Limiti/dimensione precedenti erano (460,950)-(1200,1230)/500x990.
+    setResizeLimits (500, 1170, 1200, 1450);
+    setSize (520, 1200);
 
     startTimerHz (15);
 }
@@ -357,6 +363,16 @@ void HarmonizerAudioProcessorEditor::resized()
     layoutRow (rootNoteBox);
     layoutRow (presetBox);
     layoutRow (presetNameEditor);
+
+    {
+        // Sessione M5 (editor tabella preset, §8.2): altezza fissa =
+        // intestazione di grado + 8 righe di voce — deve restare in sync con
+        // headerRowHeight/cellRowHeight in PresetTableEditor::resized().
+        constexpr int presetTableHeight = 22 + 8 * 24;
+        presetTableEditor.setBounds (area.removeFromTop (presetTableHeight));
+        area.removeFromTop (gap);
+    }
+
     layoutRow (numVoicesSlider);
     layoutRow (dryLevelSlider);
     layoutRow (wetLevelSlider);
@@ -536,6 +552,13 @@ void HarmonizerAudioProcessorEditor::syncPresetSelectionFromParameter()
 
     if (! presetNameEditor.hasKeyboardFocus (false))
         presetNameEditor.setText (lib->getPreset (desiredIndex).name, juce::dontSendNotification);
+
+    // Sessione M5: ogni percorso che cambia selezione o contenuto della
+    // libreria (add/duplicate/delete/move/import CSV/load global) chiama
+    // gia' selectPresetIndex() a valle, che a sua volta forza il passaggio
+    // qui sotto (lastSyncedSelectedIndex = -1) — un solo punto di aggancio
+    // basta, non serve ripeterlo in ogni onClick.
+    presetTableEditor.showPreset (desiredIndex);
 
     lastSyncedSelectedIndex = desiredIndex;
 }

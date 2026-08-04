@@ -57,6 +57,7 @@ target_sources(Harmonizer
         src/midi/CcRouter.cpp
         src/midi/OverrideManager.cpp
         src/midi/PlayModeInput.cpp
+        src/ui/PresetTableEditor.cpp
 )
 
 target_compile_definitions(Harmonizer
@@ -125,8 +126,18 @@ add_executable(glide_test
 target_include_directories(glide_test PRIVATE src)
 target_compile_features(glide_test PRIVATE cxx_std_20)
 
+# Verifica numerica del parser di input dell'editor tabella preset
+# (sessione M5, §8.2 — CLAUDE.md regola 3, 0 vs cella vuota): header-only,
+# nessuna dipendenza JUCE ne' da harmony/.
+add_executable(cell_input_parser_test
+    tests/cell_input_parser_test.cpp
+)
+target_include_directories(cell_input_parser_test PRIVATE src)
+target_compile_features(cell_input_parser_test PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
 add_test(NAME pitch_latch COMMAND pitch_latch_test)
 add_test(NAME glide COMMAND glide_test)
+add_test(NAME cell_input_parser COMMAND cell_input_parser_test)

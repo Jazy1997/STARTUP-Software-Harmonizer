@@ -31,6 +31,12 @@ namespace harmony
         void renamePreset (int index, juce::String newName);
         void removePreset (int index);
 
+        // Sessione M5 (editor tabella preset, §8.2): unico mutatore diretto
+        // di una cella. degree/voice sono gli stessi indici di Table
+        // (degree 0-11, voice 0-7) — nessuna traduzione qui, chi chiama
+        // (PresetTableEditor) usa gia' la stessa indicizzazione.
+        void setCell (int presetIndex, int degree, int voice, Cell value);
+
         // Sposta il preset in fromIndex cosi' che finisca in toIndex (FR-06/07).
         void movePreset (int fromIndex, int toIndex);
 
