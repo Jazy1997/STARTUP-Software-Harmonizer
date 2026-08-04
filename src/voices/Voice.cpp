@@ -9,6 +9,10 @@ void Voice::prepare (double sampleRate, int maxBlockSize, int stabilityLevel)
 
     offsetGlide.prepare (sampleRate);
     offsetGlide.reset (0.0f);
+
+    ampGlide.prepare (sampleRate);
+    ampGlide.setGlideTimeMs (kDeclickMs);
+    ampGlide.reset (0.0f); // silenzioso all'avvio, coerente con muted=true di default
 }
 
 void Voice::reset()
@@ -30,9 +34,16 @@ void Voice::swapShifterNoAlloc (std::unique_ptr<PitchShifter>& shifterInOut) noe
 void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
                          int quantizedPlayedNote, float continuousInputMidiNote)
 {
-    if (muted || shifter == nullptr)
+    // Sessione 12: NON si esce piu' subito perche' muted e' vero — si esce
+    // solo quando la dissolvenza ha davvero finito (isSilent()). Cosi' il
+    // chiamante puo' smettere di rifornire audio a una voce (fine frase,
+    // silenzio, cella tornata vuota su una frase ancora viva) senza tagliare
+    // di netto: le ultime chiamate a processAdd, con muted=true, producono
+    // ancora suono ma in dissolvenza verso zero.
+    if (shifter == nullptr || isSilent())
         return;
 
+    const float amp = ampGlide.process (numSamples);
     const float smoothedOffset = offsetGlide.process (numSamples);
 
     float semitonesToApply;
@@ -79,5 +90,5 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
     shifter->process (monoIn, scratch.data(), numSamples);
 
     for (int i = 0; i < numSamples; ++i)
-        mixOutput[i] += scratch[(size_t) i];
+        mixOutput[i] += scratch[(size_t) i] * amp;
 }

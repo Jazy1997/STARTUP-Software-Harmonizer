@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "dsp/Glide.h"
 #include "dsp/PitchDetector.h"
 #include "dsp/OnsetDetector.h"
 #include "harmony/HarmonyEngine.h"
@@ -120,6 +121,16 @@ private:
     // dalla nota precedente). Solo audio thread.
     bool signalPresentLastBlock = false;
     PhraseScheduler phraseScheduler;
+
+    // Sessione 12 (fix scricchiolii/click): dryLevel/wetLevel (e bypass, che
+    // li sostituisce di netto) venivano letti come valore grezzo del
+    // parametro e applicati per l'intero blocco — un cambio di automazione,
+    // di CC bypass, o anche solo il fronte del bottone Bypass produceva un
+    // salto di guadagno istantaneo al confine di blocco (un click classico,
+    // indipendente da qualunque cosa succeda nelle voci). Stessa breve
+    // rampa fissa anti-click delle voci (Voice::kDeclickMs), non il
+    // glideTimeMs musicale dell'utente.
+    Glide dryGlide, wetGlide;
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
 
     // FR-30/36/37/38: CcRouter interpreta i CC in ingresso, OverrideManager

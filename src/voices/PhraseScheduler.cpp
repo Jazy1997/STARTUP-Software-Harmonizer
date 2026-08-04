@@ -71,23 +71,33 @@ bool PhraseScheduler::isSlotInUse (int slotIndex) const
     return false;
 }
 
-void PhraseScheduler::freePhrase (Phrase& phrase)
+void PhraseScheduler::hardFreePhrase (Phrase& phrase)
 {
-    // Non serve azzerare gli slot fisici qui: se una nuova frase li
-    // rivendica subito dopo, il nuovo offset target fa scattare il Glide
-    // gia' presente in Voice, che fornisce la transizione morbida richiesta
-    // da FR-52 (>= 20 ms, di default 30 ms) senza bisogno di un dissolvenza
-    // separata.
+    // SOLO furto d'emergenza (FR-52, vedi allocateFreeSlot): serve lo slot
+    // fisico SUBITO, non c'e' tempo per una dissolvenza. Non e' un problema
+    // per il click perche' il nuovo target arriva via Glide dell'offset
+    // (gia' presente in Voice) sullo stesso shifter che continua a girare:
+    // e' uno scivolamento di intonazione, non un salto di ampiezza.
     phrase.active = false;
     phrase.isLive = false;
+    phrase.releasing = false;
     phrase.slotIndices.fill (-1);
+}
+
+void PhraseScheduler::beginRelease (Phrase& phrase)
+{
+    // Caso normale (fine frase per silenzio, o superata da un nuovo onset):
+    // vedi Phrase.h. La frase resta active=true (isSlotInUse() continua a
+    // proteggerla) finche' process() non la vede completamente sfumata.
+    phrase.isLive = false;
+    phrase.releasing = true;
 }
 
 void PhraseScheduler::freeAllPhrases()
 {
     for (auto& p : phrases)
         if (p.active)
-            freePhrase (p);
+            beginRelease (p);
 }
 
 int PhraseScheduler::allocateFreeSlot()
@@ -98,17 +108,24 @@ int PhraseScheduler::allocateFreeSlot()
         if (! isSlotInUse (i))
             return i;
 
-    // Nessuno slot libero: ruba la frase piu' vecchia PER INTERO (FR-52),
-    // non singole voci.
-    Phrase* oldest = nullptr;
+    // Nessuno slot libero: preferisci rubare una frase gia' in rilascio
+    // (sta gia' sfumando verso il silenzio — interromperla e' meno
+    // disruptivo che interrompere una frase ancora piena); altrimenti ruba
+    // la frase attiva piu' vecchia PER INTERO (FR-52), non singole voci.
+    Phrase* victim = nullptr;
     for (auto& p : phrases)
-        if (p.active && (oldest == nullptr || p.age < oldest->age))
-            oldest = &p;
+        if (p.active && p.releasing && (victim == nullptr || p.age < victim->age))
+            victim = &p;
 
-    if (oldest == nullptr)
+    if (victim == nullptr)
+        for (auto& p : phrases)
+            if (p.active && (victim == nullptr || p.age < victim->age))
+                victim = &p;
+
+    if (victim == nullptr)
         return -1;
 
-    freePhrase (*oldest);
+    hardFreePhrase (*victim);
 
     for (int i = 0; i < numSlots; ++i)
         if (! isSlotInUse (i))
@@ -194,7 +211,7 @@ bool PhraseScheduler::process (const float* monoIn,
             if (keepTails)
                 p.isLive = false;
             else
-                freePhrase (p);
+                beginRelease (p);
         }
 
         triggerNewPhrase (currentOffsetsForTrigger, numRequestedVoices);
@@ -254,6 +271,37 @@ bool PhraseScheduler::process (const float* monoIn,
         if (! p.active)
             continue;
 
+        // Sessione 12 (fix click): una frase in rilascio sfuma TUTTE le sue
+        // voci a prescindere dal contenuto della cella — sta uscendo di
+        // scena, non deve piu' interpretare l'armonia, solo finire di
+        // sfumare quello che stava gia' suonando. Appena tutte le sue voci
+        // sono silenziose (Voice::isSilent()) la frase si libera per davvero.
+        if (p.releasing)
+        {
+            bool stillFading = false;
+
+            for (int v = 0; v < harmony::numVoices; ++v)
+            {
+                const int slotIndex = p.slotIndices[(size_t) v];
+                if (slotIndex < 0)
+                    continue;
+
+                auto& voice = voicePool.getSlot (slotIndex);
+                voice.setMuted (true);
+
+                if (! voice.isSilent())
+                {
+                    voice.processAdd (monoIn, mixOutput, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+                    stillFading = true;
+                }
+            }
+
+            if (! stillFading)
+                hardFreePhrase (p);
+
+            continue;
+        }
+
         for (int v = 0; v < harmony::numVoices; ++v)
         {
             const int slotIndex = p.slotIndices[(size_t) v];
@@ -265,7 +313,13 @@ bool PhraseScheduler::process (const float* monoIn,
 
             if (! cell.has_value())
             {
+                // FR-17: la cella e' diventata vuota su una frase ancora
+                // viva (es. cambio accordo su nota tenuta). Stessa logica di
+                // rilascio delle voci sopra, ma per una singola colonna: la
+                // frase resta viva, questa voce sfuma senza tagliare di netto.
                 voice.setMuted (true);
+                if (! voice.isSilent())
+                    voice.processAdd (monoIn, mixOutput, numSamples, quantizedPlayedNote, continuousInputMidiNote);
                 continue;
             }
 

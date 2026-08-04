@@ -17,8 +17,23 @@ public:
     void prepare (double sampleRate, int maxBlockSize, int stabilityLevel);
     void reset();
 
-    void setMuted (bool shouldBeMuted) noexcept { muted = shouldBeMuted; }
+    // Sessione 12 (fix scricchiolii/click segnalati dall'utente): muted non
+    // e' piu' un interruttore che azzera l'uscita di netto — avvia/ferma una
+    // breve dissolvenza di ampiezza (ampGlide, durata fissa kDeclickMs, NON
+    // legata al glideTimeMs musicale di FR-17: qui serve un tempo costante
+    // e breve anti-click, non un tempo di transizione armonica scelto
+    // dall'utente). isSilent() dice al chiamante quando puo' smettere di
+    // chiamare processAdd senza sentire un salto.
+    void setMuted (bool shouldBeMuted) noexcept
+    {
+        muted = shouldBeMuted;
+        ampGlide.setTarget (shouldBeMuted ? 0.0f : 1.0f);
+    }
     bool isMuted() const noexcept { return muted; }
+    // Vero solo quando muted E la dissolvenza ha davvero raggiunto zero: da
+    // qui in poi e' sicuro smettere di chiamare processAdd (nessuna dissol-
+    // venza ancora in corso, nessun salto udibile se il chiamante si ferma).
+    bool isSilent() const noexcept { return muted && ampGlide.isSettled(); }
 
     void setMode (ShiftMode newMode) noexcept { mode = newMode; }
     void setGlideTimeMs (float ms) noexcept { offsetGlide.setGlideTimeMs (ms); }
@@ -55,6 +70,8 @@ private:
     std::unique_ptr<PitchShifter> shifter;
     std::vector<float> scratch;
     Glide offsetGlide;
+    Glide ampGlide; // sessione 12: dissolvenza di ampiezza anti-click, vedi setMuted/isSilent
+    static constexpr float kDeclickMs = 8.0f;
     ShiftMode mode = ShiftMode::move;
     bool muted = true;
     float formantSpread = 1.0f;         // FR-39 "attiva di default": formula a piena forza

@@ -93,7 +93,14 @@ public:
 private:
     void triggerNewPhrase (const std::array<harmony::Cell, harmony::numVoices>& offsets, int numRequestedVoices);
     void freeAllPhrases();
-    static void freePhrase (Phrase& phrase);
+    // Sessione 12: due modi di "liberare" una frase, non piu' uno solo.
+    // beginRelease() e' il caso normale (fine frase/silenzio/superata da un
+    // nuovo onset): avvia una dissolvenza morbida, vedi Phrase.h.
+    // hardFreePhrase() e' SOLO per il furto d'emergenza (FR-52): serve lo
+    // slot fisico immediatamente, nessun tempo per sfumare — la continuita'
+    // la da' comunque il Glide dell'offset sul nuovo target.
+    static void beginRelease (Phrase& phrase);
+    static void hardFreePhrase (Phrase& phrase);
     bool isSlotInUse (int slotIndex) const;
     int allocateFreeSlot();
 

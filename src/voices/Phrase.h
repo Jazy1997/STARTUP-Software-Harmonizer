@@ -34,6 +34,18 @@
 //     collassano nello stesso caso limite (nessuna voce mai "in coda"),
 //     quindi Keep Tails ON oggi equivale semplicemente al vecchio
 //     comportamento, non ancora alla ricchezza descritta sopra.
+// Sessione 12 (fix scricchiolii/click): prima di questa sessione, "liberare"
+// una frase (freePhrase, poi rinominata hardFreePhrase) tagliava di netto
+// l'ampiezza di qualunque voce ancora udibile — verificato causa concreta di
+// click, sia a fine frase (silenzio) sia quando una frase viene superata da
+// un nuovo onset con MENO voci della precedente (le voci non riprese
+// smettevano di essere processate, non solo mutate). `releasing` introduce
+// un rilascio morbido: la frase resta `active` (protetta da riuso/doppio
+// processing) ma tutte le sue voci sfumano a zero (Voice::isSilent(), vedi
+// PhraseScheduler::process) prima che la frase venga davvero disattivata.
+// L'unico caso che NON passa da qui e' il furto d'emergenza (FR-52, pool
+// esaurito): la' serve uno slot fisico SUBITO, e la continuita' e' gia'
+// data dal Glide dell'offset sul nuovo target (vedi PhraseScheduler.cpp).
 struct Phrase
 {
     std::array<int, harmony::numVoices> slotIndices { -1, -1, -1, -1, -1, -1, -1, -1 };
@@ -41,4 +53,5 @@ struct Phrase
     uint64_t age = 0;
     bool active = false;
     bool isLive = false;
+    bool releasing = false;
 };

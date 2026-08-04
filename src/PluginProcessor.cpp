@@ -143,6 +143,18 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     pitchDetector.prepare (sampleRate);
     onsetDetector.prepare (sampleRate);
 
+    // Sessione 12: rampa fissa anti-click, indipendente dal glideTimeMs
+    // musicale — vedi il commento sul membro in PluginProcessor.h. Il
+    // valore iniziale (senza rampa) e' quello attuale dei parametri, cosi'
+    // il primo blocco non parte da un salto invece che da una rampa.
+    constexpr float kMixDeclickMs = 8.0f;
+    dryGlide.prepare (sampleRate);
+    dryGlide.setGlideTimeMs (kMixDeclickMs);
+    dryGlide.reset (*apvts.getRawParameterValue (ParamIDs::dryLevel));
+    wetGlide.prepare (sampleRate);
+    wetGlide.setGlideTimeMs (kMixDeclickMs);
+    wetGlide.reset (*apvts.getRawParameterValue (ParamIDs::wetLevel));
+
     if (auto* stabilityParam = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::stabilityLevel)))
         lastKnownStabilityLevel = stabilityParam->getIndex();
     phraseScheduler.prepare (hardVoiceSlotCapacity, sampleRate, scratchSize, lastKnownStabilityLevel);
@@ -419,11 +431,22 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const float effectiveDryLevel = effective.bypassed ? 1.0f : dryLevel;
     const float effectiveWetLevel = effective.bypassed ? 0.0f : wetLevel;
 
+    // Sessione 12 (fix click): il target del parametro puo' saltare da un
+    // blocco all'altro (automazione, CC bypass, il bottone Bypass stesso) —
+    // dryGlide/wetGlide smorzano quel salto su una rampa breve invece di
+    // applicarlo di netto a tutto il buffer. Va chiamato UNA sola volta per
+    // blocco (Glide::process muta stato interno): il valore va calcolato
+    // prima del ciclo sui canali, non dentro.
+    dryGlide.setTarget (effectiveDryLevel);
+    wetGlide.setTarget (effectiveWetLevel);
+    const float smoothedDry = dryGlide.process (numSamples);
+    const float smoothedWet = wetGlide.process (numSamples);
+
     for (int ch = 0; ch < numOutputChannels; ++ch)
     {
         auto* out = buffer.getWritePointer (ch);
         for (int i = 0; i < numSamples; ++i)
-            out[i] = effectiveDryLevel * mono[i] + effectiveWetLevel * voicesMix[i];
+            out[i] = smoothedDry * mono[i] + smoothedWet * voicesMix[i];
     }
 }
 

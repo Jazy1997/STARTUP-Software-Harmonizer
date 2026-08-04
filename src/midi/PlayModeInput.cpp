@@ -73,14 +73,35 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
     }
 
     if (! modeActive)
-        return appliedStabilityChange; // FR-24: nessun contributo audio a modalita' spenta
+    {
+        // FR-24: nessun contributo NUOVO, ma le voci eventualmente ancora
+        // udibili (transizione Harmonizer<->Play, FR-28) devono sfumare
+        // invece di tagliare di netto (sessione 12, fix click) — stesso
+        // principio di PhraseScheduler::process. mixOutput e' gia' azzerato
+        // sopra: qui si somma solo la coda in dissolvenza, se c'e'.
+        for (int i = 0; i < maxNotes; ++i)
+        {
+            auto& voice = voicePool.getSlot (i);
+            voice.setMuted (true);
+            if (! voice.isSilent())
+                voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
+        }
+        return appliedStabilityChange;
+    }
 
     for (int i = 0; i < maxNotes; ++i)
     {
-        if (slotNote[(size_t) i] < 0)
-            continue;
-
         auto& voice = voicePool.getSlot (i);
+
+        if (slotNote[(size_t) i] < 0)
+        {
+            // Nessuna nota premuta su questo slot: se sta ancora sfumando
+            // da un rilascio precedente, lascialo finire (sessione 12).
+            voice.setMuted (true);
+            if (! voice.isSilent())
+                voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
+            continue;
+        }
 
         // FR-20 (si applica anche qui, non solo in Harmonizer): senza un
         // ingresso audio stabile il pitch shifter non ha nulla di coerente
@@ -92,6 +113,8 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
         if (! inputIsStable)
         {
             voice.setMuted (true);
+            if (! voice.isSilent())
+                voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
             continue;
         }
 

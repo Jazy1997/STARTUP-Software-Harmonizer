@@ -62,6 +62,10 @@ public:
     }
 
     float getCurrentValue() const noexcept { return current; }
+    // Sessione 12: usato per sapere se una rampa (es. di ampiezza) ha
+    // raggiunto stabilmente il target, senza dover confrontare current/target
+    // dall'esterno (confronto in virgola mobile fragile su un valore calcolato).
+    bool isSettled() const noexcept { return remainingSamples <= 0; }
 
 private:
     static int juce_max1 (int v) noexcept { return v > 1 ? v : 1; }
