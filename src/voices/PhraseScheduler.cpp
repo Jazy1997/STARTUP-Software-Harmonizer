@@ -165,6 +165,7 @@ bool PhraseScheduler::process (const float* monoIn,
                                 bool applyStabilityChangeNow)
 {
     const bool appliedStabilityChange = voicePool.applyPendingStabilityChangeIfSafe (applyStabilityChangeNow);
+    int lateBindingsThisBlock = 0;
 
     if (! signalPresent)
     {
@@ -202,9 +203,41 @@ bool PhraseScheduler::process (const float* monoIn,
     {
         // FR-17: la frase piu' recente, se ancora "live", segue dal vivo il
         // preset/fondamentale corrente finche' la stessa nota continua a suonare.
+        //
+        // Sessione 12 (FR-43/45/46 — note saltate): l'onset spesso vince la
+        // corsa contro il rilevatore di pitch (BACF, serve piu' periodi per
+        // agganciare con confidenza). Una frase puo' quindi nascere in
+        // triggerNewPhrase() con currentOffsetsForTrigger tutto vuoto (nessun
+        // pitch ancora noto) -> zero slot allocati, muta per sempre, perche'
+        // prima d'ora questo ramo aggiornava solo frozenOffsets senza mai
+        // colmare gli slot mancanti. Qui si completa l'allocazione appena il
+        // pitch diventa affidabile: stesso identico allocateFreeSlot() del
+        // trigger, applicato pero' solo alle voci che hanno un valore ma non
+        // hanno ancora uno slot fisico. Nessun timeout, nessuno stato nuovo:
+        // se il pitch non arriva mai la frase resta a zero slot e si libera
+        // normalmente alla chiusura del gate (ramo sopra).
         for (auto& p : phrases)
-            if (p.active && p.isLive)
-                p.frozenOffsets = currentOffsetsForTrigger;
+        {
+            if (! p.active || ! p.isLive)
+                continue;
+
+            p.frozenOffsets = currentOffsetsForTrigger;
+
+            for (int v = 0; v < harmony::numVoices; ++v)
+            {
+                if (v >= numRequestedVoices || ! p.frozenOffsets[(size_t) v].has_value())
+                    continue;
+                if (p.slotIndices[(size_t) v] >= 0)
+                    continue;
+
+                const int slot = allocateFreeSlot();
+                if (slot < 0)
+                    continue; // pool esaurito anche dopo il furto: si riprova al blocco successivo
+
+                p.slotIndices[(size_t) v] = slot;
+                ++lateBindingsThisBlock;
+            }
+        }
     }
     // else (signalPresent ma ne' onset ne' pitch confidente questo blocco):
     // non si tocca nulla. currentOffsetsForTrigger non e' affidabile in
@@ -244,5 +277,8 @@ bool PhraseScheduler::process (const float* monoIn,
     }
 
     numActiveSlotsLastBlock.store (activeCount, std::memory_order_relaxed);
+    // Diagnostica sessione 12 (FR-43/45/46): se questo sale suonando, il fix
+    // dell'allocazione differita sta intervenendo davvero, non solo compilando.
+    numLateBindingsTotal.fetch_add (lateBindingsThisBlock, std::memory_order_relaxed);
     return appliedStabilityChange;
 }

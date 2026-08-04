@@ -345,6 +345,22 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // per "il performer si e' davvero fermato".
     const bool signalPresent = onsetDetector.isGateOpen();
 
+    // FR-43/45/46 (sessione 12 — note saltate, "senza una logica troppo
+    // precisa"): al fronte di DISCESA di signalPresent (vero silenzio appena
+    // iniziato), si azzera anche pitchDetector — non solo pitchLatch come
+    // gia' avveniva. Senza questo, cycfi::q::pitch_detector conserva
+    // l'ultima frequenza/confidenza stimate finche' non ne calcola una
+    // nuova da solo: un onset successivo puo' quindi trovare hasStableSignal()
+    // gia' vero ma su una nota STANTIA (quella precedente), e la frase nasce
+    // congelata sull'accordo sbagliato invece che in attesa del pitch vero.
+    // Verificato RT-safe: PitchDetector::reset() assegna due float e chiama
+    // cycfi::q::pitch_detector::reset(), che a sua volta e' solo
+    // `_frequency = 0.0f` (pitch_detector.hpp) — nessuna allocazione/lock.
+    const bool signalJustStopped = signalPresentLastBlock && ! signalPresent;
+    if (signalJustStopped)
+        pitchDetector.reset();
+    signalPresentLastBlock = signalPresent;
+
     // Diagnostica per l'UI (PRD §8.1): snapshot dell'esito di PitchDetector
     // per questo blocco, indipendente dalla modalita' — utile proprio per
     // capire casi come "con questo synth non riconosce" (punti 2/5 del test
@@ -352,6 +368,7 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     lastDetectedMidiNote.store (continuousInputMidiNote, std::memory_order_relaxed);
     lastDetectedConfidence.store (pitchDetector.getConfidence(), std::memory_order_relaxed);
     lastInputStable.store (inputIsStable, std::memory_order_relaxed);
+    lastGateOpen.store (signalPresent, std::memory_order_relaxed);
 
     if (! playModeEnabled && inputIsStable)
     {

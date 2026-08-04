@@ -45,6 +45,12 @@ public:
     // in process() — un contatore informativo, non usato per decisioni di
     // correttezza, quindi un semplice atomic relaxed basta.
     int getNumActiveVoices() const noexcept { return numActiveSlotsLastBlock.load (std::memory_order_relaxed); }
+    // Sessione 12 (FR-43/45/46): quante volte process() ha dovuto completare
+    // l'allocazione di uno slot su una frase gia' nata (perche' il pitch non
+    // era ancora confidente al momento dell'onset) — contatore cumulativo,
+    // informativo, letto dall'UI per confermare all'ascolto che il fix delle
+    // note saltate sta intervenendo davvero.
+    int getNumLateBindings() const noexcept { return numLateBindingsTotal.load (std::memory_order_relaxed); }
 
     void requestStabilityChange (int newStabilityLevel) { voicePool.requestStabilityChange (newStabilityLevel); }
     void collectGarbage() { voicePool.collectGarbage(); }
@@ -62,7 +68,11 @@ public:
     //     suonando qualcosa". Governa SOLO se liberare tutte le frasi.
     //   - inputIsStable: il pitch rilevato QUESTO blocco e' abbastanza
     //     confidente da fidarsene (tipicamente PitchDetector::hasStableSignal()).
-    //     Governa SOLO se aggiornare dal vivo gli offset della frase corrente.
+    //     Governa se aggiornare dal vivo gli offset della frase corrente E
+    //     (sessione 12, FR-43/45/46) se completare l'allocazione degli slot
+    //     rimasti vuoti al trigger perche' il pitch non era ancora noto in
+    //     quel blocco — vedi PhraseScheduler.cpp (process()) per il dettaglio
+    //     della corsa onset/pitch.
     // Usare la confidenza del pitch anche per la prima decisione (come si
     // faceva prima di sessione 11) libera erroneamente tutte le frasi durante
     // un calo di confidenza transitorio — es. lo scivolamento di intonazione
@@ -93,4 +103,5 @@ private:
     bool keepTails = false;      // vedi setKeepTails()
     uint64_t ageCounter = 0;
     std::atomic<int> numActiveSlotsLastBlock { 0 };
+    std::atomic<int> numLateBindingsTotal { 0 };
 };

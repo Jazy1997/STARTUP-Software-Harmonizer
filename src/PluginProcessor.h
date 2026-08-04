@@ -87,6 +87,16 @@ public:
     float getLastDetectedMidiNote() const noexcept { return lastDetectedMidiNote.load (std::memory_order_relaxed); }
     float getLastDetectedConfidence() const noexcept { return lastDetectedConfidence.load (std::memory_order_relaxed); }
     bool  getLastInputStable() const noexcept { return lastInputStable.load (std::memory_order_relaxed); }
+    // Sessione 12 (FR-43/45/46): stato del gate di OnsetDetector, distinto
+    // da getLastInputStable() (che riflette la confidenza del pitch, non la
+    // presenza del segnale) — vedi il commento su signalPresent in
+    // processBlock per il perche' sono due domande diverse.
+    bool  getLastGateOpen() const noexcept { return lastGateOpen.load (std::memory_order_relaxed); }
+    // Contatore cumulativo: quante volte PhraseScheduler ha dovuto completare
+    // l'allocazione di uno slot dopo il trigger, perche' il pitch non era
+    // ancora confidente al momento dell'onset. Serve a confermare all'ascolto
+    // che il fix delle note saltate interviene davvero (CLAUDE.md regola 12).
+    int   getNumLateBindings() const noexcept { return phraseScheduler.getNumLateBindings(); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -104,6 +114,11 @@ private:
     // FR-16/17 (sessione 11): isteresi sulla nota usata per il lookup nella
     // tabella armonica — vedi PitchLatch.h per il perche'. Solo audio thread.
     harmony::PitchLatch pitchLatch;
+    // FR-43/45/46 (sessione 12): fronte di discesa di signalPresent — vedi
+    // processBlock per il perche' (reset di pitchDetector al vero silenzio,
+    // cosi' un onset successivo non trova una stima confidente ma stantia
+    // dalla nota precedente). Solo audio thread.
+    bool signalPresentLastBlock = false;
     PhraseScheduler phraseScheduler;
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
 
@@ -120,6 +135,7 @@ private:
     std::atomic<float> lastDetectedMidiNote { -1.0f };
     std::atomic<float> lastDetectedConfidence { 0.0f };
     std::atomic<bool> lastInputStable { false };
+    std::atomic<bool> lastGateOpen { false }; // sessione 12, vedi getter pubblico
 
     // FR-24..28: modalita' Play, VoicePool dedicato separato (vedi
     // PlayModeInput.h per il perche' non condivide phraseScheduler).

@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-02 (sessione 11)
+> Ultimo aggiornamento: 2026-08-02 (sessione 12)
 
 ---
 
@@ -31,7 +31,27 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 ## 2. Stato attuale
 
-**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix) — vedi sotto.**
+**Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada.**
+
+**Novita' sessione 12 — note saltate: corsa fra onset e rilevamento di pitch (FR-43/45/46):**
+
+A fine sessione 11 l'utente aveva segnalato, senza altro dettaglio, che il plugin "continua a saltare alcune note ma senza una logica troppo precisa" (oltre a un problema di timbro separato, vedi sotto). Diagnosticato leggendo il codice, non ipotizzato — la stessa corsa onset/pitch gia' sospettata (mai confermata) per i punti 2/5 del test di sessione 10.
+
+- **Causa 1 (principale)**: `PluginProcessor.cpp` calcola `offsets` (la tabella di offset per voce) solo dentro `if (! playModeEnabled && inputIsStable)`; se il pitch non e' ancora confidente in quel blocco, l'array resta quello di default — 8 celle vuote. `PhraseScheduler::triggerNewPhrase` (chiamato da `PhraseScheduler::process` sul ramo onset) salta l'allocazione dello slot per ogni cella vuota: con offsets tutti vuoti la frase nasce **attiva ma con zero slot fisici**, muta per sempre — il ramo di live-update (FR-17) aggiornava solo `frozenOffsets`, mai gli slot mancanti. Chi vince la corsa: `OnsetDetector` apre il gate in ~10ms su soglia di livello, mentre `cycfi::q::pitch_detector` (BACF, minimo 60Hz) ha bisogno di piu' periodi per dare confidenza — al primo attacco dopo un silenzio l'onset arriva quasi sempre prima.
+- **Causa 2 (concorrente)**: `pitchDetector.reset()` non veniva mai chiamato dopo `prepareToPlay`. Nota e confidenza dell'ultima stima sopravvivevano al silenzio finche' il rilevatore non ne calcolava una nuova da solo: un onset poteva quindi trovare `hasStableSignal()` gia' vero ma su una nota STANTIA (quella precedente) — la frase nasceva armonizzata sull'accordo sbagliato invece che in attesa del pitch vero. Spiega il "senza una logica precisa": a seconda di chi vince la corsa, la stessa gestualita' produceva una nota muta, una nota sull'accordo sbagliato, o una nota corretta.
+- **`src/voices/PhraseScheduler.{h,cpp}`**: nel ramo di live-update (`inputIsStable`), oltre ad aggiornare `frozenOffsets` come prima, ora si completa l'allocazione degli slot rimasti vuoti al trigger (`slotIndices[v] < 0` ma la cella ha un valore), riusando `allocateFreeSlot()` cosi' com'e'. Nessun timeout, nessuno stato nuovo: se il pitch non arriva mai la frase resta a zero slot e si libera normalmente alla chiusura del gate. Il caso gia' funzionante (onset con pitch gia' confidente) non cambia: il ramo `onsetDetectedThisBlock` ha ancora precedenza nell'`else if`. Nuovo contatore cumulativo `numLateBindingsTotal` (atomico, `getNumLateBindings()`) per rendere l'intervento osservabile.
+- **`src/PluginProcessor.{h,cpp}`**: nuovo `signalPresentLastBlock` (solo audio thread); sul fronte di DISCESA di `signalPresent` si chiama anche `pitchDetector.reset()`, accanto al gia' presente `pitchLatch.reset()`. Verificato RT-safe leggendo `PitchDetector::reset()` (due assegnazioni float + `cycfi::q::pitch_detector::reset()`, che e' solo `_frequency = 0.0f` — nessuna allocazione/lock). Ordine importante: questo fix da solo, senza il punto precedente, avrebbe reso `inputIsStable` falso ad ogni attacco (peggiorativo) — i due fix vanno insieme.
+- **Diagnostica**: nuovo atomico `lastGateOpen` (stato del gate, distinto da `lastInputStable` che riflette la confidenza del pitch) esposto via `getLastGateOpen()`. La label "Detected" in `PluginEditor.cpp` ora mostra anche `gate open/closed` e `late-bindings N` — permette di confermare all'ascolto che il fix interviene davvero (contatore che sale) invece di limitarsi a sperare che compili (CLAUDE.md regola 12).
+- **Non toccato**: `PitchDetector`, `OnsetDetector`, `Voice.cpp`, `PsolaShifter`, `HarmonyEngine`, `PitchLatch` — nessuno di questi era in causa.
+- **Verificato**: build VST3 e Standalone riuscite (solo il consueto fallimento di copia post-build per permessi, atteso e documentato dalla sessione 4), `pluginval --strictness-level 10` **SUCCESS** (exit code 0, nessuna occorrenza di fail/error/crash nel log completo), tutte e 3 le suite verdi via `ctest` (`psola_test`, `override_manager_test`, `pitch_latch_test` — nessuna tocca `PhraseScheduler`, riverificate per scrupolo dato che questo e' proprio il file modificato).
+- **NON ancora verificato all'ascolto** (CLAUDE.md regola 12): l'utente deve suonare note staccate ripetute in Ableton e controllare che (a) nessuna venga saltata, (b) "Active" non resti a 0 sul primo attacco, (c) `late-bindings` salga davvero, (d) nessuna nota venga armonizzata sull'accordo della nota precedente. Solo dopo questa conferma il fix puo' considerarsi completo, non solo compilato.
+
+**Segnalato dall'utente ma FUORI SCOPE in questa sessione — timbro "poco fedele, robotico e granuloso":**
+
+L'utente ha scelto di lavorare sulla corsa onset/pitch, non sul timbro, in questa sessione. Letto comunque `PsolaShifter.cpp` per non ripartire da zero la prossima volta — tre candidati concreti, NESSUNO gia' verificato come causa, solo misurabili prima di agire (regola 12):
+1. `PsolaShifter.cpp`, normalizzazione d'inviluppo in uscita (`out[i] = outBuf[idx] / max(e, 1.0f)`): si divide solo quando l'inviluppo supera 1. Per `alpha < 1` (voci verso il basso) l'inviluppo puo' scendere fino a ~0.25 (soglia accettata dal test 6 della suite) — fino a ~12dB di ripple periodico di ampiezza al ritmo dei grani, la firma acustica di "granuloso". Soglia del test lasca: candidato misurabile senza ascoltare.
+2. Individuazione degli epoch come massimo di `|x|` in una finestra ±P/4 (`detectEpochs`): su segnali non impulsivi (synth, fiati) puo' posizionare male gli epoch, incoerenza di fase fra grani = "robotico".
+3. Otto istanze PSOLA indipendenti sullo stesso ingresso: artefatti correlati che si sommano invece di mediarsi.
 
 **Novita' sessione 11 — isteresi di intonazione per note legate (FR-16/17):**
 
@@ -424,6 +444,15 @@ Nessuna modifica a `PRD-Harmonizer-v1.md`. Questa tabella va estesa (non sovrasc
 | `src/PluginProcessor.{h,cpp}` | modificato | `signalPresent` da `onsetDetector.isGateOpen()`; `pitchLatch.reset()` legato a `signalPresent`; Play mode forza entrambi i segnali |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 12 (note saltate — corsa onset/pitch, FR-43/45/46):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/voices/PhraseScheduler.{h,cpp}` | modificato | Ramo live-update completa l'allocazione degli slot rimasti vuoti al trigger; nuovo contatore `numLateBindingsTotal`/`getNumLateBindings()` |
+| `src/PluginProcessor.{h,cpp}` | modificato | `signalPresentLastBlock`; `pitchDetector.reset()` sul fronte di discesa di `signalPresent`; nuovo atomico `lastGateOpen`/`getLastGateOpen()` |
+| `src/PluginEditor.cpp` | modificato | Label "Detected" mostra anche `gate open/closed` e `late-bindings N` |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -516,6 +545,12 @@ Nessuna modifica al PRD.
 - Il piano di sessione 10 (finestra temporale) e' stato sovrascritto con quello di sessione 11 (isteresi in cent) dopo la correzione dell'utente, come da istruzioni del sistema di planning per un task diverso ma correlato.
 - **Dopo aver consegnato il fix dell'isteresi, l'utente ha rifatto il test e il sintomo persisteva** (solo la prima nota si armonizzava, nonostante la label "Detected" seguisse correttamente le note): segno che l'isteresi era necessaria ma non sufficiente. Rianalizzato `PhraseScheduler::process()` e trovata la mia ipotesi originale (accantonata, non scartata come sbagliata) — confermato che `freeAllPhrases()` era ancora legato alla confidenza del pitch (`inputIsStable`), non alla presenza del segnale. Risolto separando i due segnali (vedi §2) **senza** la finestra temporale scartata in precedenza, usando invece un segnale gia' disponibile (`OnsetDetector::isGateOpen()`) che risponde alla domanda giusta ("il performer sta ancora suonando?") invece che a quella sbagliata ("il pitch e' confidente in questo esatto blocco?"). Lezione: due bug distinti possono produrre lo stesso sintomo osservabile — risolverne uno non implica che il sintomo sia sparito per la ragione giusta, va sempre riverificato.
 
+**Sessione 12 — note saltate, causa confermata a lettura di codice (nessuna nuova ipotesi discussa con l'utente, il "perche'" era gia' verificabile nel codice esistente):**
+- Rilette `PluginProcessor.cpp`, `PhraseScheduler.{h,cpp}`, `OnsetDetector.cpp`, `PitchDetector.cpp` per formulare la diagnosi (vedi §2) prima di proporre qualunque piano — nessuna riga scritta prima di aver rintracciato la causa esatta nel codice.
+- Chiesto esplicitamente all'utente su cosa lavorare tra 4 opzioni proposte (corsa onset/pitch consigliata / taratura PSOLA / preset timbrici / pattern ritmico) e, separatamente, di specificare il feedback di qualita' lasciato in sospeso a fine sessione 11: l'utente ha scelto la corsa onset/pitch e ha aggiunto due dettagli (note saltate "senza una logica troppo precisa"; timbro "non fedele al segnale sorgente, robotico e granuloso").
+- Il secondo dettaglio (timbro) e' stato deliberatamente lasciato fuori scope per questa sessione (l'utente ha scelto l'altra area) ma tre candidati concreti in `PsolaShifter.cpp` sono stati annotati per non ripartire da zero — vedi §2.
+- Build, ctest, `pluginval` eseguiti ed esito riportato per intero (regola 8); nessun ascolto possibile da questa sessione (regola 12) — il fix resta "da confermare", non "completo".
+
 ---
 
 ## 5. Cosa non ha funzionato e perché
@@ -558,11 +593,14 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**CONFERMATO in questa sessione (dopo il push di conversazione, non ancora committato a parte):** il canto legato (C→D→E) ora armonizza correttamente ogni nota — entrambi i fix (isteresi PitchLatch + `signalPresent` separato da `inputIsStable`) verificati insieme all'ascolto dall'utente. **Feedback esplicito dell'utente**: "la qualità non è delle migliori" — nessun dettaglio ulteriore fornito, questione volutamente rimandata ("lo vediamo in un secondo momento"). Da riprendere con l'utente quando vorrà specificare cosa non convince (impastato? artefatti? formanti? latenza percepita?) — non ipotizzare una causa senza quel dettaglio, coerente con CLAUDE.md regola 12.
+**CONFERMATO in sessione 11 all'ascolto:** il canto legato (C→D→E) armonizza correttamente ogni nota — isteresi PitchLatch + `signalPresent` separato da `inputIsStable`.
+
+**Sessione 12 — CONFERMATO all'ascolto:** fix della corsa onset/pitch — l'utente ha verificato in Ableton che "Active" non resta piu' a zero sul primo attacco, armonizza sempre tutte le note, nessuna persa per strada. Feedback esplicito ma non dettagliato voce per voce: non e' stato confermato singolarmente ne' il contatore "late-bindings" (se sale davvero) ne' il caso specifico "nota armonizzata sull'accordo della nota precedente" (causa 2 della diagnosi, `pitchDetector` stantio) — nessun segnale che sia ancora un problema, solo non verificato in modo esplicito e separato. Se in futuro dovesse ricomparire un caso limite (es. attacchi molto ravvicinati, staccato molto rapido), ripartire da li'.
+
+**Feedback esplicito dell'utente (sessione 12), timbro — NON ancora affrontato**: "non fedele al segnale sorgente, robotico e granuloso". Tre candidati concreti gia' annotati in `PsolaShifter.cpp` (vedi §2 sessione 12: normalizzazione d'inviluppo sotto `alpha<1`, posizionamento degli epoch su segnali non impulsivi, correlazione fra le 8 istanze) — nessuno ancora verificato come causa reale, da misurare prima di agire (regola 12).
 
 **Prossimi passi possibili — da ridiscutere con l'utente:**
-- **Approfondire il feedback di qualità sopra**, la prossima volta che l'utente ha in mente cosa specificamente non convince.
-- **Osservare la label "Detected"** durante i test dei punti 2/5 di sessione 10 (sample non riconosciuti da alcuni synth, primo attacco a "0 voci"): ancora da diagnosticare.
+- **Timbro robotico/granuloso** (vedi sopra): prossimo candidato naturale, ha gia' indizi concreti da cui partire.
 - Ascolti ancora non fatti: Formanti (costante `k=0.3` in `Voice.cpp`), controllo MIDI CC con hardware/automazioni reali (FR-36/37), modalita' Play (setup PRD §3.4, verificare FR-27/28).
 - **Pattern ritmico (M3, `[V1.1]`)**: griglia piano-roll o modalita' millisecondi per il timing di entrata delle voci — fuori scope v1.0 per il PRD, ma l'architettura di `PhraseScheduler` e' gia' pronta ad accoglierlo.
 - **Preset timbrici (FR-11..13)**: sistema di preset separato da quello armonico, non ancora iniziato — conterrebbe anche Formant Spread/offset per voce una volta esistente (oggi sono solo parametri APVTS piatti, come Stability/Dry/Glide).
@@ -577,9 +615,10 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - **Controllo MIDI CC (FR-29..38) implementato ma mai provato con hardware/host reale**: la logica di precedenza e' testata numericamente (`override_manager_test`), ma il parsing dei messaggi MIDI veri (`CcRouter`) no — nessun target di test dedicato (avrebbe richiesto linkare `juce_audio_basics`), verificato solo a lettura e con `pluginval`. UI: il selettore root/preset non riflette visivamente un override CC attivo (l'audio segue comunque correttamente il CC).
 - **Modalita' Play (FR-24..28) implementata ma mai provata con hardware/host reale**: stesso limite del controllo CC — nessun test dedicato (coinvolge `juce::MidiBuffer`/`juce::MidiMessage`), verificata solo a lettura e con `pluginval`. Nessuna regola di furto definita per oltre 8 note simultanee (il PRD non la specifica per Play, a differenza di FR-51/52 per Harmonizer): le eccedenti restano semplicemente mute. FR-28 (nessun click nel passaggio di modalita') non verificato all'ascolto.
 - **"Keep Tails" (sessione 10) e' binario oggi**: tronca subito o lascia vivere per sempre. Il significato pieno descritto dall'utente (tronca solo la coda non ancora suonata di una frase, lascia finire il resto) richiede il Pattern Ritmico (FR-47..49, `[V1.1]`), non costruito qui — vedi `Phrase.h`.
-- **Mancato riconoscimento pitch con alcuni synth / primo attacco a "0 voci" (sessione 10, punti 2/5 del test)**: NON risolto, solo reso osservabile con la nuova label "Detected". Serve un secondo giro di ascolto con quella label visibile per decidere il fix vero (sospetto: corsa fra `OnsetDetector` e `PitchDetector`, non verificabile senza dati).
+- **Mancato riconoscimento pitch con alcuni synth / primo attacco a "0 voci" (sessione 10, punti 2/5 del test)**: causa confermata e corretta in sessione 12 (corsa `OnsetDetector`/`PitchDetector`, vedi §2) — **CONFERMATO risolto all'ascolto** dall'utente.
 - **Isteresi di intonazione + `signalPresent` (sessione 11): CONFERMATI all'ascolto** — canto legato C→D→E armonizza correttamente ogni nota. Soglia ±25 cent e soglie del gate (-24/-30/-36 dB, ereditate dal rilevamento onset di sessione 7) restano comunque punti da tarare ulteriormente se emergono altri casi limite (es. un portamento su un intervallo molto ampio, o un legato molto piano/debole).
-- **Qualità generale del suono**: l'utente ha segnalato esplicitamente che "non è delle migliori", senza specificare cosa — non ipotizzare una causa, aspettare un dettaglio (impastato? artefatti? formanti? altro?) prima di agire.
+- **Note saltate senza logica precisa (sessione 12)**: causa confermata a lettura di codice (corsa onset/pitch + `pitchDetector` mai resettato), fix scritto, verificato con build/test/pluginval e **CONFERMATO all'ascolto** — nessuna nota persa, "Active" mai a zero al primo attacco. Non verificato singolarmente il caso "accordo della nota precedente" (causa 2) ne' il contatore "late-bindings": nessun segnale che sia un problema, solo non isolato esplicitamente.
+- **Qualità del suono — timbro robotico/granuloso (sessione 12)**: l'utente ha ora specificato il dettaglio mancante ("non fedele al segnale sorgente, robotico e granuloso") — tre candidati concreti annotati in `PsolaShifter.cpp` (§2 sessione 12), nessuno ancora verificato come causa reale.
 
 **A seguire, per chiudere M0 davvero (non urgente per continuare lo sviluppo):**
 - Avviare le pratiche per i certificati di firma/notarizzazione (Apple Developer ID, code signing Windows).
@@ -590,5 +629,5 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 - Solo un preset (Min) e' verificato contro il prototipo reale — gli altri 6 sono standard jazz generici, da correggere quando l'utente fornira' i dati veri (ora importabili via CSV).
 - Risoluzione FR-17/FR-46: validata all'ascolto e corretta in sessione 10 (bottone Keep Tails) — vedi sopra.
 - Valori della tabella Stability->minF0Hz (sessione 9) e della costante `k=0.3` delle Formanti (sessione 9) sono ancora un punto di partenza, non tarati all'ascolto.
-- **Nuova**: causa esatta del mancato riconoscimento pitch con alcuni synth (punti 2/5 del test di sessione 10) ancora da determinare — la label "Detected" (sessione 10) e' pronta a raccogliere i dati al prossimo test.
-- **Push**: `origin/main` e' fermo a `6e22c78` (Formanti). 5 commit **solo locali**: `92591d4` (CC MIDI), `87add26` (Play mode), `8ca2257`+`906821e`+`5dd33fd` (fix sessione 10/11). Verificare con l'utente prima di pushare, e controllare `git status`/`git log origin/main..HEAD` all'inizio della prossima sessione per sapere esattamente cosa manca al remoto.
+- Causa del mancato riconoscimento pitch con alcuni synth (punti 2/5 del test di sessione 10): determinata in sessione 12 (corsa onset/pitch), fix scritto — resta la conferma all'ascolto, vedi sopra.
+- **Push**: verificato a inizio sessione 12 — `git status`/`git log origin/main..HEAD` puliti, tutti i commit fino a sessione 11 gia' sul remoto (la nota precedente su 5 commit "solo locali" era obsoleta). I commit di sessione 12 non sono ancora stati creati: richiedere conferma esplicita all'utente prima di committare/pushare, come da istruzioni di sistema (mai commit non richiesti).

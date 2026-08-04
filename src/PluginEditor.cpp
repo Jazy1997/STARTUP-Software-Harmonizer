@@ -435,22 +435,28 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
 
     // Diagnostica PRD §8.1 — sessione 10, vedi PluginProcessor::processBlock
-    // per dove viene scritta.
+    // per dove viene scritta. Sessione 12: aggiunti stato del gate (distinto
+    // da "stable", vedi FR-43/45/46) e il contatore di allocazioni differite
+    // — servono a confermare all'ascolto che il fix delle note saltate sta
+    // intervenendo davvero, non solo a diagnosticare come in sessione 10.
     const float midiNote = processorRef.getLastDetectedMidiNote();
     const bool stable = processorRef.getLastInputStable();
+    const bool gateOpen = processorRef.getLastGateOpen();
     juce::String detectedText;
     if (midiNote >= 0.0f)
     {
         const auto noteName = juce::MidiMessage::getMidiNoteName (juce::roundToInt (midiNote), true, true, 3);
         detectedText = noteName + juce::String::formatted (
-            "  (%.2f, conf %.2f)  %s", midiNote,
+            "  (%.2f, conf %.2f)  %s  gate %s", midiNote,
             (double) processorRef.getLastDetectedConfidence(),
-            stable ? "stable" : "unstable");
+            stable ? "stable" : "unstable",
+            gateOpen ? "open" : "closed");
     }
     else
     {
-        detectedText = "-- (nessun segnale)";
+        detectedText = juce::String ("-- (nessun segnale)  gate ") + (gateOpen ? "open" : "closed");
     }
+    detectedText += "  late-bindings " + juce::String (processorRef.getNumLateBindings());
     detectedValueLabel.setText (detectedText, juce::dontSendNotification);
 }
 
