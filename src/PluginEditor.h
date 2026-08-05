@@ -2,12 +2,14 @@
 
 #include "PluginProcessor.h"
 #include "ui/PresetTableEditor.h"
+#include "ui/PresetListEditor.h"
 
 // M0/M1/M2 — editor minimo con controlli diretti (ComboBox/Slider/bottoni),
 // sufficiente per gestire la libreria preset e testare l'armonizzazione in un
 // host senza hardware MIDI CC (M4) ne' le tre schermate definitive (§8 del
-// PRD, lavoro di M5). Il riordino qui e' con bottoni Su/Giu', non drag&drop
-// (FR-06 vero e proprio e' UI di M5).
+// PRD, lavoro di M5). Sessione 21: il riordino preset e' ora drag&drop vero
+// (ui::PresetListEditor, FR-06/07/§8.2) al posto dei bottoni Su/Giu' — resta
+// comunque un pannello piatto, non le tre schermate definitive.
 class HarmonizerAudioProcessorEditor : public juce::AudioProcessorEditor,
                                         private juce::Timer
 {
@@ -20,7 +22,6 @@ public:
 
 private:
     void timerCallback() override;
-    void refreshPresetBoxFromLibrary();
     void syncPresetSelectionFromParameter();
     void syncCcControlsFromRouter();
     void commitRename();
@@ -29,7 +30,11 @@ private:
     HarmonizerAudioProcessor& processorRef;
 
     juce::ComboBox rootNoteBox;
-    juce::ComboBox presetBox;
+    // Sessione 21: la lista preset e' ora ui::PresetListEditor (drag&drop,
+    // FR-06/07) dentro un Viewport per lo scroll verticale (fino a
+    // PresetLibrary::maxPresets = 128 righe) — non piu' una ComboBox.
+    juce::Viewport presetListViewport;
+    ui::PresetListEditor presetListEditor;
     juce::ComboBox stabilityBox;
     juce::Slider numVoicesSlider;
     juce::Slider dryLevelSlider;
@@ -74,8 +79,6 @@ private:
     juce::TextButton addButton          { "Add" };
     juce::TextButton duplicateButton    { "Duplicate" };
     juce::TextButton deleteButton       { "Delete" };
-    juce::TextButton moveUpButton       { "Up" };
-    juce::TextButton moveDownButton     { "Down" };
     juce::TextButton importCsvButton    { "Import CSV" };
     juce::TextButton exportCsvButton    { "Export CSV" };
     juce::TextButton loadGlobalButton   { "Load Global" };
@@ -119,13 +122,13 @@ private:
     std::unique_ptr<ButtonAttachment> playModeAttachment;
     std::unique_ptr<ButtonAttachment> keepTailsAttachment;
 
-    // presetBox non ha un ComboBoxAttachment: la libreria puo' cambiare
-    // dimensione a runtime, cosa che le "choices" fisse di un parametro APVTS
-    // non supportano (vedi createParameterLayout — presetIndex e' un Int, non
-    // una Choice). Sincronizzazione manuale via polling (Timer).
-    int lastKnownPresetCount = -1;
+    // presetListEditor non ha un ComboBoxAttachment/parametro diretto: la
+    // libreria puo' cambiare dimensione a runtime, cosa che le "choices"
+    // fisse di un parametro APVTS non supportano (vedi createParameterLayout
+    // — presetIndex e' un Int, non una Choice). Sincronizzazione manuale via
+    // polling (Timer): presetListEditor legge sempre il modello dal vivo in
+    // paint(), quindi qui serve tracciare solo l'ultima selezione applicata.
     int lastSyncedSelectedIndex = -1;
-    bool ignoreComboCallback = false;
 
     // std::unique_ptr cosi' il FileChooser resta vivo per la durata della
     // callback asincrona (obbligatorio con l'API async di JUCE).

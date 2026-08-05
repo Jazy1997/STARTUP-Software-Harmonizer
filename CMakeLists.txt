@@ -58,6 +58,7 @@ target_sources(Harmonizer
         src/midi/OverrideManager.cpp
         src/midi/PlayModeInput.cpp
         src/ui/PresetTableEditor.cpp
+        src/ui/PresetListEditor.cpp
 )
 
 target_compile_definitions(Harmonizer

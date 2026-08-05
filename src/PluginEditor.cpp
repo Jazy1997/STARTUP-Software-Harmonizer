@@ -44,7 +44,7 @@ namespace
 }
 
 HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p), presetTableEditor (p)
+    : AudioProcessorEditor (&p), processorRef (p), presetListEditor (p), presetTableEditor (p)
 {
     auto& apvtsRef = processorRef.apvts;
 
@@ -64,14 +64,16 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     stabilityLabel.attachToComponent (&stabilityBox, true);
     addAndMakeVisible (stabilityLabel);
 
-    addAndMakeVisible (presetBox);
-    presetLabel.attachToComponent (&presetBox, true);
+    addAndMakeVisible (presetListViewport);
+    presetListViewport.setViewedComponent (&presetListEditor, false);
+    presetListViewport.setScrollBarsShown (true, false); // solo verticale
+    presetLabel.attachToComponent (&presetListViewport, true);
     addAndMakeVisible (presetLabel);
-    presetBox.onChange = [this]
-    {
-        if (! ignoreComboCallback)
-            selectPresetIndex (presetBox.getSelectedItemIndex());
-    };
+    presetListEditor.onRowClicked = [this] (int index) { selectPresetIndex (index); };
+    // Un passo di drag ha gia' applicato movePreset: si tiene la selezione
+    // agganciata al preset trascinato, stessa chiamata gia' usata prima di
+    // questa sessione da moveUpButton/moveDownButton.
+    presetListEditor.onReordered = [this] (int newIndex) { selectPresetIndex (newIndex); };
 
     addAndMakeVisible (presetNameEditor);
     nameLabel.attachToComponent (&presetNameEditor, true);
@@ -121,7 +123,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
         voiceFormantAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceFormantOffset" + juce::String (v + 1), slider);
     }
 
-    for (auto* b : { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton,
+    for (auto* b : { &addButton, &duplicateButton, &deleteButton,
                      &importCsvButton, &exportCsvButton, &loadGlobalButton, &saveGlobalButton })
         addAndMakeVisible (b);
 
@@ -131,50 +133,29 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
         {
             lib.addPreset ("New Preset", harmony::Table {});
         });
-        refreshPresetBoxFromLibrary();
+        presetListEditor.refresh();
         selectPresetIndex (processorRef.getPresetLibrary()->getNumPresets() - 1);
     };
 
     duplicateButton.onClick = [this]
     {
-        const int idx = presetBox.getSelectedItemIndex();
+        const int idx = presetListEditor.getSelectedIndex();
         int newIndex = -1;
         processorRef.editPresetLibrary ([&] (harmony::PresetLibrary& lib) { newIndex = lib.duplicatePreset (idx); });
-        refreshPresetBoxFromLibrary();
+        presetListEditor.refresh();
         if (newIndex >= 0)
             selectPresetIndex (newIndex);
     };
 
     deleteButton.onClick = [this]
     {
-        const int idx = presetBox.getSelectedItemIndex();
+        const int idx = presetListEditor.getSelectedIndex();
         if (idx < 0 || processorRef.getPresetLibrary()->getNumPresets() <= 1)
             return; // non si puo' restare senza preset
 
         processorRef.editPresetLibrary ([idx] (harmony::PresetLibrary& lib) { lib.removePreset (idx); });
-        refreshPresetBoxFromLibrary();
+        presetListEditor.refresh();
         selectPresetIndex (juce::jmin (idx, processorRef.getPresetLibrary()->getNumPresets() - 1));
-    };
-
-    moveUpButton.onClick = [this]
-    {
-        const int idx = presetBox.getSelectedItemIndex();
-        if (idx <= 0)
-            return;
-        processorRef.editPresetLibrary ([idx] (harmony::PresetLibrary& lib) { lib.movePreset (idx, idx - 1); });
-        refreshPresetBoxFromLibrary();
-        selectPresetIndex (idx - 1);
-    };
-
-    moveDownButton.onClick = [this]
-    {
-        const int idx = presetBox.getSelectedItemIndex();
-        const auto lib = processorRef.getPresetLibrary();
-        if (idx < 0 || idx >= lib->getNumPresets() - 1)
-            return;
-        processorRef.editPresetLibrary ([idx] (harmony::PresetLibrary& l) { l.movePreset (idx, idx + 1); });
-        refreshPresetBoxFromLibrary();
-        selectPresetIndex (idx + 1);
     };
 
     importCsvButton.onClick = [this]
@@ -196,7 +177,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
                     {
                         newIndex = lib.addPreset (name, *parsed);
                     });
-                    refreshPresetBoxFromLibrary();
+                    presetListEditor.refresh();
                     if (newIndex >= 0)
                         selectPresetIndex (newIndex);
                 }
@@ -211,7 +192,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
 
     exportCsvButton.onClick = [this]
     {
-        const int idx = presetBox.getSelectedItemIndex();
+        const int idx = presetListEditor.getSelectedIndex();
         if (idx < 0)
             return;
 
@@ -235,7 +216,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     {
         bool ok = false;
         processorRef.editPresetLibrary ([&] (harmony::PresetLibrary& lib) { ok = lib.loadGlobal(); });
-        refreshPresetBoxFromLibrary();
+        presetListEditor.refresh();
         selectPresetIndex (0);
 
         if (! ok)
@@ -309,7 +290,7 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
 
     syncCcControlsFromRouter();
 
-    refreshPresetBoxFromLibrary();
+    presetListEditor.refresh();
     syncPresetSelectionFromParameter();
 
     setResizable (true, true);
@@ -317,8 +298,11 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     // circa 220px di altezza minima necessaria e richiede un minimo di
     // larghezza maggiore (12 colonne + colonna di intestazione riga devono
     // restare leggibili). Limiti/dimensione precedenti erano (460,950)-(1200,1230)/500x990.
-    setResizeLimits (500, 1170, 1200, 1450);
-    setSize (520, 1200);
+    // Sessione 21: la ComboBox a riga singola (26px+6px gap) diventa la lista
+    // preset drag&drop (7 righe visibili di default, vedi resized()) —
+    // netto +122px di altezza minima necessaria.
+    setResizeLimits (500, 1292, 1200, 1572);
+    setSize (520, 1322);
 
     startTimerHz (15);
 }
@@ -361,7 +345,21 @@ void HarmonizerAudioProcessorEditor::resized()
     };
 
     layoutRow (rootNoteBox);
-    layoutRow (presetBox);
+
+    {
+        // Sessione 21 (drag&drop preset, FR-06/07/§8.2): 7 righe visibili di
+        // default (il numero di preset di fabbrica, cosi' non scrolla nulla
+        // finche' l'utente non ne aggiunge altri) — deve restare in sync con
+        // ui::PresetListEditor::rowHeight.
+        constexpr int visiblePresetRows = 7;
+        auto row = area.removeFromTop (visiblePresetRows * ui::PresetListEditor::rowHeight);
+        row.removeFromLeft (labelWidth);
+        presetListViewport.setBounds (row);
+        presetListEditor.setContentWidth (presetListViewport.getWidth()
+                                          - presetListViewport.getScrollBarThickness());
+        area.removeFromTop (gap);
+    }
+
     layoutRow (presetNameEditor);
 
     {
@@ -435,7 +433,7 @@ void HarmonizerAudioProcessorEditor::resized()
     layoutRow (detectedValueLabel);
 
     layoutRowOfButtons (area.removeFromTop (rowHeight),
-                        { &addButton, &duplicateButton, &deleteButton, &moveUpButton, &moveDownButton });
+                        { &addButton, &duplicateButton, &deleteButton });
     area.removeFromTop (gap);
 
     layoutRowOfButtons (area.removeFromTop (rowHeight),
@@ -444,7 +442,11 @@ void HarmonizerAudioProcessorEditor::resized()
 
 void HarmonizerAudioProcessorEditor::timerCallback()
 {
-    refreshPresetBoxFromLibrary();
+    // presetListEditor legge sempre il modello dal vivo in paint(): a
+    // differenza della vecchia ComboBox non serve un diff sui nomi per
+    // decidere se aggiornare, un repaint periodico basta ed e' innocuo
+    // (nessun componente figlio da ricreare).
+    presetListEditor.refresh();
     syncPresetSelectionFromParameter();
     syncCcControlsFromRouter();
 
@@ -505,33 +507,6 @@ void HarmonizerAudioProcessorEditor::syncCcControlsFromRouter()
     learnBypassButton.setButtonText (learning == CcRouter::LearnTarget::bypass ? "Learning..." : "Learn");
 }
 
-void HarmonizerAudioProcessorEditor::refreshPresetBoxFromLibrary()
-{
-    const auto lib = processorRef.getPresetLibrary();
-    const int n = lib->getNumPresets();
-
-    bool changed = (n != lastKnownPresetCount);
-    if (! changed)
-        for (int i = 0; i < n; ++i)
-            if (presetBox.getItemText (i) != lib->getPreset (i).name) { changed = true; break; }
-
-    if (! changed)
-        return;
-
-    const int previousSelection = presetBox.getSelectedItemIndex();
-
-    ignoreComboCallback = true;
-    presetBox.clear (juce::dontSendNotification);
-    for (int i = 0; i < n; ++i)
-        presetBox.addItem (lib->getPreset (i).name, i + 1);
-
-    if (previousSelection >= 0 && previousSelection < n)
-        presetBox.setSelectedItemIndex (previousSelection, juce::dontSendNotification);
-    ignoreComboCallback = false;
-
-    lastKnownPresetCount = n;
-}
-
 void HarmonizerAudioProcessorEditor::syncPresetSelectionFromParameter()
 {
     auto* intParam = dynamic_cast<juce::AudioParameterInt*> (processorRef.apvts.getParameter ("presetIndex"));
@@ -546,9 +521,20 @@ void HarmonizerAudioProcessorEditor::syncPresetSelectionFromParameter()
     if (desiredIndex == lastSyncedSelectedIndex)
         return;
 
-    ignoreComboCallback = true;
-    presetBox.setSelectedItemIndex (desiredIndex, juce::dontSendNotification);
-    ignoreComboCallback = false;
+    presetListEditor.setSelectedIndex (desiredIndex);
+
+    // Scroll-into-view: Add/Duplicate/CC/automazione possono selezionare un
+    // preset fuori dall'area visibile del Viewport — senza questo l'utente
+    // non avrebbe alcun segnale che la selezione e' cambiata.
+    {
+        const int rowTop    = desiredIndex * ui::PresetListEditor::rowHeight;
+        const int rowBottom = rowTop + ui::PresetListEditor::rowHeight;
+        const auto visible  = presetListViewport.getViewArea();
+        if (rowTop < visible.getY())
+            presetListViewport.setViewPosition (0, rowTop);
+        else if (rowBottom > visible.getBottom())
+            presetListViewport.setViewPosition (0, rowBottom - visible.getHeight());
+    }
 
     if (! presetNameEditor.hasKeyboardFocus (false))
         presetNameEditor.setText (lib->getPreset (desiredIndex).name, juce::dontSendNotification);
@@ -565,15 +551,14 @@ void HarmonizerAudioProcessorEditor::syncPresetSelectionFromParameter()
 
 void HarmonizerAudioProcessorEditor::commitRename()
 {
-    const int idx = presetBox.getSelectedItemIndex();
+    const int idx = presetListEditor.getSelectedIndex();
     if (idx < 0)
         return;
 
     const auto newName = presetNameEditor.getText();
     processorRef.editPresetLibrary ([idx, newName] (harmony::PresetLibrary& lib) { lib.renamePreset (idx, newName); });
 
-    lastKnownPresetCount = -1; // forza il refresh della combo: il nome e' cambiato
-    refreshPresetBoxFromLibrary();
+    presetListEditor.refresh(); // il nome e' cambiato, il repaint lo legge dal modello
 }
 
 void HarmonizerAudioProcessorEditor::selectPresetIndex (int index)

@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-05 (sessione 20)
+> Ultimo aggiornamento: 2026-08-05 (sessione 21)
 
 ---
 
@@ -32,6 +32,77 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 21 — primo slice del punto "prossimi slice di M5 (UI)": lista preset con
+drag&drop vero (FR-06/07, §8.2), sostituisce la ComboBox + bottoni Su/Giu':**
+
+Su richiesta esplicita dell'utente ("procederei con il primo step del secondo punto", dalla
+lista di prossimi passi proposta a fine sessione 20), primo slice concreto della UI di M5 dopo
+l'editor tabella 12x8 di sessione 15.
+
+- **`src/ui/PresetListEditor.{h,cpp}`** (nuovo, secondo componente custom del progetto dopo
+  `PresetTableEditor`): disegna le righe dei preset direttamente in `paint()` leggendo il
+  modello dal vivo (nome + `PresetLibrary::getCcValue`) — nessuna Label figlia per riga, a
+  differenza della griglia 12x8 a dimensione fissa: qui il numero di righe varia da 1 a
+  `PresetLibrary::maxPresets` (128) a ogni add/duplicate/delete, quindi disegnare a mano evita
+  di gestire componenti figli che cambiano numero e rende impossibile un testo "stantio".
+  Interazione "icone su smartphone" (FR-06): nessuno stato di anteprima separato dal modello —
+  ogni volta che il trascinamento supera il confine della riga successiva/precedente si chiama
+  subito `PresetLibrary::movePreset` (un passo, esattamente come facevano prima i bottoni
+  Su/Giu' un click alla volta), si aggiorna l'indice trascinato e si notifica il genitore
+  (`onReordered`) per tenere la selezione (parametro `presetIndex`, tabella 12x8) agganciata al
+  preset che si sta spostando. Il CC accanto al nome si aggiorna da solo perche' e' disegnato
+  dal vivo — soddisfa "aggiornato in tempo reale durante il riordino" (§8.2) senza codice
+  dedicato. **Nessuna modifica al modello**: `PresetLibrary::movePreset` esisteva gia' (usato
+  da sessione 15 dai bottoni Su/Giu', stessa identica semantica erase+insert), la mutazione
+  passa sempre da `HarmonizerAudioProcessor::editPresetLibrary` (copy-on-write, mai sull'audio
+  thread) — nessun nuovo meccanismo di threading.
+- **`src/PluginEditor.{h,cpp}`**: `presetBox` (ComboBox) e i bottoni `moveUpButton`/
+  `moveDownButton` **rimossi**, non lasciati in parallelo — erano esplicitamente il
+  placeholder segnalato nel commento di testa del file come "in attesa" di questo lavoro.
+  Nuovi membri `presetListViewport` (`juce::Viewport`, solo scroll verticale) +
+  `presetListEditor`. Rimossi anche `lastKnownPresetCount`/`ignoreComboCallback`: non servono
+  piu' — niente diff sui nomi da ComboBox (il componente nuovo legge sempre dal vivo),
+  `refreshPresetBoxFromLibrary()` eliminato e sostituito da chiamate dirette a
+  `presetListEditor.refresh()` in ogni punto che prima la richiamava (add/duplicate/delete/
+  import/load/rename/timer). Aggiunto un piccolo scroll-into-view in
+  `syncPresetSelectionFromParameter()` cosi' Add/Duplicate/CC/automazione non selezionino mai
+  un preset fuori dall'area visibile senza segnale — gap non coperto dalla vecchia ComboBox
+  (che non aveva bisogno di scroll) e non esplicitamente nel piano iniziale, aggiunto durante
+  l'implementazione perche' altrimenti necessario per la correttezza della nuova UI.
+  Dimensioni finestra aggiornate (`setResizeLimits`/`setSize`, stesso tipo di aggiustamento
+  gia' fatto in sessione 15 per la tabella 12x8): la riga singola della ComboBox (26+6px)
+  diventa un'area di 7 righe (7×22=154px, 7 perche' e' il numero di preset di fabbrica — di
+  default nulla scrolla) — netto +122px di altezza minima.
+- **`CMakeLists.txt`**: nuovo file sorgente `src/ui/PresetListEditor.cpp` nel target
+  `Harmonizer`.
+- **Nessun nuovo target di test automatico** (scelta esplicita, documentata nel piano prima di
+  scrivere codice): `movePreset` non e' cambiato (gia' esercitato per mesi via Su/Giu'), la
+  logica nuova e' interazione mouse (mouseDown/Drag/Up) poco adatta a un test headless — stesso
+  ragionamento e stessa scelta di verifica (build + pluginval + controllo visivo/interattivo)
+  gia' fatta per `PresetTableEditor` in sessione 15.
+- **Verificato per calcolo**: build VST3 e Standalone riuscite (solo il consueto fallimento di
+  copia post-build per permessi), `pluginval --strictness-level 10` **SUCCESS** (nessuna
+  occorrenza di fail/error/crash), tutte e 6 le suite `ctest` verdi (nessuna toccata da questo
+  lavoro).
+- **Verifica visiva riuscita, a differenza del tentativo inconcludente di sessione 15**:
+  lanciato lo Standalone appena ricompilato e catturato uno screenshot reale della finestra
+  (via cattura diretta dello schermo su una finestra riposizionata in un'area visibile, non
+  `PrintWindow` sul rendering accelerato JUCE — probabilmente e' quello il dettaglio che ha
+  fatto la differenza rispetto al limite osservato in sessione 15). Confermato visivamente: i 7
+  preset di fabbrica visibili senza scroll, ciascuno con "CC N" accanto al nome (CC 1 Maj, CC 2
+  Min, ... CC 7 Aug7), la riga del preset selezionato evidenziata, coerente con il campo Name e
+  la tabella 12x8 sotto (Maj selezionato mostra la sua tabella). **NON verificata visivamente
+  l'interazione di trascinamento vera e propria** (simulare un drag del mouse in modo
+  affidabile da qui avrebbe richiesto muovere il cursore reale dell'utente — scelta
+  deliberata di non farlo, lasciata alla verifica dell'utente).
+- **CONFERMATO dall'utente sul VST3 reale**: "riesco a spostare i preset e i CC rimangono
+  'stabili' nel senso che se sposto il preset su o giu' cambia il suo numero di CC a seconda
+  della posizione" — l'interazione di trascinamento funziona e il CC live durante il
+  riordino (§8.2) e' verificato. **Non ancora testato con un controller MIDI hardware reale**
+  (solo graficamente): resta un punto aperto per quando l'utente avra' accesso all'hardware,
+  non un blocco per questo lavoro (la logica CC=posizione e' la stessa gia' in uso da mesi via
+  i vecchi bottoni Su/Giu', non e' cambiata qui). Lavoro committato.
 
 **Novita' sessione 20 — causa del wobbling trovata (non nella selezione degli epoch, come
 sessione 19 aveva escluso, ma nella SINTESI) e corretta; verificato per calcolo su file reale
@@ -1251,18 +1322,34 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
+**Sessione 21 — CONFERMATO dall'utente sul VST3 reale (vedi §2): il drag&drop funziona,**
+**CC aggiornato live durante il riordino.** Lavoro committato. Non ancora testato con un
+controller MIDI hardware reale (solo graficamente) — punto aperto per quando l'utente avra'
+accesso all'hardware, non un blocco.
+
+Non ancora provato esplicitamente (non bloccante, da tenere d'occhio se emergono problemi):
+con piu' di 7 preset (dopo qualche Add) la lista deve scorrere correttamente; ridimensionare
+la finestra (ora minimo 1292px di altezza, prima 1170) non deve rompere il layout.
+
+**Prossimi slice di M5 gia' annotati, non ancora iniziati**: evidenziazione dei primi 5 preset
+(le direzioni del navigation button hardware), griglia cromatica dei 12 pulsanti per la
+fondamentale (oggi ComboBox), gain/pan per voce (assenti dall'UI), indicatore stato licenza,
+scaffold delle 3 schermate PRD, tema chiaro/scuro (FR-61, `[SHOULD]`). Nessuna `LookAndFeel`
+custom esiste ancora nel progetto: forma dei knob/colori/font sono tutti lavoro non iniziato,
+esplicitamente rimandato (l'utente ha chiesto conferma di questo a fine sessione 21).
+
 **Sessione 20 — CONFERMATO all'ascolto e per calcolo (vedi §2): il fix del wobbling funziona.**
 L'utente ha fornito `Export V3.wav` (stesse impostazioni di `Export V2.wav`) e confermato "ora
 va molto meglio". Confronto numerico diretto sul nuovo export reale: 8/792 finestre instabili
 (1.0%) contro 35/792 (4.4%) prima del fix, residuo ormai concentrato su transizioni/attacco di
-nota, non piu' dentro le note sostenute. Lavoro committato.
+nota, non piu' dentro le note sostenute. Lavoro committato (`4087d69`, pushato).
 
-**Priorita' immediata della prossima sessione**: verificare se il "secondo meccanismo" annotato
-in sessione 17 (jitter fine anche in unisono, cali 0.89-0.93 senza coinvolgere il gate
-dell'onset) e' ancora presente o se il fix di sessione 20 lo ha gia' assorbito (agisce
-esattamente sulla sintesi in unisono) — da misurare di nuovo con gli stessi strumenti
-(`real_export_probe` su un nuovo export, o `sample_click_finder --fixedF0`) prima di
-considerarlo chiuso, non da assumere.
+Il "secondo meccanismo" annotato in sessione 17 (jitter fine anche in unisono, cali 0.89-0.93
+senza coinvolgere il gate dell'onset): l'utente ha riportato a inizio sessione 21 di non
+sentire "cose troppo fastidiose per il momento" — un segnale informale, non una verifica
+numerica dedicata (nessun nuovo confronto `real_export_probe` fatto apposta). Se in futuro
+dovesse riemergere un residuo di instabilita' fine, ripartire da qui con una misura diretta
+prima di aprire una nuova indagine da zero.
 
 Se dovesse emergere un residuo non spiegato dal secondo meccanismo, i candidati non ancora
 toccati restano:
