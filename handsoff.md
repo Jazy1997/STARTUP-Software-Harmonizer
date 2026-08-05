@@ -56,8 +56,19 @@ quella corrispondenza senza che l'utente debba consultare il manuale.
 - **Verificato visivamente** (stessa tecnica di sessione 21: cattura diretta dello schermo via
   PowerShell/`System.Drawing`, non `PrintWindow`): badge ambra "1".."5" visibili sulle righe
   CC1-CC5 (Maj/Min/Dom/Sus/Half Dim), assenti su CC6/CC7 (Dim/Aug7) — coerente con la spec.
-  **NON ancora confermato dall'utente** (ne' all'ascolto — non applicabile, e' solo UI — ne'
-  con un controllo visivo diretto dell'utente su Standalone/host reale).
+  **CONFERMATO visivamente dall'utente su entrambi Standalone e VST3 in Ableton**, dopo un
+  intoppo iniziale: la prima verifica dell'utente su Ableton non mostrava i badge — causa
+  trovata (non un bug del badge stesso): la build **Release** non era stata ricompilata in
+  questa sessione (solo Debug), e nessuna copia di `Harmonizer.vst3` risulta installata in
+  `Program Files\Common Files\VST3` ne' altrove nei percorsi standard (il fallimento di copia
+  post-build per permessi, presente da sessioni, sembra quindi permanente) — Ableton molto
+  probabilmente scansiona direttamente `build/Harmonizer_artefacts/Release/VST3`, non un
+  percorso di sistema. Ricompilata anche la Release (VST3 + Standalone), `pluginval
+  --strictness-level 10` **SUCCESS** anche su questa build — badge confermato visibile
+  dall'utente su entrambi dopo il rebuild. **Nota per le prossime sessioni**: se un lavoro UI
+  viene verificato solo sulla build Debug, verificare/ricompilare anche la Release prima di
+  chiedere conferma dell'utente su Ableton — altrimenti si rischia un falso negativo come
+  in questa sessione.
 
 **Novita' sessione 21 — primo slice del punto "prossimi slice di M5 (UI)": lista preset con
 drag&drop vero (FR-06/07, §8.2), sostituisce la ComboBox + bottoni Su/Giu':**
@@ -1348,13 +1359,9 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Sessione 22 — badge di evidenziazione dei primi 5 preset scritto, verificato per calcolo e**
-**visivamente (screenshot reale, vedi §2), NON ancora confermato dall'utente.** Prossimo passo
-immediato: l'utente deve aprire lo Standalone/VST3 e confermare a occhio che i 5 badge (1-5)
-siano leggibili e coerenti col comportamento del navigation button hardware quando disponibile.
-Non e' un fix di suono (regola 12 non si applica), ma resta comunque un controllo umano prima
-di considerarlo definitivamente chiuso, come per ogni slice UI precedente (tabella 12x8 di
-sessione 15, lista drag&drop di sessione 21).
+**Sessione 22 — badge di evidenziazione dei primi 5 preset: CONFERMATO dall'utente su Standalone**
+**e VST3 in Ableton (vedi §2), dopo aver ricompilato anche la build Release** (la Debug da sola
+non bastava — vedi la nota su Ableton/percorso di scansione in §2). Lavoro committato.
 
 Prossimi slice di M5 ancora da iniziare dopo questo (lista invariata da sessione 21): griglia
 cromatica dei 12 pulsanti per la fondamentale (oggi ComboBox), gain/pan per voce (assenti
