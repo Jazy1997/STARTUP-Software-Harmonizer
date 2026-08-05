@@ -62,6 +62,12 @@ public:
     }
 
     float getCurrentValue() const noexcept { return current; }
+    // Sessione 16 (fix "click a inizio nota", vedi Voice.h/justReactivated):
+    // serve a chi deve poter AGGANCIARE current al target corrente senza
+    // passare di nuovo il valore da fuori (reset(getTarget())) — es. quando
+    // si scopre solo in un punto successivo della catena di chiamate che la
+    // rampa in corso andava saltata, non seguita.
+    float getTarget() const noexcept { return target; }
     // Sessione 12: usato per sapere se una rampa (es. di ampiezza) ha
     // raggiunto stabilmente il target, senza dover confrontare current/target
     // dall'esterno (confronto in virgola mobile fragile su un valore calcolato).

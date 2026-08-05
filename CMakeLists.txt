@@ -135,9 +135,64 @@ add_executable(cell_input_parser_test
 target_include_directories(cell_input_parser_test PRIVATE src)
 target_compile_features(cell_input_parser_test PRIVATE cxx_std_20)
 
+# Strumento di misura del click a inizio nota (sessione 16, ripartenza da
+# zero dopo che il fix di sessione 14 e' stato smentito all'ascolto — vedi
+# handsoff.md §6 e tests/voice_test.cpp per il ragionamento completo).
+# Serve Voice + il motore PSOLA reale (non un doppio finto), ma resta
+# headless come le altre suite: nessuna dipendenza JUCE, si compila ed
+# esegue senza aprire una DAW.
+add_executable(voice_test
+    tests/voice_test.cpp
+    src/voices/Voice.cpp
+    src/dsp/PsolaShifter.cpp
+    src/dsp/SpectralShifter.cpp
+    src/dsp/PitchShifterFactory.cpp
+)
+target_include_directories(voice_test PRIVATE src libs/signalsmith-stretch)
+target_compile_features(voice_test PRIVATE cxx_std_20)
+
+# Strumento diagnostico OFFLINE per il click "in mezzo alla nota" (sessione
+# 17, segnalato dopo aver riascoltato il fix di sessione 16): legge un file
+# WAV vero fornito dall'utente e cerca discontinuita' anomale con la stessa
+# logica di voice_test.cpp ma su segnale reale, non sintetico — vedi
+# tests/sample_click_finder.cpp per il ragionamento completo. Usa lo stesso
+# PitchDetector reale del plugin (Cycfi Q, nessuna dipendenza JUCE). NON in
+# ctest: dipende da file WAV esterni non versionati nel repo, si lancia a
+# mano con il percorso del file come argomento.
+add_executable(sample_click_finder
+    tests/sample_click_finder.cpp
+    src/voices/Voice.cpp
+    src/dsp/PsolaShifter.cpp
+    src/dsp/SpectralShifter.cpp
+    src/dsp/PitchShifterFactory.cpp
+    src/dsp/PitchDetector.cpp
+    src/dsp/OnsetDetector.cpp
+)
+target_include_directories(sample_click_finder PRIVATE
+    src
+    libs/signalsmith-stretch
+    libs/q/q_lib/include
+    libs/q/infra/include
+)
+target_compile_features(sample_click_finder PRIVATE cxx_std_20)
+
+# Strumento diagnostico OFFLINE che confronta DRY reale e WET reale (un
+# export vero dal plugin, non un'approssimazione offline) — sessione 18,
+# "una prima voce perfetta". Vedi tests/real_export_probe.cpp. Serve solo
+# PsolaShifter (per la latenza dichiarata) oltre a SampleAnalysis.h/
+# TestSignals.h, entrambi header-only: nessuna dipendenza JUCE. NON in
+# ctest: dipende da file WAV esterni forniti dall'utente, non versionati.
+add_executable(real_export_probe
+    tests/real_export_probe.cpp
+    src/dsp/PsolaShifter.cpp
+)
+target_include_directories(real_export_probe PRIVATE src)
+target_compile_features(real_export_probe PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
 add_test(NAME pitch_latch COMMAND pitch_latch_test)
 add_test(NAME glide COMMAND glide_test)
 add_test(NAME cell_input_parser COMMAND cell_input_parser_test)
+add_test(NAME voice COMMAND voice_test)

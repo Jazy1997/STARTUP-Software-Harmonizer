@@ -16,6 +16,7 @@
 //   g++ -O2 -std=c++20 -Isrc tests/psola_test.cpp src/dsp/PsolaShifter.cpp -o psola_test
 
 #include "dsp/PsolaShifter.h"
+#include "TestSignals.h"
 
 #include <cstdio>
 #include <vector>
@@ -24,235 +25,12 @@
 
 static constexpr double SR    = 48000.0;
 static constexpr int    BLOCK = 256;
-static constexpr double kPi   = 3.14159265358979323846;
 
-// ---------------------------------------------------------------------------
-// Generatore: treno di impulsi a f0 filtrato da una risonanza fissa.
-// Modello sorgente-filtro elementare: le formanti stanno nel filtro e NON
-// dipendono da f0. E' il segnale giusto per verificare che pitch e formanti
-// siano davvero indipendenti.
-// ---------------------------------------------------------------------------
-struct Resonator
-{
-    double b0 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
-
-    void set (double freq, double q, double sr)
-    {
-        const double w = 2.0 * kPi * freq / sr;
-        const double r = std::exp (-w / (2.0 * q));
-        a1 = -2.0 * r * std::cos (w);
-        a2 = r * r;
-        b0 = (1.0 - r);
-    }
-
-    double process (double x)
-    {
-        const double y = b0 * x - a1 * z1 - a2 * z2;
-        z2 = z1; z1 = y;
-        return y;
-    }
-};
-
-// Una sola risonanza, non due: con due formanti "il picco dello spettro" e'
-// ambiguo e la misura salta dall'una all'altra rendendo il test inaffidabile.
-static std::vector<float> makeVowel (double f0, double seconds,
-                                     double formant1 = 1100.0)
-{
-    const int n = (int) (seconds * SR);
-    std::vector<float> v ((size_t) n, 0.0f);
-
-    Resonator r1;
-    r1.set (formant1, 10.0, SR);
-
-    double phase = 0.0;
-    const double inc = f0 / SR;
-
-    for (int i = 0; i < n; ++i)
-    {
-        phase += inc;
-        double pulse = 0.0;
-        if (phase >= 1.0) { phase -= 1.0; pulse = 1.0; }
-
-        const double y = r1.process (pulse);
-        v[(size_t) i] = (float) (4.0 * y);
-    }
-    return v;
-}
-
-// Come makeVowel, ma f0 varia linearmente nel tempo da f0Start a f0End:
-// esercita il ricambio continuo di epoch (test 7), mai messo alla prova
-// dalla suite originale, che passa sempre una f0 costante.
-static std::vector<float> makeSweptVowel (double f0Start, double f0End, double seconds,
-                                          double formant1 = 1100.0)
-{
-    const int n = (int) (seconds * SR);
-    std::vector<float> v ((size_t) n, 0.0f);
-
-    Resonator r1;
-    r1.set (formant1, 10.0, SR);
-
-    double phase = 0.0;
-    for (int i = 0; i < n; ++i)
-    {
-        const double t  = (double) i / (double) n;
-        const double f0 = f0Start + (f0End - f0Start) * t;
-        phase += f0 / SR;
-        double pulse = 0.0;
-        if (phase >= 1.0) { phase -= 1.0; pulse = 1.0; }
-
-        const double y = r1.process (pulse);
-        v[(size_t) i] = (float) (4.0 * y);
-    }
-    return v;
-}
-
-// ---------------------------------------------------------------------------
-// Misura di f0 per autocorrelazione, con interpolazione parabolica del picco.
-// ---------------------------------------------------------------------------
-static double measureF0 (const std::vector<float>& x, int from, int len)
-{
-    const int minLag = (int) (SR / 800.0);
-    const int maxLag = (int) (SR / 50.0);
-
-    // ATTENZIONE - errore facile e gia' commesso una volta (vedi CLAUDE.md,
-    // "un test che fallisce potrebbe essere il test sbagliato"). L'auto-
-    // correlazione grezza (somma dei prodotti, senza rimozione della media
-    // e senza normalizzazione per l'energia) non e' confrontabile fra lag
-    // diversi: sceglie sistematicamente la sub-armonica e fa sembrare rotto
-    // un pitch shifter che funziona. Serve la correlazione normalizzata.
-    std::vector<double> v ((size_t) (len + maxLag + 2));
-    double mean = 0.0;
-    for (size_t i = 0; i < v.size(); ++i) { v[i] = x[(size_t) from + i]; mean += v[i]; }
-    mean /= (double) v.size();
-    for (auto& s : v) s -= mean;
-
-    double e0 = 0.0;
-    for (int i = 0; i < len; ++i) e0 += v[(size_t) i] * v[(size_t) i];
-    if (e0 <= 0.0) return 0.0;
-
-    std::vector<double> ac ((size_t) (maxLag + 2), 0.0);
-
-    for (int lag = minLag; lag <= maxLag; ++lag)
-    {
-        double num = 0.0, el = 0.0;
-        for (int i = 0; i < len; ++i)
-        {
-            const double b = v[(size_t) (i + lag)];
-            num += v[(size_t) i] * b;
-            el  += b * b;
-        }
-        ac[(size_t) lag] = (el > 0.0) ? num / std::sqrt (e0 * el) : 0.0;
-    }
-
-    // Correzione dell'errore d'ottava: si sceglie il PRIMO massimo locale che
-    // arrivi entro il 90% del massimo assoluto, non il massimo assoluto
-    // (stessa logica della soglia assoluta di YIN).
-    double acMax = 0.0;
-    for (int lag = minLag; lag <= maxLag; ++lag) acMax = std::max (acMax, ac[(size_t) lag]);
-
-    int best = -1;
-    for (int lag = minLag + 1; lag < maxLag; ++lag)
-        if (ac[(size_t) lag] >= 0.90 * acMax
-            && ac[(size_t) lag] > ac[(size_t) (lag - 1)]
-            && ac[(size_t) lag] >= ac[(size_t) (lag + 1)])
-        { best = lag; break; }
-
-    if (best <= minLag || best >= maxLag) return 0.0;
-
-    const double a = ac[(size_t) (best - 1)];
-    const double b = ac[(size_t) best];
-    const double c = ac[(size_t) (best + 1)];
-    const double denom = (a - 2.0 * b + c);
-    const double delta = (denom != 0.0) ? 0.5 * (a - c) / denom : 0.0;
-
-    return SR / ((double) best + delta);
-}
-
-// ---------------------------------------------------------------------------
-// Posizione del picco formantico: proxy numerico delle formanti.
-// ---------------------------------------------------------------------------
-static double formantPeak (const std::vector<float>& x, int from, int len,
-                           double loHz = 300.0, double hiHz = 3500.0)
-{
-    const double stepHz = 20.0;
-    const int    nbins  = (int) ((hiHz - loHz) / stepHz) + 1;
-
-    std::vector<double> mag ((size_t) nbins, 0.0);
-
-    for (int k = 0; k < nbins; ++k)
-    {
-        const double freq = loHz + k * stepHz;
-        const double w    = 2.0 * kPi * freq / SR;
-        double re = 0.0, im = 0.0;
-
-        for (int i = 0; i < len; ++i)
-        {
-            const double win = 0.5 - 0.5 * std::cos (2.0 * kPi * i / len);
-            const double s   = (double) x[(size_t) (from + i)] * win;
-            re += s * std::cos (w * i);
-            im -= s * std::sin (w * i);
-        }
-        mag[(size_t) k] = std::sqrt (re * re + im * im);
-    }
-
-    // La lisciatura deve essere piu' larga della spaziatura fra le armoniche
-    // (qui 200 Hz, cioe' 10 bin): con una finestra piu' stretta il massimo si
-    // aggancia a una singola armonica invece che alla formante.
-    std::vector<double> sm ((size_t) nbins, 0.0);
-    for (int k = 0; k < nbins; ++k)
-    {
-        double acc = 0.0; int cnt = 0;
-        for (int d = -6; d <= 6; ++d)
-        {
-            const int kk = k + d;
-            if (kk >= 0 && kk < nbins) { acc += mag[(size_t) kk]; ++cnt; }
-        }
-        sm[(size_t) k] = acc / cnt;
-    }
-
-    int best = 0;
-    for (int k = 0; k < nbins; ++k) if (sm[(size_t) k] > sm[(size_t) best]) best = k;
-
-    return loHz + best * stepHz;
-}
-
-// ---------------------------------------------------------------------------
-static double maxJump (const std::vector<float>& x, int from, int len)
-{
-    double m = 0.0;
-    for (int i = from + 1; i < from + len; ++i)
-        m = std::max (m, (double) std::fabs (x[(size_t) i] - x[(size_t) (i - 1)]));
-    return m;
-}
-
-static double rms (const std::vector<float>& x, int from, int len)
-{
-    double s = 0.0;
-    for (int i = 0; i < len; ++i)
-        s += (double) x[(size_t) (from + i)] * (double) x[(size_t) (from + i)];
-    return std::sqrt (s / len);
-}
-
-// Minimo, su una finestra scorrevole, dell'RMS a breve termine. Un motore
-// che smette di sovrapporre i grani (problema individuato nel port, vedi
-// handsoff.md) produce vuoti periodici: il minimo crolla molto sotto l'RMS
-// medio anche se il livello medio sembra a posto.
-static double minShortTimeRms (const std::vector<float>& x, int from, int len, int win)
-{
-    double m = 1.0e18;
-    const int hop = std::max (1, win / 2);
-    for (int i = 0; i + win <= len; i += hop)
-        m = std::min (m, rms (x, from + i, win));
-    return m;
-}
-
-static bool allFinite (const std::vector<float>& x)
-{
-    for (float v : x)
-        if (! std::isfinite (v))
-            return false;
-    return true;
-}
+// makeVowel/makeSweptVowel/measureF0/formantPeak/maxJump/rms/minShortTimeRms/
+// allFinite/centsError: estratte in tests/TestSignals.h (sessione 16) per
+// essere condivise con tests/voice_test.cpp — stessa identica matematica,
+// solo il sample rate e' diventato un parametro esplicito invece della
+// costante globale SR di questo file. Vedi TestSignals.h per i dettagli.
 
 // ---------------------------------------------------------------------------
 static std::vector<float> runShifter (const std::vector<float>& in,
@@ -273,23 +51,17 @@ static std::vector<float> runShifter (const std::vector<float>& in,
     return out;
 }
 
-static double centsError (double measured, double expected)
-{
-    if (measured <= 0.0 || expected <= 0.0) return 1.0e9;
-    return 1200.0 * std::log2 (measured / expected);
-}
-
 // ---------------------------------------------------------------------------
 int main()
 {
     int failures = 0;
     const double f0in = 200.0;
-    const auto input = makeVowel (f0in, 1.5);
+    const auto input = makeVowel (f0in, 1.5, SR);
 
     const int anaFrom = (int) (0.8 * SR);
     const int anaLen  = 8192;
 
-    const double inPeak = formantPeak (input, anaFrom, anaLen);
+    const double inPeak = formantPeak (input, anaFrom, anaLen, SR);
     const double inRms  = rms (input, anaFrom, anaLen);
 
     std::printf ("Segnale di test: vocale sintetica, f0 = %.1f Hz, "
@@ -309,7 +81,7 @@ int main()
         const auto   out   = runShifter (input, f0in, st, 1.0);
 
         const double expected = f0in * alpha;
-        const double measured = measureF0 (out, anaFrom, anaLen);
+        const double measured = measureF0 (out, anaFrom, anaLen, SR);
         const double err      = centsError (measured, expected);
         const bool   ok       = std::fabs (err) < 10.0;
 
@@ -328,7 +100,7 @@ int main()
     {
         const auto out = runShifter (input, f0in, st, 1.0);
 
-        const double c    = formantPeak (out, anaFrom, anaLen);
+        const double c    = formantPeak (out, anaFrom, anaLen, SR);
         const double dev  = 100.0 * (c - inPeak) / inPeak;
 
         const bool   ok   = std::fabs (dev) < 15.0;
@@ -348,10 +120,10 @@ int main()
     {
         const auto out = runShifter (input, f0in, 0.0, beta);
 
-        const double c        = formantPeak (out, anaFrom, anaLen);
+        const double c        = formantPeak (out, anaFrom, anaLen, SR);
         const double expected = inPeak * beta;
         const double devC     = 100.0 * (c - expected) / expected;
-        const double measured = measureF0 (out, anaFrom, anaLen);
+        const double measured = measureF0 (out, anaFrom, anaLen, SR);
         const double errF0    = centsError (measured, f0in);
 
         const bool ok = std::fabs (devC) < 12.0 && std::fabs (errF0) < 10.0;
@@ -428,7 +200,7 @@ int main()
     std::printf ("\nTEST 7 - tenuta con f0 variabile nel tempo (ricambio "
                  "continuo di epoch)\n");
     {
-        const auto swept = makeSweptVowel (150.0, 260.0, 1.5);
+        const auto swept = makeSweptVowel (150.0, 260.0, 1.5, SR);
         PsolaShifter ps;
         ps.prepare (SR, BLOCK, Stability::numLevels - 1);
         ps.setPitchShiftSemitones (0.0f);
@@ -502,8 +274,8 @@ int main()
     std::printf ("\nTEST 9 - riattivazione di uno slot fisico dopo un periodo di inattivita'\n"
                  "         (nessuna chiamata a process() durante il 'mute', nessun reset)\n");
     {
-        const auto signalA = makeVowel (350.0, 0.3, 1800.0); // nota "precedente", timbro diverso
-        const auto signalB = makeVowel (220.0, 0.3, 1100.0); // nota "nuova"
+        const auto signalA = makeVowel (350.0, 0.3, SR, 1800.0); // nota "precedente", timbro diverso
+        const auto signalB = makeVowel (220.0, 0.3, SR, 1100.0); // nota "nuova"
 
         // Baseline: uno shifter MAI usato prima (equivalente a uno slot
         // fisico fresco, o a uno slot correttamente resettato) che processa

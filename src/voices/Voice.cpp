@@ -43,6 +43,23 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
     if (shifter == nullptr || isSilent())
         return;
 
+    // Sessione 16 (fix dell'intonazione stantia al riattacco, vedi
+    // Voice.h/setMuted per la diagnosi completa): consumato qui, non dentro
+    // setTargetOffsetSemitones, perche' l'ordine con cui i due chiamanti
+    // impostano target/mute e' diverso (PhraseScheduler.cpp: setMuted POI
+    // setTarget; PlayModeInput.cpp: setTarget al note-on, POI setMuted
+    // quando il segnale torna stabile, anche blocchi dopo) — processAdd()
+    // e' l'unico punto che arriva sempre PER ULTIMO in entrambi i casi,
+    // quando il target giusto e' gia' stato impostato per certo.
+    // offsetGlide.reset(getTarget()) aggancia current al target CORRENTE,
+    // qualunque esso sia in questo momento: nessuna scivolata dalla nota
+    // precedente occupante lo stesso slot fisico.
+    if (justReactivated)
+    {
+        offsetGlide.reset (offsetGlide.getTarget());
+        justReactivated = false;
+    }
+
     // Sessione 13 (click residui): con un buffer host piu' lungo della
     // rampa (8ms = 353 campioni a 44.1kHz; l'utente ha misurato 4096
     // campioni con MME/DirectX in Ableton) ampGlide.process(numSamples)

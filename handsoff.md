@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-04 (sessione 15)
+> Ultimo aggiornamento: 2026-08-05 (sessione 18)
 
 ---
 
@@ -32,6 +32,188 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 17-18 — "una prima voce perfetta": dal file reale al gate dell'onset, causa reale trovata e corretta (era diversa da tutte le ipotesi precedenti):**
+
+L'utente ha riascoltato il fix di sessione 16 (click a inizio nota): migliorato, non
+risolto — restano click a inizio nota E "in mezzo alla nota", piu' un'instabilita' timbrica
+generale. Ha poi isolato empiricamente in Ableton che il difetto c'e' gia' con Voices=1, e ha
+chiesto di **fermare l'indagine multi-voce** e concentrarsi solo su V1. Ha fornito tre file
+WAV reali in una nuova cartella non versionata `SAMPLE TEST/` (fuori da git/ctest per scelta
+esplicita): due sorgenti dry (`Test 1 - Basic Silk Horns.wav`, `Test 2 - E-Piano.wav`,
+44.1kHz stereo 16-bit, 8.00s) e un export VERO del plugin (`Export V1.wav`, Voices=1/Dry=0/
+Wet=1, stesso formato/durata — confrontabile campione per campione col dry).
+
+- **Sessione 17 (prima di avere l'export)**: tre ipotesi testate offline su segnale reale con
+  un nuovo strumento diagnostico (`tests/sample_click_finder.cpp`, non in ctest — dipende da
+  file esterni) — voce mai riattivata con offset fisso, riattivazioni guidate da onset reali,
+  offset che segue `PitchLatch` dal vivo con una tabella armonica INVENTATA — tutte pulite su
+  entrambi i file. Con l'arrivo dell'export reale, si e' scoperto che questo risultato "pulito"
+  era in parte un artefatto della metrica usata (vedi sotto), non prova di assenza del bug.
+- **Fatto derivato a mano da `PresetLibrary.cpp::generateDropVoicingTable`**: la colonna V1
+  vera del preset "Maj" (root C) e' `[0,-1,-2,-3,0,-1,-2,0,-1,-2,-3,0]` per i 12 gradi — V1 non
+  e' MAI muta in un accordo a 4+ toni (la regola "voci oltre numTones restano mute" colpisce
+  solo v>=4). Confermata dalla sequenza di offset misurata sull'export reale (0/-2/0/0 su
+  C4->D4->E4->C4) — `HarmonyEngine`/`PresetLibrary`/`PitchLatch` sono fuori causa.
+- **Nuovi strumenti diagnostici** (entrambi non in ctest, dipendono da `SAMPLE TEST/`, non
+  versionata): `tests/SampleAnalysis.h` (header-only, nessuna dipendenza JUCE, include
+  `TestSignals.h` invece di duplicarne rms/maxJump/centsError) con `readWav`/`downmix`/
+  `writeWavMono`, `measureFrame` (f0 + periodicita' per finestra, autocorrelazione con
+  correzione d'ottava — stessa idea di `measureF0` ma espone anche il picco di correlazione),
+  `envelopeRms`/`bestLagByEnvelope` (allineamento per inviluppo, non per forma d'onda — su un
+  segnale periodico la correlazione di forma d'onda e' ambigua a meno di multipli del periodo),
+  `fitWindow` (residuo di trasparenza in dB per finestra), `findClicks` (la metrica di
+  sessione 17, con un commento di testa che ne documenta il limite — vedi sotto), e la tabella
+  V1/Maj condivisa. `tests/real_export_probe.cpp` (nuovo target CMake): confronta DRY e WET
+  REALI, con una modalita' di traccia fine per ispezionare un intervallo di tempo campione per
+  campione prima di ipotizzare un meccanismo.
+- **F-1, scoperta cruciale**: `findClicks` (slew vs baseline, la metrica di sessione 17) da'
+  **0 anomalie sull'export reale che l'utente sente difettoso**. Le tre passate "pulite" di
+  sessione 17 non erano prova di assenza del bug — erano prova che la metrica non lo vede. Il
+  difetto reale non e' un salto di ampiezza in un campione, e' descritto sotto.
+- **Ipotesi del periodo intero in PsolaShifter (D1), verificata e NON confermata in modo
+  netto**: `PsolaShifter::currentPeriod()` arrotonda il periodo a un intero
+  (`P=lround(sr/f0)`), quindi l'intonazione reale e' `alpha*sr/P` non l'ideale `alpha*f0` — un
+  meccanismo vero, verificato leggendo il codice. Ma misurato per tratto sull'export reale (5
+  plateau): il modello a periodo intero spiega meglio il dato in 3 casi su 5, l'ideale negli
+  altri 2, scarti tutti piccoli (1-4 cent, sotto probabile soglia di percezione). Non
+  abbandonata (resta un piccolo intervento pianificato, vedi §6), ma NON e' la causa
+  principale del sintomo riportato — un'ipotesi "calcolabile dal codice" rivelatasi solo
+  parzialmente vera una volta misurata, la stessa lezione di sessione 16 su H1.
+- **Causa reale trovata e confermata due volte indipendenti**: a t≈5.95s nell'export reale, il
+  WET crolla a periodicita' 0.000 (silenzio totale) mentre il DRY sta ancora suonando (nota E4
+  in decadimento naturale, rms 0.014->0.011, periodicita' 1.000 costante — NON una pausa fra
+  due note). Causa: `OnsetDetector` (`src/dsp/OnsetDetector.cpp`) usa `cycfi::q::onset_gate`
+  con soglie fisse `(-24dB onset, -30dB slope, -36dB release)` — il decadimento naturale
+  della nota attraversa -36dB di picco proprio li', il gate si chiude, la voce si ammutolisce
+  (dissolvenza 8ms) e tace per il resto della coda della nota, anche se la nota e' ancora
+  chiaramente udibile e perfettamente periodica nel dry. **Confermato indipendentemente**
+  riproducendo l'intera catena offline (`sample_click_finder.cpp`, nuova Passata 4: modello a
+  due slot fisici che riproduce `PhraseScheduler` con `keepTails=false` a numVoices=1, usando
+  `PitchDetector`/`OnsetDetector` reali — nessuna dipendenza JUCE) e ri-analizzando l'uscita
+  con `real_export_probe`: stesso identico buco, stessa posizione, stessa periodicita' a 0.000
+  — riproducibile SENZA Ableton.
+- **Trovato anche un secondo meccanismo, distinto**: cali di periodicita' piu' piccoli (0.89-
+  0.93) dentro note sostenute ad alto livello (es. t≈0.77s, rms 0.13-0.15, ben sopra qualunque
+  soglia del gate) — la voce non si ammutolisce mai qui, e' jitter fine del motore PSOLA su
+  materiale reale non impulsivo anche in unisono. NON corretto in questa sessione (fuori
+  scope, vedi §6) — probabile causa della sensazione generale di "non stabile", distinta dal
+  buco grande.
+- **Fix**: `src/dsp/OnsetDetector.cpp`, `release_threshold` del gate abbassato da -36dB a
+  -45dB (9dB piu' permissivo). `onset_threshold` (-24dB) e `slope_threshold` (-30dB) — quelli
+  che decidono se un NUOVO attacco apre il gate — non toccati: il fix riguarda solo quando il
+  gate si richiude su una nota che si spegne, non la sensibilita' agli attacchi. Compromesso
+  noto e accettato consapevolmente: un rilascio piu' permissivo tiene il gate aperto piu' a
+  lungo, quindi in un legato molto stretto la nota successiva rischia (in teoria, non
+  verificato quantitativamente qui) di non essere piu' riconosciuta come un nuovo attacco
+  (stessa classe di bug delle sessioni 10-12) — -45dB e' una scelta moderata, non il minimo
+  tecnico, scelta apposta per non spingersi troppo in quella direzione.
+- **Verificato DOPO il fix**: rigenerata la Passata 4 offline e ri-analizzata con
+  `real_export_probe` — il buco e' sparito completamente ("Buchi: nessuno", nessuna
+  periodicita' a 0.000 in quella zona; le finestre instabili totali scendono da 40 a 36 su
+  792, coerente con l'aver tolto UN meccanismo su due). Tutte e 6 le suite verdi via `ctest`
+  (nessuna toccava `OnsetDetector` prima, ma nessuna regressione). Build VST3/Standalone
+  riuscite (solo il consueto fallimento di copia post-build per permessi). `pluginval
+  --strictness-level 10` **SUCCESS**.
+- **Non toccato**: `PsolaShifter` (l'ipotesi D1 resta un intervento pianificato, non ancora
+  fatto — vedi §6), `PitchDetector`, `HarmonyEngine`, `PresetLibrary`, `PhraseScheduler` reale
+  (la Passata 4 lo *riproduce* con un modello a 2 slot per restare headless/senza `juce_core`,
+  non lo modifica), tutta la UI di sessione 15, `CsvIo`, il meccanismo di sessione 14 (resta
+  nel codice, invariato, era comunque un bug reale per il suo meccanismo specifico).
+- **NON ancora confermato all'ascolto** (CLAUDE.md regola 12): l'utente deve fare un nuovo
+  export identico (stesse impostazioni di `Export V1.wav`) e confermare se il buco/calo a
+  meta' delle note lunghe e' sparito. Il secondo meccanismo (jitter fine anche in unisono) e
+  l'ipotesi D1 (periodo intero) restano da affrontare — vedi §6.
+
+**Novita' sessione 16 — click a inizio nota: ripartenza da zero, causa reale trovata e corretta (era diversa da quella di sessione 14):**
+
+A inizio sessione l'utente ha chiesto il prossimo passo; riletti CLAUDE.md/handsoff/PRD, la
+priorita' indicata da §6 era il click a inizio nota (sessione 14 SMENTITA all'ascolto: il fix
+del reset dello shifter restava vero e misurato ma non era la causa, o non l'unica). Concordato
+esplicitamente con l'utente di ripartire DA ZERO sulle ipotesi (non dare per assodato nulla di
+sessione 14), invece di limitarsi ad "approfondire" — la lezione esplicita di CLAUDE.md regola
+13. Due dati nuovi raccolti PRIMA di scrivere qualunque codice: il click si sente **solo sul
+wet, mai sul dry** (esclude dry/wet glide, bypass, downmix, sorgente — la causa e' per forza
+dentro `Voice`/`PitchShifter`), e **persiste identico con un buffer ASIO piccolo (1024
+campioni)**, non solo con MME/4096 di sessione 13 (indebolisce fortemente l'ipotesi che sia un
+artefatto di block size).
+
+- **Ipotesi principale scritta PRIMA di misurare (H1)**: `PsolaShifter::reset()` finge che i
+  primi `latency` campioni di silenzio siano gia' entrati (`absWrite=latency, absRead=0`); la
+  dissolvenza anti-click di `Voice` (`kDeclickMs`=8ms=353 campioni) e' molto piu' corta della
+  latenza dichiarata del motore (13.6-30ms secondo Stability) — sembrava plausibile che la
+  rampa si esaurisse SUL SILENZIO e che l'uscita saltasse a piena scala quando il segnale vero
+  emergeva dalla pipeline. Calcolabile dal codice, ma — coerentemente con l'errore gia' fatto
+  in sessione 14 — **non ancora misurata**.
+- **Nuovo `tests/voice_test.cpp`** (e nuovo target CMake `voice_test`, headless come le altre
+  suite: nessuna dipendenza JUCE, collega `Voice.cpp` + il motore PSOLA reale, non un doppio
+  finto): misura l'inviluppo e lo slew di ampiezza di una `Voice` alla riattivazione da
+  silenzio, su tutti e 5 i livelli di Stability e due block size molto diversi (64/1024),
+  con un controllo negativo obbligatorio (che la misura di slew non segnali nulla su un tratto
+  di uscita gia' a regime) prima di fidarsi di qualunque altro numero — stesso principio di
+  CLAUDE.md regola 13. Estratto `tests/TestSignals.h` da `tests/psola_test.cpp` (generatore di
+  segnale, `measureF0`, `formantPeak`, ecc. — stessa matematica, solo il sample rate diventa un
+  parametro esplicito) per condividerlo fra le due suite invece di duplicarlo; verificato che
+  l'estrazione fosse comportamentale-identica rieseguendo `psola_test` subito dopo (stessi 9
+  gruppi di verifiche, stessi valori numerici).
+- **Risultato della misura — H1 REFUTATA**: `slewAtt/Regime = 1.00` su tutti i 10 combinazioni
+  Stability×blockSize, nessuna discontinuita' rilevata. L'attacco e' in realta' una salita
+  LISCIA (~232 campioni, ~5ms), solo RITARDATA (18-35ms secondo Stability, coerente con la
+  latenza dichiarata) rispetto a dove la rampa di `ampGlide` aveva gia' finito. La mia ipotesi
+  "calcolabile dal codice" era sbagliata una volta davvero misurata — esattamente il tipo di
+  errore che lo strumento di misura serviva a intercettare prima di scrivere un fix inutile.
+- **H4 (dipendenza dal block size host) ESCLUSA**: il punto di salto (`t1`) e' identico
+  (differenza 0 campioni) fra blocco 64 e 1024 su tutti i livelli di Stability — coerente con
+  la prova dell'utente (click identico a 1024 ASIO e 4096 MME).
+- **H3 CONFERMATA, e' la causa reale**: `offsetGlide` (il `Glide` che porta l'offset armonico
+  in semitoni verso il valore della cella corrente, FR-17) non veniva MAI "agganciato" al nuovo
+  target quando uno slot fisico silenzioso viene riassegnato a una nuova nota — restava fermo
+  al valore della nota PRECEDENTE su quello stesso slot e ci scivolava sopra in `glideTimeMs`
+  (30ms di default), invece di scattare subito. Misurato PRIMA del fix con `voice_test.cpp`:
+  riproducendo la sequenza esatta di `PhraseScheduler.cpp` (converge su +7 semitoni, si
+  ammutolisce, si riattiva con target -5), l'intonazione del nuovo attacco risultava a ~195
+  cent dal nuovo target (doveva essere vicina a 0). Spiega bene anche "specialmente legato":
+  in legato lo slot fisico viene riassegnato quasi ad ogni nota (la dissolvenza dura solo 8ms,
+  molto meno della durata tipica di una nota), e il preset armonico da' quasi sempre un offset
+  diverso da nota a nota (vedi la tabella 12x8) — un rapido "chirp" di intonazione a ogni
+  attacco, mascherato in staccato dal vero transiente della nota ma non in legato.
+- **Fix**: nuovo `Voice::justReactivated` (`src/voices/Voice.h`), impostato nella stessa
+  transizione silenzio->attiva gia' usata per il reset dello shifter (sessione 14) — non un
+  secondo meccanismo scollegato, un'estensione dello stesso punto di aggancio gia' verificato
+  corretto. Consumato pero' in `Voice::processAdd` (`src/voices/Voice.cpp`), non dentro
+  `setTargetOffsetSemitones`: i due chiamanti impostano target e mute in ORDINE OPPOSTO
+  (`PhraseScheduler.cpp`: `setMuted(false)` poi `setTargetOffsetSemitones`; `PlayModeInput.cpp`:
+  `setTargetOffsetSemitones` al note-on, `setMuted(false)` solo quando il segnale torna
+  stabile, anche blocchi dopo) — `processAdd` e' l'unico punto che arriva sempre PER ULTIMO in
+  entrambi i casi, quando il target giusto e' gia' stato impostato per certo. Alla prima
+  chiamata utile dopo la riattivazione, `offsetGlide.reset(offsetGlide.getTarget())` (nuovo
+  `Glide::getTarget()` in `src/dsp/Glide.h`) aggancia `current` al target corrente, qualunque
+  esso sia — zero rampa per il NUOVO attacco. Il percorso FR-17 (cambio accordo su una nota
+  GIA' attiva, non appena riattivata) non e' toccato: `justReactivated` e' vero solo sulla
+  transizione dal silenzio, mai per una voce gia' in corso — quel caso deve continuare a
+  glidare, ed e' esattamente cosi'.
+- **Verificato DOPO il fix**: `voice_test` — lo stesso scenario che misurava ~195 cent ora
+  misura ~4 cent (controllo positivo, voce mai riattivata: ~4 cent — stesso ordine di
+  grandezza, conferma che la misura di F0 e' fedele). L'asserzione H3 in `voice_test.cpp` e'
+  stata invertita (prima "OK (bug confermato)" con soglia >100 cent, ora richiede <15 cent) —
+  stesso schema di Test 8/9 in `psola_test.cpp`. Tutte e 6 le suite verdi via `ctest`
+  (`psola`, `override_manager`, `pitch_latch`, `glide`, `cell_input_parser`, `voice` — nuova).
+  Build VST3 e Standalone riuscite in Release (solo il consueto fallimento di copia post-build
+  per permessi). `pluginval --strictness-level 10` **SUCCESS** su VST3 (nessuna occorrenza di
+  fail/error/crash nel log completo).
+- **Non toccato**: `PsolaShifter` (nessun cambiamento necessario: H1, l'unica ipotesi che lo
+  riguardava, e' stata refutata), `PitchDetector`, `OnsetDetector`, `HarmonyEngine`,
+  `PresetLibrary`, tutta la UI di sessione 15, `CsvIo`. Il meccanismo di sessione 14 (reset
+  dello shifter alla riattivazione) resta nel codice, invariato: era comunque un bug reale
+  (Test 9 di `psola_test.cpp` lo dimostra ancora), solo non la causa di QUESTO sintomo.
+- **NON ancora confermato all'ascolto** (CLAUDE.md regola 12): l'utente deve riascoltare nella
+  stessa config di riferimento di questa sessione (ASIO 1024, Stability Balanced, preset Maj,
+  Dry 0/Wet alto, 4 voci, clip audio legata) e confermare se il click a inizio nota e' sparito.
+  Se persiste, la misura ha comunque ristretto il campo: H1/H2 (discontinuita' di ampiezza) e
+  H4 (block size) sono escluse per calcolo, quindi la causa residua andrebbe cercata altrove
+  (posizionamento degli epoch su segnali non impulsivi, o le 8 istanze PSOLA indipendenti che
+  correlano fra loro — i due candidati gia' annotati in sessione 12 per il timbro "robotico",
+  mai esclusi come concorrenti anche per un click).
 
 **Novita' sessione 15 — inizio M5 (UI): editor tabella preset armonici 12x8:**
 
@@ -903,7 +1085,60 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Sessione 15 — DA VERIFICARE VISIVAMENTE (priorita' immediata della prossima sessione):**
+**Sessione 18 — DA CONFERMARE ALL'ASCOLTO (priorita' immediata della prossima sessione):**
+il fix del gate dell'onset (`OnsetDetector.cpp`, release_threshold -36dB->-45dB, vedi §2) e'
+verificato per calcolo su due percorsi indipendenti (export reale + riproduzione offline
+senza DAW): il buco a t≈5.95s in `Export V1.wav` (periodicita' crollata a 0.000 mentre la
+nota E4 stava ancora decadendo naturalmente nel dry) e' sparito completamente dopo il fix in
+entrambi i confronti. Build/test/pluginval tutti verdi. **L'utente deve fare un NUOVO export
+identico** (stesse impostazioni di `Export V1.wav`: Voices=1, Dry=0, Wet=1, preset Maj, root
+C, Stability Balanced, sullo stesso file "Test 1 - Basic Silk Horns.wav") e confermare
+all'ascolto se il calo/buco a meta' delle note lunghe e' sparito — CLAUDE.md regola 12 vieta
+di dichiararlo risolto solo per calcolo. Se l'utente fornisce il nuovo export, rieseguire
+`real_export_probe` sul dry originale e sul nuovo export per un confronto numerico
+diretto (non solo un ascolto) prima di chiudere il punto.
+
+**Prossimi due interventi gia' concordati con l'utente per quando si riprende ("entrambi,
+buco prima" — il buco e' stato affrontato in questa sessione, restano gli altri due):**
+1. **D1 — periodo intero in `PsolaShifter::currentPeriod()`** (`P=lround(sr/f0)`): verificato
+   che il meccanismo esiste per costruzione, ma misurato sull'export reale con supporto
+   MISTO (3 tratti su 5 lo confermano, 2 no, scarti piccoli 1-4 cent — non la causa
+   principale del sintomo, ma un piccolo contributo plausibile). Intervento pianificato: far
+   diventare `currentPeriod()` un `double` invece di un `int` (clampato a `minPeriod`/
+   `maxPeriod`), propagare la parte frazionaria in `synthesise()`/`detectEpochs()`. `Lg`/`W`
+   restano interi (lunghezze di grano, non fase). Verificare con un test dedicato in
+   `psola_test.cpp` a periodo non intero (es. SR=44100, f0=261.63 C4) PRIMA di scrivere il
+   fix — deve fallire con la tolleranza stretta (3 cent) e passare dopo, stesso schema di
+   Test 8/9. Ri-misurare con `real_export_probe` dopo per vedere se i cali di periodicita'
+   piccoli (vedi punto 2) migliorano.
+2. **Jitter fine anche in unisono** (periodicita' 0.89-0.93 dentro note sostenute ad alto
+   livello, es. t≈0.77s in "Silk Horns", MAI il gate coinvolto — livello ben sopra qualunque
+   soglia): non ancora diagnosticato oltre "probabilmente il motore PSOLA su segnale non
+   impulsivo" — i due candidati gia' annotati dalla sessione 12 restano aperti (posizionamento
+   degli epoch come massimo di `|x|`, corretto per segnali impulsivi ma non necessariamente
+   per fiati/voce reali; correlazione fra le 8 istanze PSOLA — quest'ultimo pero' non si
+   applica a V1 da sola, quindi probabilmente non e' la causa qui). Da riprendere DOPO D1: se
+   D1 riduce questi cali, il meccanismo e' (anche) il periodo quantizzato; se restano
+   identici, la causa e' altrove e va cercata nel posizionamento degli epoch.
+
+**Sessione 16 — SUPERATO da sessione 17 all'ascolto (vedi sopra): il click a inizio nota era**
+**"migliorato, non risolto" — la ripartenza da zero di sessione 17-18 ha trovato la causa**
+**vera (gate dell'onset), non ancora questo testo. Lasciato per il contesto storico:**
+il fix del click a inizio nota (`Voice::justReactivated`, vedi §2) e' verificato per calcolo —
+`voice_test.cpp` misura ~4 cent di scostamento dal nuovo target dopo il fix, contro ~195 cent
+prima — build/test/pluginval tutti verdi, ma CLAUDE.md regola 12 vieta di dichiararlo risolto
+senza ascolto. **L'utente deve riascoltare nella stessa configurazione di riferimento di
+questa sessione** (ASIO Focusrite, buffer 1024, Stability Balanced, preset Maj, Dry 0/Wet
+alto, 4 voci, la stessa clip audio legata dello screenshot) e confermare se il click a inizio
+nota e' sparito. Se persiste, la misura di questa sessione ha comunque escluso per calcolo due
+classi di causa (discontinuita' di ampiezza/H1, dipendenza dal block size/H4) — i prossimi
+candidati sono il posizionamento degli epoch su segnali non impulsivi e la correlazione fra le
+8 istanze PSOLA indipendenti (gia' annotati in sessione 12 per il timbro "robotico", mai
+esclusi come concorrenti anche per questo sintomo — vedi sotto). Se invece e' sparito, resta
+comunque da riverificare che la Fase 4 (sotto-blocchi per il wobbling, mai iniziata, vedi sotto)
+non lo faccia ricomparire per un motivo diverso, dato che tocchera' lo stesso file.
+
+**Sessione 15 — DA VERIFICARE VISIVAMENTE (ancora aperta, seconda priorita'):**
 l'editor tabella preset 12x8 (M5, §8.2) e' scritto, compila, passa `pluginval`, e i dati
 mostrati corrispondono al calcolo atteso (verificato per calcolo su uno screenshot, vedi
 §2) — ma un tentativo di catturare uno screenshot completo della Standalone per verificare
@@ -929,7 +1164,10 @@ mostrato accanto al nome nella lista preset (§8.2, mitiga il rischio "CC posizi
 confonde"), indicatore stato licenza (placeholder, la logica vera e' M6), evidenziazione
 primi 5 preset, scaling 70-200% (FR-59), tema chiaro/scuro (FR-61, `[SHOULD]`).
 
-**Sessione 14 — SMENTITO ALL'ASCOLTO, messo IN STAND-BY su richiesta esplicita dell'utente:**
+**Sessione 14 — SMENTITO ALL'ASCOLTO, RIPRESO in sessione 16 (vedi §2): causa reale trovata**
+**(`Voice::justReactivated`, offsetGlide che non si agganciava al nuovo target), ora in attesa**
+**di conferma all'ascolto — vedi la voce "Sessione 16" in cima a questa sezione.** Testo
+originale della nota, per il contesto storico:
 il fix di `Voice::setMuted` (reset dello shifter alla riattivazione) e' stato verificato
 numericamente (Test 9: scostamento 0.214 senza reset, 0.0 con reset — la carry-over di
 stato PSOLA fra una nota e la successiva sullo stesso slot fisico E' un bug reale, dimo-

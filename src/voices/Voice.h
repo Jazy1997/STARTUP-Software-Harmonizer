@@ -42,9 +42,39 @@ public:
         // stato interno dello shifter — verificato numericamente in
         // tests/psola_test.cpp Test 9 (senza reset: scostamento misurabile
         // dal riferimento pulito; con reset: uscita bit-per-bit identica a
-        // uno slot mai usato prima).
-        if (! shouldBeMuted && isSilent() && shifter != nullptr)
-            shifter->reset();
+        // uno slot mai usato prima). SMENTITO ALL'ASCOLTO dall'utente in
+        // sessione 14: il meccanismo resta vero e misurato, ma non era la
+        // causa (o non l'unica) del click sentito — vedi handsoff.md
+        // sessione 16 per la causa confermata sotto (offsetGlide).
+        if (! shouldBeMuted && isSilent())
+        {
+            if (shifter != nullptr)
+                shifter->reset();
+
+            // Sessione 16 (ripartenza da zero sul click dopo che il fix di
+            // sessione 14 e' stato smentito all'ascolto — vedi handsoff.md
+            // §6): misurato con tests/voice_test.cpp che l'inviluppo di
+            // ampiezza NON ha discontinuita' alla riattivazione — la causa
+            // reale e' che offsetGlide non veniva mai "agganciato" al nuovo
+            // target quando uno slot silenzioso viene riassegnato:
+            // l'intonazione della voce restava quella della nota
+            // PRECEDENTE su questo stesso slot fisico e ci scivolava sopra
+            // in glideTimeMs (FR-17, 30ms di default), invece di scattare
+            // subito. Confermato per calcolo con voice_test.cpp
+            // (scostamento di ~195 cent dal nuovo target appena dopo il
+            // riattacco, prima di questo fix).
+            //
+            // justReactivated segnala la transizione a processAdd(), che la
+            // consuma alla prima chiamata utile agganciando offsetGlide al
+            // target CORRENTE (qualunque esso sia in quel momento — non
+            // serve conoscerlo qui): funziona sia quando il chiamante
+            // imposta il nuovo target PRIMA di chiamare setMuted(false)
+            // (PhraseScheduler.cpp) sia quando lo imposta DOPO, in un
+            // blocco successivo (PlayModeInput.cpp: target al note-on,
+            // setMuted solo quando il segnale torna stabile) — vedi
+            // Voice.cpp.
+            justReactivated = true;
+        }
 
         muted = shouldBeMuted;
         ampGlide.setTarget (shouldBeMuted ? 0.0f : 1.0f);
@@ -68,7 +98,12 @@ public:
     void setFormantOffsetSemitones (float semitones) noexcept { formantOffsetSemitones = semitones; }
 
     // Offset armonico grezzo (semitoni) prima del glide (FR-17): la rampa
-    // verso il nuovo valore avviene dentro processAdd, non qui.
+    // verso il nuovo valore avviene dentro processAdd, non qui. Imposta
+    // sempre e solo il TARGET — se questa chiamata segue una riattivazione
+    // da silenzio (justReactivated), e' processAdd() a decidere se agganciare
+    // subito invece di far scivolare la rampa (vedi Voice.cpp): questo
+    // metodo non ha bisogno di saperlo, funziona identico in entrambi i casi
+    // e per qualunque ordine di chiamata rispetto a setMuted().
     void setTargetOffsetSemitones (float semitones) noexcept { offsetGlide.setTarget (semitones); }
 
     int getLatencySamples() const;
@@ -94,6 +129,10 @@ private:
     static constexpr float kDeclickMs = 8.0f;
     ShiftMode mode = ShiftMode::move;
     bool muted = true;
+    // Sessione 16: vero dalla transizione silenzio->attiva (impostato in
+    // setMuted) fino a quando processAdd() lo consuma agganciando offsetGlide
+    // al target corrente invece di farlo scivolare — vedi setMuted/processAdd.
+    bool justReactivated = false;
     float formantSpread = 1.0f;         // FR-39 "attiva di default": formula a piena forza
     float formantOffsetSemitones = 0.0f;
 };
