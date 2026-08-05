@@ -238,6 +238,83 @@ int main (int argc, char** argv)
     if (instab.empty()) std::printf ("    nessuno\n");
 
     // =========================================================================
+    // 4b. CADENZA DEI DISTURBI (sessione 19 — "wobbling"): il dubbio e' se le
+    // micro-instabilita' di periodicita' ricorrono a un INTERVALLO REGOLARE
+    // (firma di sessione 13: parametri aggiornati una volta per blocco host,
+    // quindi un "gradino" alla frequenza di ripetizione del blocco) o in modo
+    // irregolare (piu' compatibile con jitter fine del motore/epoch,
+    // sessione 18). Soglia piu' sensibile di quella di sezione 4 (0.98 non
+    // 0.90): la prima traccia fine ispezionata a mano in questa sessione ha
+    // mostrato un glitch a periodicita' 0.92-0.93, sotto 0.90 non sarebbe
+    // mai stato contato. Registra l'ISTANTE DI INIZIO di ogni discesa sotto
+    // soglia (non il cluster intero) e guarda gli intervalli fra un inizio e
+    // il successivo — se molti intervalli si addensano vicino a un multiplo
+    // di una dimensione di blocco comune, e' la firma cercata.
+    // =========================================================================
+    std::printf ("\n=== 4b. CADENZA DEI DISTURBI (intervalli fra un calo di periodicita' e il successivo) ===\n");
+    std::vector<long> glitchOnsetSamples;
+    bool inGlitch = false;
+    for (size_t k = 0; k < dryFrames.size(); ++k)
+    {
+        const auto& df = dryFrames[k];
+        if (df.periodicity < 0.98 || df.f0Hz <= 0.0) { inGlitch = false; continue; }
+
+        const long wetFrom = (long) (k * (size_t) hop) + lag;
+        if (wetFrom < 0 || wetFrom + winLen > (long) wet.size()) continue;
+        const auto wf = measureFrame (wet, (int) wetFrom, winLen, sr);
+
+        const bool unstableHere = wf.periodicity < 0.98;
+        if (unstableHere && ! inGlitch)
+            glitchOnsetSamples.push_back ((long) (k * (size_t) hop));
+        inGlitch = unstableHere;
+    }
+
+    if (glitchOnsetSamples.size() < 3)
+    {
+        std::printf ("  troppo pochi eventi (%zu) per stimare una cadenza\n", glitchOnsetSamples.size());
+    }
+    else
+    {
+        std::vector<long> gaps;
+        for (size_t i = 1; i < glitchOnsetSamples.size(); ++i)
+            gaps.push_back (glitchOnsetSamples[i] - glitchOnsetSamples[i - 1]);
+
+        std::vector<long> sortedGaps = gaps;
+        std::sort (sortedGaps.begin(), sortedGaps.end());
+        const long median = sortedGaps[sortedGaps.size() / 2];
+
+        std::printf ("  %zu eventi, %zu intervalli — mediana=%ld campioni (%.1fms), min=%ld (%.1fms), max=%ld (%.1fms)\n",
+                     glitchOnsetSamples.size(), gaps.size(), median, 1000.0 * median / sr,
+                     sortedGaps.front(), 1000.0 * sortedGaps.front() / sr,
+                     sortedGaps.back(), 1000.0 * sortedGaps.back() / sr);
+
+        // Quanti intervalli cadono entro +-15% di un multiplo di ciascuna
+        // dimensione di blocco comune: se una dimensione spicca nettamente
+        // sulle altre, e' un indizio forte della firma di sessione 13.
+        static constexpr int kCommonBlockSizes[] = { 64, 128, 256, 512, 1024, 2048, 4096 };
+        std::printf ("  compatibilita' con block size comuni (intervalli entro +-15%% di un multiplo):\n");
+        for (int blockSize : kCommonBlockSizes)
+        {
+            int matches = 0;
+            for (long g : gaps)
+            {
+                if (g <= 0) continue;
+                const double multiple = std::round ((double) g / blockSize);
+                if (multiple < 1.0) continue;
+                const double expected = multiple * blockSize;
+                if (std::fabs ((double) g - expected) / expected < 0.15)
+                    ++matches;
+            }
+            std::printf ("    %5d campioni (%5.1fms): %d/%zu intervalli compatibili\n",
+                         blockSize, 1000.0 * blockSize / sr, matches, gaps.size());
+        }
+
+        std::printf ("  tutti gli intervalli (campioni / ms):\n");
+        for (long g : gaps)
+            std::printf ("    %6ld  (%.1fms)\n", g, 1000.0 * g / sr);
+    }
+
+    // =========================================================================
     // 5. TRANSIZIONI E BUCHI
     // =========================================================================
     std::printf ("\n=== 5. TRANSIZIONI E BUCHI ===\n");

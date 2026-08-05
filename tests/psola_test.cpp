@@ -16,12 +16,13 @@
 //   g++ -O2 -std=c++20 -Isrc tests/psola_test.cpp src/dsp/PsolaShifter.cpp -o psola_test
 
 #include "dsp/PsolaShifter.h"
-#include "TestSignals.h"
+#include "SampleAnalysis.h" // include gia' TestSignals.h; serve anche measureFrame (periodicita') per il Test 10
 
 #include <cstdio>
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 static constexpr double SR    = 48000.0;
 static constexpr int    BLOCK = 256;
@@ -356,6 +357,218 @@ int main()
         std::printf ("  SENZA reset() (comportamento attuale): scostamento massimo dal riferimento pulito %.6f  %s\n",
                      maxDiffStaleVsFresh, staleDiffersMeasurably ? "OK (bug confermato)" : "FALLITO (bug non riprodotto)");
         if (! staleDiffersMeasurably) ++failures;
+    }
+
+    // NOTA (sessione 19): un primo Test 10 basato su TestSignals.h::
+    // makeCompetingPulsesVowel (due impulsi per periodo che si scambiano
+    // ampiezza) e' stato scritto e poi RITIRATO — CLAUDE.md regola 13, "un
+    // test che fallisce potrebbe essere il test sbagliato": la periodicita'
+    // dell'INGRESSO stesso di quel segnale sintetico crollava (0.90-0.98)
+    // vicino al punto di scambio, quindi il test misurava in parte la non
+    // perfetta periodicita' del segnale costruito, non un difetto puro
+    // dell'algoritmo. Due tentativi di fix su detectEpochs (peso a coseno
+    // sulla ricerca del picco, poi interpolazione parabolica sub-campione)
+    // sono stati provati e poi RIMOSSI (tornati al codice del checkpoint
+    // pre-sessione-19): nessuno dei due ha cambiato in modo misurabile il
+    // sintomo osservato sul file audio reale (isolato con f0 fissa,
+    // bypassando PitchDetector — vedi handsoff.md sessione 19).
+
+    // -----------------------------------------------------------------------
+    // TEST 10 (sessione 20 — ripresa dell'indagine wobbling). Sessione 19 ha
+    // isolato il difetto DENTRO PsolaShifter (persiste con f0 fissa reale,
+    // bypassando PitchDetector/PitchLatch/Glide) ed ESCLUSO detectEpochs
+    // come causa (due fix mirati, zero effetto misurato sul file reale).
+    // Il pezzo mai indagato e' la SINTESI. Ipotesi W-A: in synthesise(),
+    // synthPos avanza del periodo QUANTIZZATO (currentPeriod(), un long
+    // arrotondato a intero — vedi PsolaShifter.cpp), mentre gli epoch di
+    // analisi seguono il periodo REALE del segnale. Se il periodo vero non
+    // e' un multiplo intero del sample rate, lo scarto fra synthPos e
+    // l'epoch piu' vicino deriva linearmente e periodicamente "scatta"
+    // quando nearestEpoch() salta all'epoch adiacente: una discontinuita'
+    // di fase interna al motore, invisibile solo quando il periodo e'
+    // esattamente intero.
+    //
+    // Discriminante a costo quasi zero: stesso timbro (stesso generatore,
+    // stessa formante), due f0 che a SR=48000 danno un periodo ESATTAMENTE
+    // intero (200.0 campioni) e uno frazionario (200.5 campioni) — se solo
+    // il caso frazionario degrada nel tempo, W-A e' confermata e
+    // localizzata senza bisogno di altra strumentazione.
+    //
+    // RISULTATO (misurato, non assunto): su questo segnale sintetico W-A
+    // NON SI RIPRODUCE. La traccia periodicita'-nel-tempo del caso
+    // frazionario resta piatta (~0.996-0.997) per tutti i 2 secondi, senza
+    // i cali periodici che la deriva sinthPos/epoch predirebbe — anzi
+    // l'uscita e' leggermente PIU' periodica dell'ingresso stesso (che a
+    // sua volta non e' perfettamente periodico: il generatore a treno di
+    // impulsi con accumulatore di fase alterna gia' periodi interi 200/201
+    // campioni per approssimare 200.5, quindi l'ingresso non ha una
+    // struttura sub-campione "vera" su cui la deriva possa agire in modo
+    // continuo — il meccanismo ipotizzato per synthesise() potrebbe
+    // comunque essere reale su materiale diverso, ma questo test non lo
+    // conferma). Per CLAUDE.md regola 13, il test resta come verifica di
+    // trasparenza permanente (entrambi i casi devono restare stabili nel
+    // tempo — vedi soglie sotto), ma la sua conclusione e' negativa su W-A:
+    // la Fase 2 del piano (handsoff.md sessione 20) passa a strumentare
+    // direttamente il file reale invece di forzare questa soglia a
+    // "confermare" un'ipotesi che la misura non sostiene.
+    std::printf ("\nTEST 10 - trasparenza in unisono nel tempo, periodo "
+                 "intero vs frazionario (indagine wobbling)\n");
+    {
+        const double f0Int  = SR / 200.0; // periodo ESATTAMENTE 200 campioni
+        const double f0Frac = SR / 200.5; // periodo 200.5 campioni, mai intero
+
+        const double seconds = 2.0;
+        const int    win     = (int) (0.020 * SR); // 20ms, ~4-5 periodi: serve margine per una stima di periodicita' stabile
+        const int    hop     = win / 2;
+
+        // measureOverTime ritorna { periodicita' minima INGRESSO, periodicita' minima USCITA }.
+        auto measureOverTime = [&] (double f0) -> std::pair<double, double>
+        {
+            const auto in  = makeVowel (f0, seconds, SR);
+            const auto out = runShifter (in, f0, 0.0, 1.0, Stability::numLevels - 1);
+
+            const int maxLagCtx = (int) (SR / 50.0) + 2;
+
+            // Controllo obbligatorio (CLAUDE.md regola 13, lezione diretta
+            // del test viziato di sessione 19): l'INGRESSO deve essere
+            // pulito prima di fidarsi di qualunque misura sull'uscita.
+            double inMin = 1.0;
+            const int settleIn = (int) (0.05 * SR); // oltre il transitorio del risonatore
+            for (int from = settleIn; from + win + maxLagCtx < (int) in.size(); from += hop)
+            {
+                const auto fr = measureFrame (in, from, win, SR);
+                if (fr.periodicity > 0.0) inMin = std::min (inMin, fr.periodicity);
+            }
+
+            double outMin = 1.0;
+            const int settleOut = (int) (0.05 * SR) + 1536; // oltre la latenza dichiarata (Accurate: ~30ms)
+            for (int from = settleOut; from + win + maxLagCtx < (int) out.size(); from += hop)
+            {
+                const auto fr = measureFrame (out, from, win, SR);
+                if (fr.periodicity > 0.0) outMin = std::min (outMin, fr.periodicity);
+            }
+
+            return { inMin, outMin };
+        };
+
+        const auto [inMinInt,  outMinInt ] = measureOverTime (f0Int);
+        const auto [inMinFrac, outMinFrac] = measureOverTime (f0Frac);
+
+        std::printf ("  periodo intero  (200.0 camp., f0=%.3fHz): ingresso min %.4f  uscita min %.4f\n",
+                     f0Int,  inMinInt,  outMinInt);
+        std::printf ("  periodo frazion.(200.5 camp., f0=%.3fHz): ingresso min %.4f  uscita min %.4f\n",
+                     f0Frac, inMinFrac, outMinFrac);
+
+        const bool inputsClean = inMinInt > 0.98 && inMinFrac > 0.98;
+        if (! inputsClean)
+        {
+            ++failures;
+            std::printf ("  FALLITO: l'ingresso stesso non e' abbastanza periodico per fidarsi "
+                         "della misura sull'uscita (regola 13) — test da rivedere, non l'algoritmo\n");
+        }
+
+        const bool intStaysClean = outMinInt > 0.95;
+        if (! intStaysClean)
+        {
+            ++failures;
+            std::printf ("  FALLITO: anche a periodo intero l'uscita degrada nel tempo — "
+                         "il problema non e' (solo) la quantizzazione del periodo\n");
+        }
+
+        // Il caso frazionario deve restare trasparente quanto quello intero
+        // (nessuna deriva/scatto misurabile nel tempo): e' l'esito
+        // REALMENTE misurato (vedi nota sopra — W-A non si riproduce su
+        // questo segnale), non un'ipotesi. Se in futuro qualcosa introduce
+        // una vera deriva sinthPos/epoch, questa soglia la intercetta come
+        // regressione.
+        const bool fracStaysClean = outMinFrac > 0.95;
+        if (! fracStaysClean) ++failures;
+        std::printf ("  esito: %s (W-A non confermata su questo segnale — vedi Fase 2 in handsoff.md)\n",
+                     fracStaysClean ? "OK" : "FALLITO");
+    }
+
+    // -----------------------------------------------------------------------
+    // TEST 11 (sessione 20). La causa reale del wobbling e' stata trovata
+    // strumentando temporaneamente PsolaShifter (PSOLA_DEBUG_SYNTH, non
+    // presente in questo file: rimosso prima del commit) sul file reale
+    // "Test 1 - Basic Silk Horns.wav" con f0 fissa, unisono: tracciando per
+    // ogni grano lo scarto sp-epoch, si vedeva una spaziatura anomala fra
+    // due epoch veri (un posizionamento sbagliato su un campione non
+    // impulsivo, tipico di materiale reale) propagarsi per ~15 grani
+    // (~30ms) prima di essere riassorbita — coincidente, a livello di
+    // campione, con la finestra del glitch riportata da real_export_probe
+    // sull'export reale (vedi handsoff.md sessione 20 per la traccia
+    // completa e il ragionamento).
+    //
+    // NE' questo test (vibrato sintetico ±15 cent/5Hz) NE' il Test 10 (tono
+    // perfettamente stazionario) riescono a riprodurre una degradazione
+    // misurabile — provato con ENTRAMBI PRIMA di scrivere il fix: un
+    // generatore a singola risonanza produce un picco per periodo troppo
+    // netto e inequivocabile perche' detectEpochs lo posizioni mai male,
+    // a differenza di un timbro reale (corno), piu' ricco armonicamente.
+    // Questo test resta comunque utile come regressione: dopo il fix
+    // (synthesise() usa il periodo di analisi LOCALE reale invece del
+    // periodo quantizzato globale — vedi PsolaShifter.cpp) la trasparenza
+    // deve restare alta anche con un vibrato naturale sovrapposto.
+    std::printf ("\nTEST 11 - trasparenza in unisono con vibrato naturale\n");
+    {
+        const double f0Center   = 240.0;
+        const double depthCents = 15.0;
+        const double rateHz     = 5.0;
+        const double seconds    = 2.0;
+
+        const auto in = makeVibratoVowel (f0Center, depthCents, rateHz, seconds, SR);
+
+        PsolaShifter ps;
+        ps.prepare (SR, BLOCK, Stability::numLevels - 1);
+        ps.setPitchShiftSemitones (0.0f);
+
+        std::vector<float> out (in.size(), 0.0f);
+        for (size_t i = 0; i + BLOCK <= in.size(); i += BLOCK)
+        {
+            const double t  = (double) i / SR;
+            const double f0 = f0Center * std::pow (2.0, (depthCents * std::sin (2.0 * kPi * rateHz * t)) / 1200.0);
+            ps.setInputF0Hz (f0);
+            ps.process (&in[i], &out[i], BLOCK);
+        }
+
+        const int win       = (int) (0.020 * SR);
+        const int hop       = win / 2;
+        const int maxLagCtx = (int) (SR / 50.0) + 2;
+
+        double inMin = 1.0;
+        const int settleIn = (int) (0.05 * SR);
+        for (int from = settleIn; from + win + maxLagCtx < (int) in.size(); from += hop)
+        {
+            const auto fr = measureFrame (in, from, win, SR);
+            if (fr.periodicity > 0.0) inMin = std::min (inMin, fr.periodicity);
+        }
+
+        double outMin = 1.0;
+        const int settleOut = (int) (0.05 * SR) + 1536;
+        for (int from = settleOut; from + win + maxLagCtx < (int) out.size(); from += hop)
+        {
+            const auto fr = measureFrame (out, from, win, SR);
+            if (fr.periodicity > 0.0) outMin = std::min (outMin, fr.periodicity);
+        }
+
+        std::printf ("  ingresso: periodicita' minima %.4f (vibrato reale, e' normale che non sia 1.0)\n", inMin);
+        std::printf ("  uscita:   periodicita' minima %.4f\n", outMin);
+
+        const bool inputPlausible = inMin > 0.90; // il vibrato stesso abbassa la periodicita' per costruzione
+        if (! inputPlausible)
+        {
+            ++failures;
+            std::printf ("  FALLITO: l'ingresso e' troppo instabile per essere un vibrato stretto — parametri da rivedere\n");
+        }
+
+        // Ne' prima ne' dopo il fix questo segnale sintetico mostra una
+        // degradazione misurabile (vedi nota sopra): resta come verifica di
+        // trasparenza permanente, non come conferma del meccanismo (quella
+        // e' venuta dal file reale, Fase 2 in handsoff.md sessione 20).
+        const bool staysClean = inputPlausible && (outMin > 0.95);
+        if (! staysClean) ++failures;
+        std::printf ("  esito: %s\n", staysClean ? "OK" : "FALLITO");
     }
 
     std::printf ("\n===================================\n");

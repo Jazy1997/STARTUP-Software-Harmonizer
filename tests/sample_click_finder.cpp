@@ -61,6 +61,75 @@
 
 namespace
 {
+    // Diagnostica (sessione 19 — "wobbling"): stampa la traiettoria GREZZA di
+    // PitchDetector (esattamente cio' che Voice::processAdd riceve come
+    // continuousInputMidiNote, quindi cio' che arriva a
+    // PsolaShifter::setInputF0Hz) su un intervallo di tempo, a un dato block
+    // size — PRIMA di qualunque cosa Voice/PsolaShifter ci facciano sopra.
+    // Serve a distinguere due ipotesi diverse per lo stesso sintomo (jitter
+    // di pochi Hz osservato nel wet anche a offset 0/glide 0): (a) il
+    // rilevatore stesso produce una stima gia' rumorosa, indipendentemente
+    // da quanto spesso la si legge — allora il motore la eredita e basta;
+    // (b) la stima e' pulita ma viene letta troppo poco spesso (una volta
+    // per blocco host grande) — allora infittire la lettura (sotto-blocchi,
+    // sessione 13) la risolverebbe. Confrontare l'uscita a block size diversi
+    // sullo STESSO intervallo distingue le due ipotesi.
+    void dumpPitchTrace (const std::vector<float>& mono, double sr, int block,
+                         double traceStartSec, double traceEndSec)
+    {
+        PitchDetector pitchDetector;
+        pitchDetector.prepare (sr);
+
+        std::printf ("  block=%d — t, midiNote, hz, confidenza, stabile:\n", block);
+        int done = 0;
+        while (done + block <= (int) mono.size())
+        {
+            for (int i = 0; i < block; ++i)
+                pitchDetector.pushSample (mono[(size_t) (done + i)]);
+
+            const double tSec = (double) done / sr;
+            if (tSec >= traceStartSec && tSec <= traceEndSec)
+            {
+                const float midi = pitchDetector.getMidiNote();
+                const double hz = midi >= 0.0f ? 440.0 * std::pow (2.0, ((double) midi - 69.0) / 12.0) : 0.0;
+                std::printf ("    %8.4f  %8.3f  %8.1f  %6.3f  %s\n",
+                             tSec, midi, hz, pitchDetector.getConfidence(),
+                             pitchDetector.hasStableSignal() ? "si" : "no");
+            }
+            done += block;
+        }
+    }
+
+    // Diagnostica (sessione 19 — "wobbling"): come runHeld, ma con un f0
+    // COSTANTE scelto a mano invece che letto da PitchDetector, e un offset
+    // fisso scelto a mano — bypassa COMPLETAMENTE PitchDetector/PitchLatch/
+    // Glide. Isola al 100% il comportamento di PsolaShifter sul segnale
+    // reale: se un glitch compare anche qui, non puo' venire ne' dal
+    // rilevatore di pitch ne' dalla granularita' con cui lo si legge (gia'
+    // esclusi misurando la traiettoria grezza di PitchDetector, pulita a
+    // ogni block size) — deve venire dal posizionamento degli epoch/dalla
+    // sintesi dei grani su questo specifico segnale non impulsivo.
+    std::vector<float> runFixedF0 (const std::vector<float>& mono, double sr, float semitones,
+                                   int stabilityLevel, float formantSpread, double fixedF0Hz, int block)
+    {
+        Voice voice;
+        voice.prepare (sr, block, stabilityLevel);
+        voice.setFormantSpread (formantSpread);
+        voice.setMuted (false);
+        voice.setTargetOffsetSemitones (semitones);
+
+        const float fixedMidi = (float) (69.0 + 12.0 * std::log2 (fixedF0Hz / 440.0));
+
+        std::vector<float> wet (mono.size(), 0.0f);
+        int done = 0;
+        while (done + block <= (int) mono.size())
+        {
+            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, fixedMidi);
+            done += block;
+        }
+        return wet;
+    }
+
     // Passata 1: una sola voce, attivata UNA VOLTA all'inizio e mai piu'
     // riammutolita per l'intera durata del file.
     std::vector<float> runHeld (const std::vector<float>& mono, double sr, float semitones,
@@ -307,7 +376,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::printf ("Uso: sample_click_finder <file.wav> [stability=2] [formantSpread=1.0] [rootPitchClass=0] [block=4096] [dumpPrefix]\n");
+        std::printf ("Uso: sample_click_finder <file.wav> [stability=2] [formantSpread=1.0] [rootPitchClass=0] [block=4096] [dumpPrefix] [traceStartSec traceEndSec]\n");
         return 1;
     }
 
@@ -321,6 +390,16 @@ int main (int argc, char** argv)
     // strumentazione rigorosa usata sull'export reale), senza duplicare la
     // misura di periodicita'/instabilita' in due tool diversi.
     const std::string dumpPrefix = argc > 6 ? argv[6] : "";
+    // Se forniti, esegue SOLO dumpPitchTrace su questo intervallo (a piu'
+    // block size, per confronto) e termina — non le 4 passate.
+    const bool doTrace = argc > 8;
+    const double traceStartSec = doTrace ? std::stod (argv[7]) : 0.0;
+    const double traceEndSec   = doTrace ? std::stod (argv[8]) : 0.0;
+    // Se fornito (9deg argomento, richiede dumpPrefix): esegue SOLO
+    // runFixedF0 (f0 costante, bypassa PitchDetector/PitchLatch/Glide) e
+    // salva l'uscita — non le 4 passate ne' la traccia.
+    const bool doFixedF0 = argc > 9;
+    const double fixedF0Hz = doFixedF0 ? std::stod (argv[9]) : 0.0;
 
     WavFile wav;
     std::string error;
@@ -340,6 +419,35 @@ int main (int argc, char** argv)
     std::printf ("  Parametri di prova: Stability=%s, formantSpread=%.2f, rootPitchClass=%d, block=%d\n",
                  Stability::names[std::clamp (stabilityLevel, 0, Stability::numLevels - 1)],
                  formantSpread, rootPitchClass, block);
+
+    // doFixedF0 richiede piu' argomenti di doTrace (argc>9 implica argc>8):
+    // va controllato PRIMA, altrimenti doTrace lo intercetterebbe sempre.
+    if (doFixedF0)
+    {
+        std::printf ("\n=== f0 COSTANTE a %.1fHz, unisono (0 semitoni), bypassa PitchDetector/PitchLatch/Glide ===\n", fixedF0Hz);
+        const auto fixedWet = runFixedF0 (mono, sr, 0.0f, stabilityLevel, formantSpread, fixedF0Hz, block);
+        if (! dumpPrefix.empty())
+        {
+            writeWavMono (dumpPrefix + ".fixedf0.wav", fixedWet, sr);
+            std::printf ("  uscita salvata come %s.fixedf0.wav\n", dumpPrefix.c_str());
+        }
+        else
+        {
+            std::printf ("  ATTENZIONE: nessun dumpPrefix fornito, uscita non salvata su disco\n");
+        }
+        return 0;
+    }
+
+    if (doTrace)
+    {
+        std::printf ("\n=== TRACCIA GREZZA DI PitchDetector, %.3f-%.3fs, a piu' block size ===\n",
+                     traceStartSec, traceEndSec);
+        for (int b : { 64, 256, 1024, 4096 })
+        {
+            dumpPitchTrace (mono, sr, b, traceStartSec, traceEndSec);
+        }
+        return 0;
+    }
 
     const auto dryEvents = findClicks (mono, sr);
 

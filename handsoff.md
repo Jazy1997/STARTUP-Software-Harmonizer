@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-05 (sessione 18)
+> Ultimo aggiornamento: 2026-08-05 (sessione 20)
 
 ---
 
@@ -32,6 +32,168 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 20 — causa del wobbling trovata (non nella selezione degli epoch, come
+sessione 19 aveva escluso, ma nella SINTESI) e corretta; verificato per calcolo su file reale
+e con l'intera suite di test, NON ancora confermato all'ascolto:**
+
+Ripresa diretta di sessione 19 (checkpoint di sicurezza `b67a741`, gia' su `origin/main`,
+nessuna modifica pendente su `PsolaShifter` all'inizio di questa sessione). L'utente ha fornito
+un quinto file, `SAMPLE TEST/Export V2.wav` gia' presente da sessione 19 (Voices=1, Dry=0,
+Wet=1, Glide=0, preset Maj root C su "Test 1 - Basic Silk Horns.wav") come riferimento.
+
+- **Fase 0 (validazione dell'esperimento di isolamento)**: `runFixedF0` di
+  `sample_click_finder.cpp` applica UNA SOLA f0 fissa all'intero file di 8s, che contiene 4
+  note diverse (C4/D4/E4/C4) — fuori dalla nota corrispondente, l'uscita e' degradata per
+  costruzione, non per un difetto. Verificato con `real_export_probe` che gli eventi di
+  instabilita' di sessione 19 (t≈0.75-0.78s, 0.90-0.93s) cadono DENTRO il plateau C4
+  (0.09-2.01s, f0 reale 261.3Hz) dove `runFixedF0` a 261.35Hz e' effettivamente valido — non un
+  artefatto della f0 sbagliata altrove nel file. L'isolamento di sessione 19 resta valido.
+- **Fase 1 (Test 10/11 in `tests/psola_test.cpp`, permanenti in ctest)**: due tentativi di
+  riprodurre il wobbling su segnale sintetico, ENTRAMBI negativi per misura (CLAUDE.md regola
+  13: riportato onestamente come esito negativo, non forzato a "passare" cambiando soglia).
+  Test 10 (tono perfettamente stazionario, periodo intero vs frazionario a SR=48000): nessuna
+  degradazione misurabile nel tempo. Test 11 (stesso tono con un vibrato stretto e lento, ±15
+  cent/5Hz, currentF0Hz aggiornato per blocco da un oracolo): nemmeno questo la riproduce. La
+  ragione, capita solo DOPO la Fase 2: un generatore a singola risonanza produce un picco per
+  periodo troppo netto perche' l'individuazione degli epoch lo posizioni mai male — a
+  differenza di un timbro reale (corno), armonicamente piu' ricco. Entrambi i test restano in
+  ctest come verifiche di trasparenza permanenti (nessuna deriva ammessa nel tempo), non come
+  prova del meccanismo.
+- **Fase 2 (strumentazione diretta di `PsolaShifter` sul file reale, decisiva)**: aggiunta
+  diagnostica temporanea (`PSOLA_DEBUG_SYNTH`, poi rimossa) che traccia per ogni grano di
+  sintesi: posizione `sp`, epoch di analisi scelto, scarto `sp-epoch`, spaziatura reale fra
+  epoch consecutivi, periodo quantizzato `P`. Eseguita su `sample_click_finder --fixedF0` a
+  261.35Hz sul dry di "Test 1", con la traccia salvata su file e confrontata campione per
+  campione con le finestre di instabilita' misurate da `real_export_probe`. **Trovato un
+  meccanismo preciso**: nella finestra t≈0.77-0.81s (coincide, a livello di singolo campione,
+  con il glitch riportato da `real_export_probe`), un singolo epoch viene rilevato con una
+  spaziatura anomala (137 campioni invece dei ~168-169 attesi — un posizionamento sbagliato su
+  un campione non impulsivo, prevedibile su materiale reale ricco di armoniche). Poiche'
+  `synthPos` avanzava di un passo FISSO (il periodo quantizzato `P/alpha`, non la spaziatura
+  reale), questo singolo evento non restava locale: lo scarto fra `synthPos` e l'epoch piu'
+  vicino si propagava per ~15 grani consecutivi (~30ms, coerente con la larghezza della
+  finestra di glitch riportata) prima che `nearestEpoch()` saltasse a un epoch adiacente,
+  riassorbendolo — l'aritmetica torna esattamente (+32 campioni di scarto = 169-137). Questo
+  spiega perche' le due ipotesi ritirate in sessione 19 (peso sulla scelta del picco,
+  interpolazione sub-campione) non avessero effetto: il problema non era DOVE `detectEpochs`
+  posiziona un epoch, ma quanto a lungo un singolo posizionamento imperfetto (inevitabile su
+  materiale reale) continua a propagarsi a valle nella sintesi.
+- **Fase 3 (fix in `src/dsp/PsolaShifter.cpp`, `synthesise()`)**: il passo di avanzamento di
+  `synthPos` ora usa il periodo di analisi LOCALE reale (`epochAfter(epoch) - epoch`, letto
+  direttamente dal ring degli epoch per QUESTO grano) invece del periodo quantizzato globale —
+  un singolo epoch mal posizionato sposta cosi' un solo grano invece di fare accumulare uno
+  scarto su molti grani successivi. **Primo tentativo scartato dopo misura** (CLAUDE.md regola
+  13): derivare il passo dalla differenza fra l'epoch di QUESTA sintesi e quello della sintesi
+  PRECEDENTE sembrava equivalente ma non lo e' — a `alpha != 1` crea un ciclo di retroazione
+  che diverge geometricamente (misurato: Test 1 di `psola_test` rotto, -12 semitoni tornava
+  vicino all'originale invece di un'ottava sotto). Sostituito con `epochAfter()`, che legge la
+  spaziatura fra due epoch ADIACENTI nel ring, indipendente da come `synthPos` si e' mosso in
+  precedenza — nessuna retroazione. A `alpha != 1` questo elimina anche l'errore di
+  quantizzazione di `currentPeriod()` (D1, pianificato dalle sessioni 17/18/19 come intervento
+  separato: ora assorbito, non serve piu' farlo a parte).
+- **Verificato DOPO il fix**: tutti gli 11 test di `psola_test` verdi (Test 1-9 preesistenti
+  bit-per-bit compatibili nell'esito, invariati nella soglia; Test 10/11 nuovi). Tutte e 6 le
+  suite verdi via `ctest`. Sul file reale, `sample_click_finder --fixedF0` + `real_export_probe`
+  sullo stesso confronto di Fase 0: le finestre instabili crollano da **36/792 (4.5%) a 2/792
+  (0.3%)**, l'unico residuo non banale e' un singolo evento a fine file (t=7.93-7.95s,
+  probabile artefatto di bordo, non della stessa famiglia). Controllo di robustezza su un
+  secondo timbro (`Test 2 - E-Piano.wav`, mai usato per orientare il fix): 10/786 (1.3%)
+  finestre instabili, concentrate su transizioni/attacchi di nota, non su note sostenute —
+  nessuna regressione, nessun overfitting al primo file. Build VST3 e Standalone riuscite
+  (solo il consueto fallimento di copia post-build per permessi). `pluginval
+  --strictness-level 10` **SUCCESS** (nessuna occorrenza di fail/error/crash nel log completo).
+  Diagnostica temporanea (`PSOLA_DEBUG_SYNTH` in `PsolaShifter.cpp`, define in
+  `CMakeLists.txt`) rimossa prima di chiudere la sessione — `git diff` su `src/` mostra solo il
+  fix vero e proprio.
+- **CONFERMATO ALL'ASCOLTO**: l'utente ha fornito `Export V3.wav` (stesse impostazioni di
+  `Export V2.wav`) e riportato "ottimo lavoro, ora va molto meglio". Confronto numerico diretto
+  con `real_export_probe` sul nuovo export reale (non solo sull'isolamento offline): finestre
+  instabili 8/792 (1.0%), contro 35/792 (4.4%) di `Export V2.wav` prima del fix — coerente con
+  il calo gia' misurato sull'isolamento fixedF0 (36->2 su 792). Gli eventi residui sono ora
+  concentrati vicino alle transizioni di nota (t=0.00-0.05s, primo attacco; t=4.07-4.09s e
+  t=5.98-6.04s, cambi nota a 4.07s/6.07s), non piu' dentro le note sostenute — lo stesso
+  spostamento di pattern gia' osservato nel controllo di robustezza su "E-Piano".
+- **Non toccato**: `detectEpochs()` (nessuna modifica: la Fase 2 ha mostrato che il problema
+  non e' li'), `emitGrain()`, `PitchDetector`, `OnsetDetector`, `HarmonyEngine`,
+  `PresetLibrary`, `PhraseScheduler`, tutta la UI. Il "secondo meccanismo" annotato in sessione
+  17 (jitter fine anche in unisono, cali 0.89-0.93 senza coinvolgere il gate) potrebbe essere
+  proprio questo, dato che il fix agisce esattamente sulla sintesi in unisono — da verificare
+  se persiste ancora dopo la conferma all'ascolto.
+
+**Novita' sessione 19 — click confermati spariti all'ascolto; committato/pushato il lavoro di
+sessioni 16-18; indagine sul "wobbling"/instabilita' timbrica, due ipotesi su PsolaShifter
+tentate e RITIRATE (nessun fix applicato in questa sessione):**
+
+L'utente ha confermato all'ascolto che il lavoro di sessione 16-18 (click a inizio nota e a
+meta' nota) ha funzionato: "ora non ci sono più click". Committato e pushato tutto il lavoro
+di quelle sessioni in un solo commit (`b67a741`, gia' su `origin/main` — vedi sotto per
+perche' un solo commit e non due). **Checkpoint di sicurezza per questa sessione**: `b67a741`
+e' il punto a cui tornare se qualcosa si rompesse nel lavoro successivo (richiesto
+esplicitamente dall'utente prima di toccare `PsolaShifter`).
+
+Nuovo problema, distinto dal click: **wobbling/artefatti in sottofondo, timbro che cambia "a
+scatti" nel tempo**. L'utente ha fornito un quarto file reale, `SAMPLE TEST/Export V2.wav`
+(Voices=1, Dry=0, Wet=1, **Glide=0** — scelto deliberatamente per escludere FR-17 dal
+quadro). Confermato leggendo `Voice.cpp`: con Glide=0 e Move mode, `semitonesToApply` resta
+costante entro una nota tenuta, quindi qualunque instabilita' osservata dentro una nota non
+puo' venire dal glide.
+
+- **`real_export_probe.cpp` esteso**: nuova sezione "4b. CADENZA DEI DISTURBI" (istanti di
+  calo di periodicita' e intervalli fra un evento e il successivo, per cercare una cadenza
+  regolare riconducibile a un block size) e una modalita' `--trace` gia' presente riusata per
+  ispezione fine campione-per-campione.
+- **Analisi su Export V2**: pattern di instabilita' quasi identico a V1 (stessi istanti, stessa
+  entita', 0.86-0.93 di periodicita' minima) nonostante Glide=0 — conferma che il glide FR-17
+  non c'entra. Nessuna cadenza regolare riconducibile a un block size fisso (gli intervalli fra
+  eventi spaziano continuamente da 40ms a 1430ms, senza clustering).
+- **`sample_click_finder.cpp` esteso**: nuova `dumpPitchTrace` (traccia grezza di
+  `PitchDetector::getMidiNote()`/confidenza a piu' block size) e nuova `runFixedF0` (Voice con
+  f0 COSTANTE scelta a mano, bypassa completamente PitchDetector/PitchLatch/Glide).
+- **Scoperta chiave 1**: la traiettoria grezza di `PitchDetector` sul dry, nella stessa
+  finestra dov'e' presente il glitch nel wet (t≈0.68-0.85s in "Silk Horns"), e' perfettamente
+  pulita a OGNI block size testato (64/256/1024/4096) — confidenza sempre ≥0.989, nessun
+  salto. Esclude sia il rumore del rilevatore di pitch sia la quantizzazione a livello di
+  blocco (sessione 13, mai confermata) come causa.
+- **Scoperta chiave 2**: con `runFixedF0` (f0 fissa e corretta, unisono, bypass totale di
+  PitchDetector/PitchLatch/Glide) sullo stesso file reale, il glitch **persiste quasi
+  identico** (periodicita' 0.885-0.925, stessa posizione temporale, stessa entita'). Prova
+  diretta e definitiva: il difetto e' **interno a `PsolaShifter`**, non a qualunque cosa gli
+  stia a monte.
+- **Due ipotesi tentate su `PsolaShifter::detectEpochs`, ENTRAMBE RITIRATE dopo misura**:
+  1. Peso a coseno rialzato sulla ricerca del picco (preferire la continuita' con la
+     predizione invece del massimo assoluto nella finestra ±P/4) — **zero effetto misurabile**
+     sia sul segnale sintetico di prova sia (soprattutto) sul file reale isolato con
+     `runFixedF0`.
+  2. Interpolazione parabolica sub-campione della posizione dell'epoch (`lastEpoch`/
+     `epochRing` da `long long` a `double`, stessa tecnica di `measureF0`) — motivata da una
+     misura di debug temporanea (`PSOLA_DEBUG_EPOCHS`, poi rimossa) che mostrava scarti
+     sempre di esattamente +1 campione rispetto alla predizione nella finestra del glitch.
+     Anche questa: **zero effetto misurabile** sul file reale (34 vs 36 eventi d'instabilita',
+     stessa entita', stesse posizioni).
+  3. **Scoperta collaterale importante (CLAUDE.md regola 13)**: il segnale sintetico costruito
+     per riprodurre l'ipotesi 1 (`makeCompetingPulsesVowel`, due impulsi per periodo che si
+     scambiano ampiezza nel tempo) si e' rivelato un test VIZIATO — misurato che la
+     periodicita' dell'INGRESSO stesso crollava (0.90-0.98) vicino al punto di scambio, quindi
+     il test misurava in parte la non-perfetta periodicita' del segnale costruito, non un
+     difetto puro dell'algoritmo. Scritto, usato per orientarsi, poi **rimosso** insieme al
+     generatore in `TestSignals.h` — non lasciato nel codice come test permanente essendo
+     concettualmente inaffidabile.
+- **Esito**: dato che nessuna delle due modifiche a `detectEpochs` ha spostato la misura sul
+  file reale, entrambe sono state **riportate al codice del checkpoint** (`git checkout
+  b67a741 -- src/dsp/PsolaShifter.h src/dsp/PsolaShifter.cpp`) invece di essere tenute "perche'
+  comunque plausibili" — esattamente la disciplina di CLAUDE.md regola 13. Verificato dopo il
+  ripristino: `git status` su questi due file pulito (nessuna differenza dal checkpoint), tutte
+  e 6 le suite verdi via `ctest`.
+- **Cosa resta**: il meccanismo del wobbling e' confermato interno a `PsolaShifter` (non a
+  monte), ma la selezione dell'epoch in `detectEpochs` non ne e' (o non ne e' l'unica) causa.
+  Prossimi candidati, non ancora esplorati: la sintesi/overlap-add in `synthesise()`/
+  `emitGrain()` (avanzamento di `synthPos`, accumulo di `synthPeriod` nel tempo, o l'ampiezza/
+  forma della finestra di Hann del grano) — vedi §6.
+- **Strumenti diagnostici che restano validi e riusabili** (nessuno di questi e' stato
+  ritirato, solo il fix su `detectEpochs`): `tests/real_export_probe.cpp` (sezione 4b +
+  `--trace`), `tests/sample_click_finder.cpp` (`dumpPitchTrace`, `runFixedF0`,
+  `writeWavMono`/dump delle passate su file per rianalisi).
 
 **Novita' sessione 17-18 — "una prima voce perfetta": dal file reale al gate dell'onset, causa reale trovata e corretta (era diversa da tutte le ipotesi precedenti):**
 
@@ -1075,6 +1237,10 @@ Nessuna modifica al PRD.
 - **La prima correzione del bug di sovrapposizione in `emitGrain` ha rotto il test 1**: allargando la semiampiezza del grano al margine "largo" (`W = P * max(1, 1/alpha)`, cio' che il commento originale sembrava suggerire), a -12 semitoni la f0 misurata tornava quella originale (errore di un'ottava esatto). Causa: a `beta=1` il grano e' una copia diretta, non trasposta, del segnale sorgente — un grano piu' lungo della spaziatura fra grani reintroduce direttamente la periodicita' ORIGINALE (non shiftata) al suo interno, che l'autocorrelazione del test rileva come dominante sulla periodicita' "strutturale" data dalla spaziatura. Non era un problema del test (la sua stessa logica anti-ottava, controllata, era corretta): l'uscita conteneva davvero energia forte alla frequenza originale. Risolto usando il margine minimo analiticamente necessario a far toccare i grani (`W = 1.2 * max(P, P/(2*alpha))`, derivato dalla condizione `Lg=2W >= synthPeriod`) invece del margine largo — tutti e 7 i test verdi dopo la correzione, confermato che nessun altro test e' peggiorato.
 - Nessun errore di compilazione incontrato nel resto della sessione (build VST3/Standalone e `pluginval` verdi al primo tentativo dopo il porting completo).
 
+**Sessione 20:**
+- **Primo design del fix del wobbling ha rotto la trasposizione di pitch**: far avanzare `synthPos` della differenza fra l'epoch scelto in QUESTA sintesi e quello scelto nella sintesi PRECEDENTE (`lastSynthEpoch`, persistente fra chiamate) sembrava equivalente a "usare la spaziatura reale", ma a `alpha != 1` non lo e': `sp` avanza a un passo diverso da `P`, quindi l'epoch piu' vicino a iterazioni successive non e' in generale il successivo nel ring — il passo cosi' calcolato dipende dal passo precedente, un ciclo di retroazione che diverge geometricamente. Misurato PRIMA di procedere oltre (`psola_test`): Test 1 rotto su tutta la linea, -12 semitoni dava ~245Hz invece di 100Hz (quasi tornava all'originale), Test 6/8 (inviluppo) crollati a RMS minimo/medio = 0.000. Corretto sostituendo con `epochAfter()`, che legge la spaziatura fra due epoch ADIACENTI nel ring (indipendente da come `synthPos` si e' mosso in precedenza) invece di derivarla dalla cronologia della sintesi — nessuna retroazione, tutti gli 11 test tornano verdi.
+- **Due tentativi di riprodurre il wobbling su segnale sintetico, entrambi negativi per misura, NON forzati a "passare"** (CLAUDE.md regola 13): un tono stazionario a periodo frazionario (Test 10) e lo stesso tono con un vibrato realistico ±15cent/5Hz (Test 11) non mostrano alcuna degradazione misurabile, ne' prima ne' dopo il fix. La causa, capita solo dopo aver strumentato il file reale (Fase 2): un generatore a singola risonanza produce un picco per periodo troppo netto e inequivocabile perche' l'individuazione degli epoch lo posizioni mai male — il meccanismo reale richiede un timbro armonicamente piu' ricco (come un corno vero) per manifestarsi. I due test sono stati mantenuti in ctest come verifiche di trasparenza permanenti (soglia onesta: "non degrada", non "riproduce il bug"), non come prova del meccanismo — quella e' venuta dalla strumentazione diretta del file reale, non da un segnale sintetico.
+
 Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora affrontati:
 - **Qualità del PSOLA proprietario**: rischio piu' alto secondo il PRD. **Aggiornamento sessione 9**: PSOLA e' ora INTEGRATO come motore di default, verificato numericamente (7 test verdi, incluso un test di sovrapposizione che ha scoperto e permesso di correggere un bug reale nell'algoritmo sorgente) e verificato in build reale (`pluginval` verde, latenza Fast misurata a 13.5ms, sotto il target PRD). Resta comunque solo su segnale sintetico (onda a impulsi + risonanza singola), non su registrazioni reali di sax/tromba/voce ne' provato all'ascolto dentro il nostro plugin. Il rischio "suona bene dal vivo" resta aperto finche' l'utente non lo prova in Ableton. Se anche cosi' non dovesse reggere, resta l'opzione ZTX PRO di Zynaptiq (costo/trattativa commerciale).
 - **Tipo di plugin AU** deve essere Music Effect (`aumf`) fin da M0: è una decisione strutturale irreversibile dopo il rilascio (PRD §4.1).
@@ -1085,7 +1251,54 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Sessione 18 — DA CONFERMARE ALL'ASCOLTO (priorita' immediata della prossima sessione):**
+**Sessione 20 — CONFERMATO all'ascolto e per calcolo (vedi §2): il fix del wobbling funziona.**
+L'utente ha fornito `Export V3.wav` (stesse impostazioni di `Export V2.wav`) e confermato "ora
+va molto meglio". Confronto numerico diretto sul nuovo export reale: 8/792 finestre instabili
+(1.0%) contro 35/792 (4.4%) prima del fix, residuo ormai concentrato su transizioni/attacco di
+nota, non piu' dentro le note sostenute. Lavoro committato.
+
+**Priorita' immediata della prossima sessione**: verificare se il "secondo meccanismo" annotato
+in sessione 17 (jitter fine anche in unisono, cali 0.89-0.93 senza coinvolgere il gate
+dell'onset) e' ancora presente o se il fix di sessione 20 lo ha gia' assorbito (agisce
+esattamente sulla sintesi in unisono) — da misurare di nuovo con gli stessi strumenti
+(`real_export_probe` su un nuovo export, o `sample_click_finder --fixedF0`) prima di
+considerarlo chiuso, non da assumere.
+
+Se dovesse emergere un residuo non spiegato dal secondo meccanismo, i candidati non ancora
+toccati restano:
+- La forma/ampiezza della finestra di Hann del grano (`emitGrain`, il calcolo di `Lg`/`W`) —
+  non toccata in sessione 20.
+- La normalizzazione d'inviluppo in `processChunk` (`out[i] = outBuf[idx] / max(e, 1.0f)`,
+  asimmetrica: si divide solo sopra 1.0) — ipotesi W-B del piano di sessione 20, non esplorata
+  perche' W-A (la deriva di `synthPos`) si e' confermata sufficiente per calcolo. Se il residuo
+  persiste, e' il prossimo candidato naturale.
+- Costruire un segnale sintetico che riproduca il fenomeno originale (spaziatura epoch anomala
+  su materiale non impulsivo) resta utile per un test permanente in ctest indipendente dal file
+  reale — sessione 20 ha scoperto che serve un generatore PIU' RICCO armonicamente di una
+  singola risonanza (Test 10/11 non ci sono riusciti, vedi §2): due o piu' risonanze comparabili
+  in ampiezza, o un impulso non ideale, sono i candidati piu' promettenti — non ancora tentati.
+
+**Strumenti pronti per la prossima sessione** (nessuno ritirato): `tests/real_export_probe.cpp`
+(sezione 4b "cadenza dei disturbi", modalita' `--trace <inizio> <fine>` per ispezione fine),
+`tests/sample_click_finder.cpp` (`dumpPitchTrace` per la traiettoria grezza di PitchDetector a
+piu' block size, `runFixedF0`/`writeWavMono` per isolare Voice/PsolaShifter con f0 costante e
+rianalizzare l'uscita con `real_export_probe`), `tests/psola_test.cpp` Test 10/11 (trasparenza
+in unisono nel tempo, permanenti in ctest — non riproducono il meccanismo ma proteggono da
+regressioni). La diagnostica `PSOLA_DEBUG_SYNTH` usata in sessione 20 per instrumentare
+`synthesise()` grano per grano e' stata rimossa dopo l'uso (schema: aggiungerla dietro
+`#ifdef`, attivarla con un `target_compile_definitions` temporaneo su `sample_click_finder` in
+`CMakeLists.txt`, rimuovere entrambi prima di chiudere la sessione — vedi sessioni 19/20).
+
+**Sessione 19 — SUPERATO da sessione 20 (vedi sopra): i due tentativi su `detectEpochs`**
+**restano correttamente ritirati (non erano la causa). Lasciato per il contesto storico:**
+il wobbling e' confermato (due misure indipendenti: file reale + isolamento con f0 fissa)
+**interno a `PsolaShifter`**, non a Voice/PitchDetector/PitchLatch/Glide — ma due tentativi
+mirati su `detectEpochs` (peso sulla ricerca del picco, poi interpolazione sub-campione) sono
+stati misurati e RITIRATI perche' inefficaci sul file reale. La causa vera (sessione 20) era
+nella sintesi, non nella selezione degli epoch — coerente con questi due tentativi risultati
+inefficaci.
+
+**Sessione 18 — CONFERMATO all'ascolto (vedi sopra), lasciato per il contesto storico:**
 il fix del gate dell'onset (`OnsetDetector.cpp`, release_threshold -36dB->-45dB, vedi §2) e'
 verificato per calcolo su due percorsi indipendenti (export reale + riproduzione offline
 senza DAW): il buco a t≈5.95s in `Export V1.wav` (periodicita' crollata a 0.000 mentre la

@@ -102,6 +102,38 @@ static std::vector<float> makeSweptVowel (double f0Start, double f0End, double s
     return v;
 }
 
+// Come makeVowel, ma f0 oscilla sinusoidalmente intorno a f0Center (vibrato)
+// invece di restare fissa — sessione 20, indagine wobbling: un tono
+// perfettamente stazionario non basta a riprodurre la deriva synthPos/epoch
+// di PsolaShifter (misurato: Test 10 non la riproduce), perche' una nota
+// reale non e' MAI perfettamente stazionaria (vibrato/intonazione naturale
+// del musicista). depthCents/rateHz scelti bassi e lenti apposta: devono
+// restare dentro cio' che un ascoltatore descriverebbe come "nota tenuta",
+// non un trillo.
+static std::vector<float> makeVibratoVowel (double f0Center, double depthCents, double rateHz,
+                                            double seconds, double sr, double formant1 = 1100.0)
+{
+    const int n = (int) (seconds * sr);
+    std::vector<float> v ((size_t) n, 0.0f);
+
+    Resonator r1;
+    r1.set (formant1, 10.0, sr);
+
+    double phase = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double t  = (double) i / sr;
+        const double f0 = f0Center * std::pow (2.0, (depthCents * std::sin (2.0 * kPi * rateHz * t)) / 1200.0);
+        phase += f0 / sr;
+        double pulse = 0.0;
+        if (phase >= 1.0) { phase -= 1.0; pulse = 1.0; }
+
+        const double y = r1.process (pulse);
+        v[(size_t) i] = (float) (4.0 * y);
+    }
+    return v;
+}
+
 // ---------------------------------------------------------------------------
 // Misura di f0 per autocorrelazione, con interpolazione parabolica del picco.
 // ---------------------------------------------------------------------------

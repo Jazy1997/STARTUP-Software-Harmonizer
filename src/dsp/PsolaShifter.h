@@ -48,6 +48,11 @@ private:
     void detectEpochs();
     void synthesise();
     long long nearestEpoch (long long t) const;
+    // Il piu' piccolo epoch vivo strettamente maggiore di e, o -1 se e' gia'
+    // l'ultimo della finestra viva. Usato da synthesise() per misurare il
+    // periodo di analisi LOCALE reale (epochAfter(e) - e) invece di
+    // affidarsi al periodo quantizzato globale — vedi handsoff.md sessione 20.
+    long long epochAfter (long long e) const;
     void emitGrain (long long analysisEpoch, long long synthEpoch, double frac, int P);
 
     double sr        = 48000.0;

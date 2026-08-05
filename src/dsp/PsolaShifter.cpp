@@ -210,6 +210,18 @@ long long PsolaShifter::nearestEpoch (long long t) const
     return best;
 }
 
+long long PsolaShifter::epochAfter (long long e) const
+{
+    // Ring ordinato per inserimento (crescente): il primo valore > e e' la
+    // risposta, basta scandire in ordine e fermarsi appena lo si supera.
+    for (size_t i = 0; i < epochCount; ++i)
+    {
+        const long long v = epochRing[(epochHead + i) % epochCapacity];
+        if (v > e) return v;
+    }
+    return -1;
+}
+
 void PsolaShifter::emitGrain (long long analysisEpoch, long long synthEpoch, double frac, int P)
 {
     // Semiampiezza della finestra, in campioni sorgente.
@@ -291,17 +303,64 @@ void PsolaShifter::synthesise()
     if (synthPos < 0.0)
         synthPos = (double) epochFront();
 
-    const double synthPeriod = std::max (2.0, (double) P / alpha);
-    const long long limit    = absWrite - (long long) std::max ((double) maxPeriod, synthPeriod);
+    // Passo di FALLBACK (periodo quantizzato stimato globalmente): usato
+    // quando non esiste un secondo epoch reale abbastanza vicino da cui
+    // misurare il periodo locale (bordi della finestra viva, o subito dopo
+    // prepare()/reset()), e come limite di sicurezza sotto.
+    const double fallbackStep = std::max (2.0, (double) P / alpha);
+    const long long limit     = absWrite - (long long) std::max ((double) maxPeriod, fallbackStep);
 
     int guard = 0; // salvagente contro loop patologici sull'audio thread
+
+    // Sessione 20 ("wobbling"): synthPos avanzava di un passo FISSO
+    // (fallbackStep, il periodo quantizzato P/alpha), mentre gli epoch di
+    // analisi seguono il periodo REALE del segnale — su materiale reale
+    // (non impulsivo, con jitter naturale di posizionamento degli epoch)
+    // lo scarto fra synthPos e l'epoch piu' vicino derivava nel tempo,
+    // compoundando su MOLTI grani consecutivi, fino a uno scatto quando
+    // nearestEpoch() saltava all'epoch adiacente — misurato direttamente
+    // sul file reale isolato con f0 fissa (vedi handsoff.md sessione 20):
+    // una singola spaziatura anomala fra due epoch veri (dovuta a un
+    // posizionamento sbagliato su un campione non impulsivo) si propagava
+    // per ~15 grani (~30ms, coerente con la finestra del glitch riportata
+    // da real_export_probe) prima di essere riassorbita.
+    //
+    // Fix: il passo di sintesi usa il periodo di analisi LOCALE REALE
+    // (epochAfter(epoch) - epoch, misurato direttamente sul ring per
+    // QUESTO grano) invece del periodo quantizzato globale. ATTENZIONE:
+    // un primo tentativo derivava il passo dalla differenza fra l'epoch di
+    // QUESTA sintesi e quello della sintesi PRECEDENTE — sembrava
+    // equivalente ma non lo e': a alpha != 1, sp avanza a passi diversi da
+    // P, quindi "l'epoch piu' vicino" a iterazioni di sintesi successive
+    // non e' in generale il successivo nel ring, e il passo cosi' calcolato
+    // dipende dal passo precedente — un ciclo di retroazione che diverge
+    // geometricamente (misurato: Test 1 rotto, trasposizione a -12
+    // semitoni tornava vicina all'originale invece di un'ottava sotto).
+    // epochAfter() evita il problema: legge la spaziatura vera fra due
+    // epoch ADIACENTI nel ring, indipendente da come synthPos si e' mosso
+    // in precedenza.
     while (synthPos < (double) limit && guard++ < 4096)
     {
         const long long sp   = (long long) std::floor (synthPos);
         const double    frac = synthPos - (double) sp;
 
-        emitGrain (nearestEpoch (sp), sp, frac, P);
-        synthPos += synthPeriod;
+        const long long epoch = nearestEpoch (sp);
+
+        emitGrain (epoch, sp, frac, P);
+
+        double step = fallbackStep;
+        const long long epochNext = epochAfter (epoch);
+        if (epochNext > epoch)
+        {
+            const double localPeriod = (double) (epochNext - epoch);
+            // Uno scarto assurdo (epoch mal rilevato) non deve produrre un
+            // passo patologico: si accetta solo entro un range sano intorno
+            // ai periodi possibili del motore.
+            if (localPeriod >= (double) minPeriod * 0.5 && localPeriod <= (double) maxPeriod * 2.0)
+                step = clampd (localPeriod / alpha, 2.0, 2.0 * (double) maxPeriod);
+        }
+
+        synthPos += step;
     }
 }
 
