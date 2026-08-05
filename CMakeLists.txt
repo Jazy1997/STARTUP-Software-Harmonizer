@@ -59,6 +59,7 @@ target_sources(Harmonizer
         src/midi/PlayModeInput.cpp
         src/ui/PresetTableEditor.cpp
         src/ui/PresetListEditor.cpp
+        src/ui/RootNoteGrid.cpp
 )
 
 target_compile_definitions(Harmonizer

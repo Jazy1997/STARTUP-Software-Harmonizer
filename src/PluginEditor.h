@@ -3,12 +3,15 @@
 #include "PluginProcessor.h"
 #include "ui/PresetTableEditor.h"
 #include "ui/PresetListEditor.h"
+#include "ui/RootNoteGrid.h"
 
 // M0/M1/M2 — editor minimo con controlli diretti (ComboBox/Slider/bottoni),
 // sufficiente per gestire la libreria preset e testare l'armonizzazione in un
 // host senza hardware MIDI CC (M4) ne' le tre schermate definitive (§8 del
 // PRD, lavoro di M5). Sessione 21: il riordino preset e' ora drag&drop vero
-// (ui::PresetListEditor, FR-06/07/§8.2) al posto dei bottoni Su/Giu' — resta
+// (ui::PresetListEditor, FR-06/07/§8.2) al posto dei bottoni Su/Giu'.
+// Sessione 22: fondamentale ora selezionata da una griglia cromatica di 12
+// pulsanti (ui::RootNoteGrid, §8.1/FR-15) al posto della ComboBox. Resta
 // comunque un pannello piatto, non le tre schermate definitive.
 class HarmonizerAudioProcessorEditor : public juce::AudioProcessorEditor,
                                         private juce::Timer
@@ -23,13 +26,19 @@ public:
 private:
     void timerCallback() override;
     void syncPresetSelectionFromParameter();
+    void syncRootNoteFromParameter();
     void syncCcControlsFromRouter();
     void commitRename();
     void selectPresetIndex (int index);
+    void selectRootNote (int pitchClass);
 
     HarmonizerAudioProcessor& processorRef;
 
-    juce::ComboBox rootNoteBox;
+    // Sessione 22: griglia cromatica di 12 pulsanti (drag&drop non serve
+    // qui, solo click) al posto della ComboBox — stesso principio "lettura
+    // dal vivo" di ui::PresetListEditor, nessuna attachment diretta (vedi
+    // selectRootNote()/syncRootNoteFromParameter()).
+    ui::RootNoteGrid rootNoteGrid;
     // Sessione 21: la lista preset e' ora ui::PresetListEditor (drag&drop,
     // FR-06/07) dentro un Viewport per lo scroll verticale (fino a
     // PresetLibrary::maxPresets = 128 righe) — non piu' una ComboBox.
@@ -108,7 +117,6 @@ private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    std::unique_ptr<ComboAttachment> rootNoteAttachment;
     std::unique_ptr<ComboAttachment> stabilityAttachment;
     std::unique_ptr<SliderAttachment> numVoicesAttachment;
     std::unique_ptr<SliderAttachment> dryLevelAttachment;

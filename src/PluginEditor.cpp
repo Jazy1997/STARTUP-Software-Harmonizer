@@ -44,17 +44,14 @@ namespace
 }
 
 HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p), presetListEditor (p), presetTableEditor (p)
+    : AudioProcessorEditor (&p), processorRef (p), rootNoteGrid (p), presetListEditor (p), presetTableEditor (p)
 {
     auto& apvtsRef = processorRef.apvts;
 
-    if (auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (apvtsRef.getParameter ("rootNote")))
-        for (auto& choice : choiceParam->choices)
-            rootNoteBox.addItem (choice, rootNoteBox.getNumItems() + 1);
-
-    addAndMakeVisible (rootNoteBox);
-    rootNoteLabel.attachToComponent (&rootNoteBox, true);
+    addAndMakeVisible (rootNoteGrid);
+    rootNoteLabel.attachToComponent (&rootNoteGrid, true);
     addAndMakeVisible (rootNoteLabel);
+    rootNoteGrid.onNoteClicked = [this] (int pitchClass) { selectRootNote (pitchClass); };
 
     if (auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (apvtsRef.getParameter ("stabilityLevel")))
         for (auto& choice : choiceParam->choices)
@@ -94,7 +91,6 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     addAndMakeVisible (activeVoicesLabel);
     addAndMakeVisible (activeVoicesValueLabel);
 
-    rootNoteAttachment   = std::make_unique<ComboAttachment>  (apvtsRef, "rootNote",      rootNoteBox);
     stabilityAttachment  = std::make_unique<ComboAttachment>  (apvtsRef, "stabilityLevel", stabilityBox);
     numVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "numVoices",     numVoicesSlider);
     dryLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "dryLevel",      dryLevelSlider);
@@ -344,7 +340,7 @@ void HarmonizerAudioProcessorEditor::resized()
         area.removeFromTop (gap);
     };
 
-    layoutRow (rootNoteBox);
+    layoutRow (rootNoteGrid);
 
     {
         // Sessione 21 (drag&drop preset, FR-06/07/§8.2): 7 righe visibili di
@@ -448,6 +444,7 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     // (nessun componente figlio da ricreare).
     presetListEditor.refresh();
     syncPresetSelectionFromParameter();
+    syncRootNoteFromParameter();
     syncCcControlsFromRouter();
 
     activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
@@ -574,4 +571,29 @@ void HarmonizerAudioProcessorEditor::selectPresetIndex (int index)
 
     lastSyncedSelectedIndex = -1; // forza il riallineamento immediato sotto
     syncPresetSelectionFromParameter();
+}
+
+void HarmonizerAudioProcessorEditor::syncRootNoteFromParameter()
+{
+    // Nota: la CC override della fondamentale (FR-36/37) non scrive nel
+    // parametro APVTS "rootNote" (risolta a valle in OverrideManager, vedi
+    // PluginProcessor::processBlock) — la griglia non riflette un override
+    // CC attivo, stessa limitazione gia' nota per la vecchia ComboBox
+    // (handsoff.md §6). Qui si riflette solo il parametro (automazione host,
+    // caricamento stato, click).
+    auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (processorRef.apvts.getParameter ("rootNote"));
+    if (choiceParam == nullptr)
+        return;
+
+    rootNoteGrid.setSelectedIndex (choiceParam->getIndex());
+}
+
+void HarmonizerAudioProcessorEditor::selectRootNote (int pitchClass)
+{
+    auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (processorRef.apvts.getParameter ("rootNote"));
+    if (choiceParam == nullptr)
+        return;
+
+    *choiceParam = pitchClass;
+    rootNoteGrid.setSelectedIndex (pitchClass); // riscontro immediato al click, non aspetta il prossimo tick del timer
 }

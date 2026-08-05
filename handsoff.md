@@ -33,6 +33,42 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
 
+**Novita' sessione 22 (continuazione) — griglia cromatica dei 12 pulsanti per la fondamentale**
+**(terzo slice di M5, §8.1/FR-15), su richiesta esplicita dell'utente. CONFERMATA dall'utente:**
+
+- **`src/ui/RootNoteGrid.{h,cpp}`** (nuovo, terzo componente custom del progetto dopo
+  `PresetTableEditor`/`PresetListEditor`): 12 celle disegnate a mano in `paint()`, larghezza
+  uguale divisa sulla riga, nome nota letto dal vivo da
+  `AudioParameterChoice::choices` del parametro `"rootNote"` — nessuna copia cache, stesso
+  principio gia' in uso per la lista preset. Nessuna `ComboBoxAttachment` (serve un vero
+  `juce::ComboBox`, non piu' presente): sincronizzazione manuale, stesso schema gia' rodato per
+  `presetIndex` — `PluginEditor::selectRootNote()` scrive `*choiceParam = pitchClass` al click
+  (chiama `setValueNotifyingHost` internamente, come `AudioParameterInt::operator=` gia' usato
+  da `selectPresetIndex`), `syncRootNoteFromParameter()` rilegge l'indice e aggiorna
+  l'evidenziazione ad ogni tick del timer (15Hz) per riflettere automazione host/caricamento
+  stato. **Nota lasciata nel codice**: la CC override della fondamentale (FR-36/37) non scrive
+  nel parametro APVTS, quindi la griglia non riflette un override CC attivo — stessa
+  limitazione gia' nota per la vecchia ComboBox (handsoff.md §6, "il selettore root/preset non
+  riflette visivamente un override CC attivo"), non peggiorata ne' risolta qui.
+- **`src/PluginEditor.{h,cpp}`**: `rootNoteBox` (ComboBox) e `rootNoteAttachment` **rimossi**,
+  sostituiti da `rootNoteGrid` (membro, non puntatore — stesso pattern di `presetListEditor`).
+- **`CMakeLists.txt`**: nuovo file sorgente `src/ui/RootNoteGrid.cpp`.
+- **Verificato per calcolo**: build VST3 e Standalone riuscite su **entrambe** le
+  configurazioni Debug e Release (lezione della sessione precedente applicata: Ableton scansiona
+  la cartella Release, non Debug — vedi sopra), tutte e 6 le suite `ctest` verdi (nessuna
+  toccata da questo lavoro), `pluginval --strictness-level 10` **SUCCESS** su entrambe le build.
+- **Verificato visivamente** (screenshot reale via PowerShell/`System.Drawing`): cella "C"
+  selezionata con bordo ambra, nomi nota leggibili. **Limite noto, NON introdotto da questa
+  modifica**: alla larghezza massima attuale della finestra (1200px, `setResizeLimits`), sia la
+  griglia sia la tabella preset 12 colonne preesistente mostrano solo 10 delle 12 colonne —
+  stesso limite gia' segnalato in sessione 15 per la tabella (soluzione naturale sarebbe un
+  `Viewport` orizzontale con scroll, esplicitamente rimandata anche allora), qui semplicemente
+  ereditato dalla stessa riga di layout (`area.removeFromLeft(labelWidth)`).
+- **CONFERMATO dall'utente**: i 12 pulsanti sono leggibili e il click su una nota diversa da C
+  seleziona correttamente la nuova fondamentale (verificato che l'interazione di click, non
+  simulabile automaticamente su un'app desktop a differenza del browser, funziona per davvero).
+  Lavoro pronto per il commit.
+
 **Novita' sessione 22 — evidenziazione dei primi 5 preset (secondo slice di M5, §8.2), su**
 **esplicita scelta dell'utente fra le opzioni proposte a fine sessione 21:**
 
@@ -1359,14 +1395,22 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Sessione 22 — badge di evidenziazione dei primi 5 preset: CONFERMATO dall'utente su Standalone**
-**e VST3 in Ableton (vedi §2), dopo aver ricompilato anche la build Release** (la Debug da sola
-non bastava — vedi la nota su Ableton/percorso di scansione in §2). Lavoro committato.
+**Sessione 22 — DUE slice completati e CONFERMATI dall'utente (vedi §2):**
+1. Badge di evidenziazione dei primi 5 preset — confermato su Standalone e VST3 in Ableton,
+   dopo aver ricompilato anche la build Release (la Debug da sola non bastava — vedi nota su
+   Ableton/percorso di scansione in §2).
+2. Griglia cromatica dei 12 pulsanti per la fondamentale — confermato che l'interazione di
+   click funziona davvero (non solo la resa visiva).
 
-Prossimi slice di M5 ancora da iniziare dopo questo (lista invariata da sessione 21): griglia
-cromatica dei 12 pulsanti per la fondamentale (oggi ComboBox), gain/pan per voce (assenti
-dall'UI), indicatore stato licenza, scaffold delle 3 schermate PRD, tema chiaro/scuro (FR-61,
-`[SHOULD]`).
+Prossimi slice di M5 ancora da iniziare (lista invariata, tolti i due sopra): gain/pan per
+voce (assenti dall'UI), indicatore stato licenza, scaffold delle 3 schermate PRD, tema
+chiaro/scuro (FR-61, `[SHOULD]`).
+
+**Punto aperto non bloccante, emerso in questa sessione**: sia la griglia fondamentale sia la
+tabella preset 12x8 (gia' noto da sessione 15) non mostrano tutte e 12 le colonne alla
+larghezza massima attuale della finestra (1200px) — un `Viewport` orizzontale con scroll
+risolverebbe entrambe insieme, ma resta rimandato finche' non diventa un problema reale per
+l'utente (non l'ha segnalato).
 
 **Sessione 21 — CONFERMATO dall'utente sul VST3 reale (vedi §2): il drag&drop funziona,**
 **CC aggiornato live durante il riordino.** Lavoro committato. Non ancora testato con un
