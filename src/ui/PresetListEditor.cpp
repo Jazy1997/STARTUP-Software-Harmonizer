@@ -43,6 +43,14 @@ namespace ui
         const auto lib = processorRef.getPresetLibrary();
         const int n = juce::jmin (numRows, lib->getNumPresets()); // difesa: shrink concorrente
 
+        // I primi 5 preset sono quelli raggiungibili dalle 5 direzioni del
+        // navigation button del controller hardware dedicato (PRD §8.2,
+        // FR-07): l'utente riordina la lista proprio per decidere cosa
+        // avere "sotto le dita" li'. Un badge numerato (1-5) rende visibile
+        // quella corrispondenza senza dover consultare il manuale.
+        constexpr int numNavSlots = 5;
+        const auto navAccentColour = juce::Colour (0xffe0a72e);
+
         for (int i = 0; i < n; ++i)
         {
             const juce::Rectangle<int> row (0, i * rowHeight, getWidth(), rowHeight);
@@ -67,6 +75,18 @@ namespace ui
             const auto& preset = lib->getPreset (i);
 
             auto textArea = row.reduced (4, 0);
+            auto navArea = textArea.removeFromLeft (18);
+            if (i < numNavSlots)
+            {
+                auto badge = navArea.withSizeKeepingCentre (14, 14);
+                g.setColour (navAccentColour.withAlpha (0.25f));
+                g.fillRoundedRectangle (badge.toFloat(), 3.0f);
+                g.setColour (navAccentColour);
+                g.drawRoundedRectangle (badge.toFloat(), 3.0f, 1.0f);
+                g.setFont (juce::FontOptions (10.0f));
+                g.drawText (juce::String (i + 1), badge, juce::Justification::centred);
+            }
+
             auto ccArea = textArea.removeFromLeft (36);
 
             g.setColour (juce::Colours::white.withAlpha (0.6f));

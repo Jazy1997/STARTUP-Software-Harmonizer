@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-05 (sessione 21)
+> Ultimo aggiornamento: 2026-08-05 (sessione 22)
 
 ---
 
@@ -32,6 +32,32 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 22 — evidenziazione dei primi 5 preset (secondo slice di M5, §8.2), su**
+**esplicita scelta dell'utente fra le opzioni proposte a fine sessione 21:**
+
+Testo PRD di riferimento (§8.2/FR-07): "il controller dedicato ha un navigation button a 5
+direzioni che seleziona sempre i primi 5 preset della lista" — la UI deve rendere visibile
+quella corrispondenza senza che l'utente debba consultare il manuale.
+
+- **`src/ui/PresetListEditor.cpp`, `paint()`**: aggiunto un badge numerato (1-5) — cerchio
+  arrotondato color ambra (`0xffe0a72e`) con il numero al centro — disegnato SOLO per le
+  prime 5 righe (`i < numNavSlots`), in una colonna dedicata di 18px riservata per TUTTE le
+  righe (anche oltre la quinta, lasciata vuota) cosi' che le colonne CC/nome restino allineate
+  a prescindere dal numero di preset. Livello di disegno indipendente dallo sfondo di
+  selezione/trascinamento gia' esistente (nessuna interferenza: il badge resta leggibile sia
+  sulla riga selezionata sia durante un drag). **Nessuna modifica al modello ne' a
+  `PresetListEditor.h`**: e' pura resa grafica, stessa lettura dal vivo di `PresetLibrary`
+  gia' in uso per nome/CC — il badge segue automaticamente il preset quando si riordina la
+  lista (nessun caching, nessun rischio di badge "stantio").
+- **Verificato per calcolo**: build VST3 e Standalone riuscite (solo il consueto fallimento di
+  copia post-build per permessi), tutte e 6 le suite `ctest` verdi (nessuna toccata da questo
+  lavoro — modifica isolata a `paint()`), `pluginval --strictness-level 10` **SUCCESS**.
+- **Verificato visivamente** (stessa tecnica di sessione 21: cattura diretta dello schermo via
+  PowerShell/`System.Drawing`, non `PrintWindow`): badge ambra "1".."5" visibili sulle righe
+  CC1-CC5 (Maj/Min/Dom/Sus/Half Dim), assenti su CC6/CC7 (Dim/Aug7) — coerente con la spec.
+  **NON ancora confermato dall'utente** (ne' all'ascolto — non applicabile, e' solo UI — ne'
+  con un controllo visivo diretto dell'utente su Standalone/host reale).
 
 **Novita' sessione 21 — primo slice del punto "prossimi slice di M5 (UI)": lista preset con
 drag&drop vero (FR-06/07, §8.2), sostituisce la ComboBox + bottoni Su/Giu':**
@@ -1321,6 +1347,19 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 ---
 
 ## 6. Quale sarebbe il prossimo passo
+
+**Sessione 22 — badge di evidenziazione dei primi 5 preset scritto, verificato per calcolo e**
+**visivamente (screenshot reale, vedi §2), NON ancora confermato dall'utente.** Prossimo passo
+immediato: l'utente deve aprire lo Standalone/VST3 e confermare a occhio che i 5 badge (1-5)
+siano leggibili e coerenti col comportamento del navigation button hardware quando disponibile.
+Non e' un fix di suono (regola 12 non si applica), ma resta comunque un controllo umano prima
+di considerarlo definitivamente chiuso, come per ogni slice UI precedente (tabella 12x8 di
+sessione 15, lista drag&drop di sessione 21).
+
+Prossimi slice di M5 ancora da iniziare dopo questo (lista invariata da sessione 21): griglia
+cromatica dei 12 pulsanti per la fondamentale (oggi ComboBox), gain/pan per voce (assenti
+dall'UI), indicatore stato licenza, scaffold delle 3 schermate PRD, tema chiaro/scuro (FR-61,
+`[SHOULD]`).
 
 **Sessione 21 — CONFERMATO dall'utente sul VST3 reale (vedi §2): il drag&drop funziona,**
 **CC aggiornato live durante il riordino.** Lavoro committato. Non ancora testato con un
