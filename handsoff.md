@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-07 (sessione 24)
+> Ultimo aggiornamento: 2026-08-07 (sessione 25)
 
 ---
 
@@ -32,6 +32,106 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 25 — implementazione di `PRD-UI.md` "Passo 1": le tre schermate**
+**(Main/Edit/Impostazioni) con barra di navigazione sempre visibile, FR-73..83, a**
+**suono invariato. Verificato per calcolo, per screenshot e con click reali (non**
+**simulati) su tutti e tre i bottoni di navigazione e sulla griglia fondamentale.**
+**Piano approvato con l'utente: due passi separati — questo commit e' il Passo 1**
+**(struttura, zero cambiamenti a `processBlock`); `dryWetMix` (Passo 2, PRD-UI §6.1)**
+**e' lavoro successivo, richiede conferma all'ascolto (CLAUDE.md regola 12).**
+
+Decisioni prese con l'utente in fase di pianificazione (AskUserQuestion): due passi
+separati come sopra; nessuna passata estetica (look JUCE di default, nessuna
+`LookAndFeel` custom — PRD-UI specifica cosa sta dove, non come appare); nessun
+`Viewport` orizzontale per la tabella 12x8 (l'utente ha confermato di aver gia'
+testato che si vede e funziona correttamente alla larghezza attuale).
+
+- **`src/PluginEditor.h`/`.cpp`** (il grosso del lavoro): il pannello piatto da
+  1428px al minimo (placeholder esplicito fin da M0) diventa tre `juce::Component`
+  (`mainPage`/`editPage`/`settingsPage`), tutti con GLI STESSI bounds impostati ad
+  ogni `resized()` — cambiare schermata (`showPage()`) alterna solo `setVisible()` +
+  lo stato dei tre `TextButton` di navigazione, non ricalcola il layout (PRD-UI §2:
+  nessuno scatto visivo). I tre bottoni di navigazione sono figli di `*this`, non di
+  una pagina: restano visibili su tutte e tre le schermate (FR-73, supera la lettera
+  originale del PRD principale che la rendeva raggiungibile solo da Main).
+  Ogni controllo esistente ha cambiato SOLO genitore (`addAndMakeVisible` da `*this`
+  a `mainPage`/`editPage`/`settingsPage`): attachment, lambda `onClick`/
+  `onValueChange`, `timerCallback()` e tutti i metodi `sync*` sono rimasti
+  **bit-per-bit identici** — nessuna logica toccata, solo dove vive ogni widget.
+  `resized()` si e' spezzato in `layoutMain`/`layoutEdit`/`layoutSettings`, chiamate
+  tutte e tre ad ogni resize sui bounds della rispettiva pagina.
+  - **Main** (FR-74): griglia fondamentale + lista preset (5 righe, non piu' 7 —
+    FR-76) affiancate in alto; sotto, riga di 5 manopole **(Dry/Wet) (Stability)
+    (Fmt Spread) (Glide) (Voices)** nell'ordine del mockup ASCII di PRD-UI §3;
+    Bypass/Play Mode; nota rilevata **sintetica** (nuova label
+    `detectedShortValueLabel`, solo nome nota o `--`) + voci attive.
+  - **Edit** (FR-81): nome preset, tabella 12x8, Add/Duplicate/Delete +
+    Import/Export/Load/Save Global, il blocco voci INTERO di sessione 23
+    (Fix/Fmt/Pan/Gain, 8 colonne) spostato qui senza split, Keep Tails.
+  - **Impostazioni** (FR-82/FR-83): le 3 righe CC + Voice Cap + MIDI Channel, e la
+    nota rilevata in versione **diagnostica completa** (stesso testo di sempre,
+    spostato qui da Main).
+  - **FR-78 (manopole)**: Stability, Num Voices, Fmt Spread, Glide diventano
+    `juce::Slider` in stile `RotaryVerticalDrag` (helper `setupKnob`, nuovo, accanto
+    a `setupSlider`). Il caso non banale era Stability: da `ComboBox`+
+    `ComboBoxAttachment` a `Slider`+`SliderAttachment` — il parametro APVTS resta
+    `AudioParameterChoice` (nessun cambiamento al modello), il widget nuovo mostra
+    comunque il nome del livello (`Balanced`, non un numero) perche'
+    `SliderParameterAttachment` usa `RangedAudioParameter::getText` internamente —
+    **confermato allo screenshot**, non solo per lettura del codice (PRD-UI §6.2).
+  - **FR-77 (Dry/Wet)**: un solo knob "Dry/Wet" su Main, agganciato a `wetLevel` come
+    segnaposto funzionante (non il crossfade `dryWetMix`, quello e' Passo 2) — nessun
+    controllo dedicato per `dryLevel` in questo passo (resta un parametro APVTS
+    dichiarato e letto in `processBlock` esattamente come oggi, default 1.0
+    invariato, semplicemente senza widget UI per ora). Coerente con PRD-UI §3: niente
+    due slider Dry/Wet separati su Main.
+  - **FR-79 (CC come testo)**: `rootCcSlider`/`presetCcSlider`/`bypassCcSlider`
+    (`juce::Slider`) diventano `juce::TextEditor` (`setInputRestrictions(3, "0-9")`,
+    commit su `onReturnKey`/`onFocusLost` con `jlimit(0,127,...)`) — i bottoni Learn
+    restano invariati accanto, stessa scelta esplicita dell'utente in sessione 24.
+    `syncCcControlsFromRouter()`: la guardia anti-scatto durante il polling a 15Hz
+    passa da `isMouseButtonDown()` a `hasKeyboardFocus(false)`, stesso principio gia'
+    in uso per `presetNameEditor`.
+- **`src/ui/RootNoteGrid.h`/`.cpp`** (FR-75): reshape da 1x12 a **2 colonne x 6
+  righe**, indice = `riga*2 + colonna` (riga 0 = C/C#, riga 1 = D/D#, ... riga 5 =
+  A#/B). API pubblica invariata (`setSelectedIndex`/`getSelectedIndex`/
+  `onNoteClicked`): cambiano solo `cellAt()` (ora prende x E y, non solo x) e
+  `paint()` (rettangolo di cella calcolato da riga/colonna). Nessun cambiamento al
+  parametro `rootNote` (resta `AudioParameterChoice` a 12 valori).
+- **Nessuna modifica a `CMakeLists.txt`**: nessun file sorgente nuovo, solo file
+  esistenti modificati.
+- **Verificato per calcolo**: build VST3 e Standalone riuscite su **entrambe** le
+  configurazioni Debug e Release (solo il consueto fallimento di copia post-build per
+  permessi in `Program Files`, preesistente e atteso). Tutte e 6 le suite `ctest`
+  verdi su Debug e su Release (nessuna toccata da questo lavoro, tutte headless).
+  `pluginval --strictness-level 10` **SUCCESS** su Debug e Release VST3 (AU non
+  applicabile su Windows).
+- **Verificato visivamente e con interazione reale** (screenshot via
+  PowerShell/`System.Drawing`, stessa tecnica di sessioni 21/22/23 — **nota per il
+  futuro**: lo script di cattura deve chiamare `SetProcessDPIAware()` prima di
+  `GetWindowRect`/`CopyFromScreen`, altrimenti cattura solo l'80% della finestra reale
+  su un monitor a 125% di scala — mi ha inizialmente fatto sospettare un bug di
+  layout inesistente, la manopola "Voices" sembrava mancante ma era solo fuori
+  dall'area catturata; vedi impressioni sotto): le tre schermate mostrano tutti i
+  controlli attesi (griglia 2x6 con badge ambra 1-5 sulla lista, 5 manopole con
+  Stability che mostra "Balanced", tabella 12x8 completa con tutte le 8 colonne voce,
+  le 3 righe CC come caselle numeriche con Learn accanto, nota sintetica su Main e
+  diagnostica completa su Impostazioni). **Click reali (non simulati) verificati**:
+  i tre bottoni di navigazione cambiano schermata da qualunque schermata (incluso
+  Edit→Impostazioni, non solo da Main); il click sulla nuova griglia 2x6 su una nota
+  diversa da C (provato "G", riga F#/G colonna destra) seleziona correttamente la
+  nota — nessuna regressione sulla geometria riscritta.
+- **Altezza finestra**: `setResizeLimits`/`setSize` passano da
+  `(500,1398,1200,1678)`/`520x1428` a `(520,620,1200,900)`/`900x660` — dentro la
+  stima 550-650px di PRD-UI §8 per il contenuto minimo (layoutEdit, la piu' alta
+  delle tre), con margine per la finestra di default.
+- **Non ancora fatto in questa sessione**: `dryWetMix` (Passo 2 del piano) —
+  implementazione in corso subito dopo, richiede conferma all'ascolto dall'utente
+  prima di essere dichiarato completo (CLAUDE.md regola 12), commit separato.
+  L'auto-scroll della lista preset durante il drag (FR-80) resta esplicitamente
+  rimandato, come gia' deciso in sessione 24. Nessun commit ancora fatto per questo
+  lavoro al momento di scrivere questa nota (vedi sotto per il commit).
 
 **Novita' sessione 24 — `PRD-UI.md`, documento di design per le 3 schermate (nessun**
 **codice toccato, su richiesta esplicita dell'utente):**
@@ -1559,6 +1659,20 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 ---
 
 ## 6. Quale sarebbe il prossimo passo
+
+**Sessione 25 — Passo 1 di `PRD-UI.md` implementato (tre schermate, FR-73..83, a**
+**suono invariato) e verificato (build/ctest/pluginval/screenshot/click reali —**
+**vedi §2). PROSSIMO PASSO NATURALE: Passo 2, `dryWetMix` (PRD-UI §6.1) — nuovo**
+**parametro APVTS, crossfade a potenza costante, sostituisce la lettura di**
+**`dryLevel`/`wetLevel` in `processBlock` (i due parametri restano dichiarati per**
+**sempre, CLAUDE.md regola 6). Tocca il suono per davvero: da confermare**
+**all'ascolto dall'utente prima di essere dichiarato completo (CLAUDE.md regola 12),**
+**il default 0.7 e' un punto di partenza non un valore calcolato.** Dopo la
+conferma (o un aggiustamento di default/curva se il primo ascolto non convince):
+aggiornare il knob "Dry/Wet" su Main per puntare a `dryWetMix` invece che a
+`wetLevel` (oggi un segnaposto funzionante, vedi §2). Slice di M5 ancora da
+iniziare dopo questo: indicatore stato licenza, tema chiaro/scuro (FR-61,
+`[SHOULD]`), auto-scroll della lista preset durante il drag (FR-80, rimandato).
 
 **Sessione 24 — `PRD-UI.md` scritto e completo (Main/Edit/Impostazioni, FR-73..83),**
 **nessun codice toccato per scelta esplicita dell'utente. PROSSIMO PASSO NATURALE:**

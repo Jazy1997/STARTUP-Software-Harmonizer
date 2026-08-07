@@ -13,14 +13,31 @@ namespace
         parent.addAndMakeVisible (label);
     }
 
-    void setupCcRow (juce::Slider& slider, juce::Label& label, juce::TextButton& learnButton, juce::Component& parent)
+    // FR-78: Stability, Num Voices, Fmt Spread, Glide (e Dry/Wet, FR-77)
+    // diventano manopole rotative su Main, per coerenza visiva fra loro e
+    // con lo stile "performance" della schermata (PRD-UI §3/§6.2). A
+    // differenza di setupSlider la label non e' attaccata al componente (va
+    // in una riga di intestazione separata sopra la riga di manopole, vedi
+    // layoutMain) — un'unica riga di didascalie sopra N manopole allineate.
+    void setupKnob (juce::Slider& slider, juce::Label& label, juce::Component& parent)
     {
-        slider.setSliderStyle (juce::Slider::LinearHorizontal);
-        slider.setRange (0.0, 127.0, 1.0);
-        slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 20);
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 16);
         parent.addAndMakeVisible (slider);
 
-        label.attachToComponent (&slider, true);
+        label.setJustificationType (juce::Justification::centred);
+        parent.addAndMakeVisible (label);
+    }
+
+    // FR-79: casella di testo numerica (0-127) + pulsante Learn, non piu'
+    // uno slider trascinabile.
+    void setupCcRow (juce::TextEditor& editor, juce::Label& label, juce::TextButton& learnButton, juce::Component& parent)
+    {
+        editor.setInputRestrictions (3, "0123456789");
+        editor.setJustification (juce::Justification::centredRight);
+        parent.addAndMakeVisible (editor);
+
+        label.attachToComponent (&editor, true);
         parent.addAndMakeVisible (label);
 
         learnButton.setClickingTogglesState (false);
@@ -48,111 +65,93 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
 {
     auto& apvtsRef = processorRef.apvts;
 
-    addAndMakeVisible (rootNoteGrid);
-    rootNoteLabel.attachToComponent (&rootNoteGrid, true);
-    addAndMakeVisible (rootNoteLabel);
+    // FR-73: barra di navigazione a 3 pulsanti — figli di *this, non di una
+    // pagina, cosi' restano visibili su tutte e tre le schermate (a
+    // differenza della lettera originale di §8.1, che la rendeva
+    // raggiungibile solo da Main).
+    addAndMakeVisible (navMainButton);
+    addAndMakeVisible (navEditButton);
+    addAndMakeVisible (navSettingsButton);
+    navMainButton.onClick     = [this] { showPage (Page::main); };
+    navEditButton.onClick     = [this] { showPage (Page::edit); };
+    navSettingsButton.onClick = [this] { showPage (Page::settings); };
+
+    addAndMakeVisible (mainPage);
+    addAndMakeVisible (editPage);
+    addAndMakeVisible (settingsPage);
+
+    // =================== Main (FR-74) ===================
+    mainPage.addAndMakeVisible (rootNoteGrid);
+    mainPage.addAndMakeVisible (rootNoteLabel);
     rootNoteGrid.onNoteClicked = [this] (int pitchClass) { selectRootNote (pitchClass); };
 
-    if (auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (apvtsRef.getParameter ("stabilityLevel")))
-        for (auto& choice : choiceParam->choices)
-            stabilityBox.addItem (choice, stabilityBox.getNumItems() + 1);
-
-    addAndMakeVisible (stabilityBox);
-    stabilityLabel.attachToComponent (&stabilityBox, true);
-    addAndMakeVisible (stabilityLabel);
-
-    addAndMakeVisible (presetListViewport);
+    mainPage.addAndMakeVisible (presetListViewport);
     presetListViewport.setViewedComponent (&presetListEditor, false);
     presetListViewport.setScrollBarsShown (true, false); // solo verticale
-    presetLabel.attachToComponent (&presetListViewport, true);
-    addAndMakeVisible (presetLabel);
+    mainPage.addAndMakeVisible (presetLabel);
     presetListEditor.onRowClicked = [this] (int index) { selectPresetIndex (index); };
     // Un passo di drag ha gia' applicato movePreset: si tiene la selezione
     // agganciata al preset trascinato, stessa chiamata gia' usata prima di
     // questa sessione da moveUpButton/moveDownButton.
     presetListEditor.onReordered = [this] (int newIndex) { selectPresetIndex (newIndex); };
 
-    addAndMakeVisible (presetNameEditor);
+    // FR-78/§6.2: stabilityKnob e' uno Slider su un AudioParameterChoice —
+    // il range del widget copre gli indici delle scelte (0..N-1), non i
+    // valori grezzi; SliderParameterAttachment usa
+    // RangedAudioParameter::getText per popolare il testo del knob (mostra
+    // "Fast"/"Balanced"/... non un numero, vedi PRD-UI.md §6.2).
+    if (auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (apvtsRef.getParameter ("stabilityLevel")))
+        stabilityKnob.setRange (0.0, (double) (choiceParam->choices.size() - 1), 1.0);
+
+    setupKnob (dryWetKnob,        dryWetLabel,        mainPage);
+    setupKnob (stabilityKnob,     stabilityLabel,     mainPage);
+    setupKnob (formantSpreadSlider, formantSpreadLabel, mainPage);
+    setupKnob (glideTimeSlider,   glideLabel,          mainPage);
+    setupKnob (numVoicesSlider,   numVoicesLabel,      mainPage);
+
+    // FR-77: dryWetKnob resta agganciato a "wetLevel" in questo passo (vedi
+    // PluginEditor.h) — non e' ancora il crossfade dryWetMix (Passo 2,
+    // cambia processBlock, va confermato all'ascolto).
+    dryWetAttachment        = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",       dryWetKnob);
+    stabilityAttachment     = std::make_unique<SliderAttachment> (apvtsRef, "stabilityLevel", stabilityKnob);
+    formantSpreadAttachment = std::make_unique<SliderAttachment> (apvtsRef, "formantSpread",  formantSpreadSlider);
+    glideTimeAttachment     = std::make_unique<SliderAttachment> (apvtsRef, "glideTimeMs",    glideTimeSlider);
+    numVoicesAttachment     = std::make_unique<SliderAttachment> (apvtsRef, "numVoices",      numVoicesSlider);
+
+    // FR-30/34/36: bypass e' un parametro APVTS come gli altri (automatizzabile
+    // dall'host); il CC lo mette in override esattamente come root/preset
+    // (vedi PluginProcessor::processBlock, OverrideManager). Il bottone qui
+    // serve a testare senza un controller MIDI a disposizione.
+    bypassToggle.setButtonText ("Bypass");
+    mainPage.addAndMakeVisible (bypassToggle);
+    bypassAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "bypass", bypassToggle);
+
+    // FR-24/28: interruttore Harmonizer/Play.
+    playModeToggle.setButtonText ("Play Mode");
+    mainPage.addAndMakeVisible (playModeToggle);
+    playModeAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "playModeEnabled", playModeToggle);
+
+    // FR-83: versione sintetica della nota rilevata (solo nome nota o "--").
+    detectedShortLabel.attachToComponent (&detectedShortValueLabel, true);
+    mainPage.addAndMakeVisible (detectedShortLabel);
+    mainPage.addAndMakeVisible (detectedShortValueLabel);
+
+    activeVoicesLabel.attachToComponent (&activeVoicesValueLabel, true);
+    mainPage.addAndMakeVisible (activeVoicesLabel);
+    mainPage.addAndMakeVisible (activeVoicesValueLabel);
+
+    // =================== Edit (FR-81) ===================
+    editPage.addAndMakeVisible (presetNameEditor);
     nameLabel.attachToComponent (&presetNameEditor, true);
-    addAndMakeVisible (nameLabel);
+    editPage.addAndMakeVisible (nameLabel);
     presetNameEditor.onReturnKey = [this] { commitRename(); };
     presetNameEditor.onFocusLost = [this] { commitRename(); };
 
-    addAndMakeVisible (presetTableEditor);
-
-    setupSlider (numVoicesSlider, numVoicesLabel, *this);
-    setupSlider (dryLevelSlider, dryLevelLabel, *this);
-    setupSlider (wetLevelSlider, wetLevelLabel, *this);
-    setupSlider (glideTimeSlider, glideLabel, *this);
-    setupSlider (maxVoicesSlider, maxVoicesLabel, *this);
-    setupSlider (formantSpreadSlider, formantSpreadLabel, *this);
-
-    activeVoicesLabel.attachToComponent (&activeVoicesValueLabel, true);
-    addAndMakeVisible (activeVoicesLabel);
-    addAndMakeVisible (activeVoicesValueLabel);
-
-    stabilityAttachment  = std::make_unique<ComboAttachment>  (apvtsRef, "stabilityLevel", stabilityBox);
-    numVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "numVoices",     numVoicesSlider);
-    dryLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "dryLevel",      dryLevelSlider);
-    wetLevelAttachment   = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",      wetLevelSlider);
-    glideTimeAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "glideTimeMs",   glideTimeSlider);
-    maxVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "maxSimultaneousVoices", maxVoicesSlider);
-    formantSpreadAttachment = std::make_unique<SliderAttachment> (apvtsRef, "formantSpread", formantSpreadSlider);
-
-    // Sessione 23 (FR-11/§8.1): striscia unica "voci" — colonna V1..V8,
-    // Fix/Fmt/Pan/Gain impilati. voiceColumnHeaders e' solo testo, nessuna
-    // interazione, nessun parametro dietro.
-    for (int v = 0; v < harmony::numVoices; ++v)
-    {
-        auto& header = voiceColumnHeaders[(size_t) v];
-        header.setText (juce::String (v + 1), juce::dontSendNotification);
-        header.setJustificationType (juce::Justification::centred);
-        addAndMakeVisible (header);
-    }
-
-    addAndMakeVisible (fixMoveLabel);
-    for (int v = 0; v < harmony::numVoices; ++v)
-    {
-        auto& button = voiceFixButtons[(size_t) v];
-        button.setButtonText (juce::String (v + 1));
-        button.setClickingTogglesState (true);
-        addAndMakeVisible (button);
-        voiceFixAttachments[(size_t) v] = std::make_unique<ButtonAttachment> (apvtsRef, "voiceFix" + juce::String (v + 1), button);
-    }
-
-    addAndMakeVisible (voiceFormantLabel);
-    for (int v = 0; v < harmony::numVoices; ++v)
-    {
-        auto& slider = voiceFormantSliders[(size_t) v];
-        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-        addAndMakeVisible (slider);
-        voiceFormantAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceFormantOffset" + juce::String (v + 1), slider);
-    }
-
-    addAndMakeVisible (voicePanLabel);
-    for (int v = 0; v < harmony::numVoices; ++v)
-    {
-        auto& slider = voicePanSliders[(size_t) v];
-        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-        addAndMakeVisible (slider);
-        voicePanAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voicePan" + juce::String (v + 1), slider);
-    }
-
-    addAndMakeVisible (voiceGainLabel);
-    for (int v = 0; v < harmony::numVoices; ++v)
-    {
-        auto& slider = voiceGainSliders[(size_t) v];
-        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-        addAndMakeVisible (slider);
-        voiceGainAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceGain" + juce::String (v + 1), slider);
-    }
+    editPage.addAndMakeVisible (presetTableEditor);
 
     for (auto* b : { &addButton, &duplicateButton, &deleteButton,
                      &importCsvButton, &exportCsvButton, &loadGlobalButton, &saveGlobalButton })
-        addAndMakeVisible (b);
+        editPage.addAndMakeVisible (b);
 
     addButton.onClick = [this]
     {
@@ -260,79 +259,145 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
             ok ? "Libreria salvata come globale." : "Salvataggio fallito.");
     };
 
+    // Sessione 23 (FR-11/§8.1): striscia unica "voci" — colonna V1..V8,
+    // Fix/Fmt/Pan/Gain impilati. voiceColumnHeaders e' solo testo, nessuna
+    // interazione. Sessione 25: il blocco si sposta INTERO su Edit
+    // (PRD-UI §4), stesso ordine verticale, nessuno split.
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& header = voiceColumnHeaders[(size_t) v];
+        header.setText (juce::String (v + 1), juce::dontSendNotification);
+        header.setJustificationType (juce::Justification::centred);
+        editPage.addAndMakeVisible (header);
+    }
+
+    editPage.addAndMakeVisible (fixMoveLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& button = voiceFixButtons[(size_t) v];
+        button.setButtonText (juce::String (v + 1));
+        button.setClickingTogglesState (true);
+        editPage.addAndMakeVisible (button);
+        voiceFixAttachments[(size_t) v] = std::make_unique<ButtonAttachment> (apvtsRef, "voiceFix" + juce::String (v + 1), button);
+    }
+
+    editPage.addAndMakeVisible (voiceFormantLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& slider = voiceFormantSliders[(size_t) v];
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        editPage.addAndMakeVisible (slider);
+        voiceFormantAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceFormantOffset" + juce::String (v + 1), slider);
+    }
+
+    editPage.addAndMakeVisible (voicePanLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& slider = voicePanSliders[(size_t) v];
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        editPage.addAndMakeVisible (slider);
+        voicePanAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voicePan" + juce::String (v + 1), slider);
+    }
+
+    editPage.addAndMakeVisible (voiceGainLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& slider = voiceGainSliders[(size_t) v];
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        editPage.addAndMakeVisible (slider);
+        voiceGainAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceGain" + juce::String (v + 1), slider);
+    }
+
+    // Sessione 10: vedi Phrase.h per la semantica completa.
+    keepTailsToggle.setButtonText ("Keep Tails");
+    editPage.addAndMakeVisible (keepTailsToggle);
+    keepTailsAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "keepPhraseTails", keepTailsToggle);
+
+    // =================== Impostazioni (FR-82) ===================
     // FR-32: canale MIDI, omni come default (itemId 1). itemId N+1 = canale N.
     midiChannelBox.addItem ("Omni", 1);
     for (int ch = 1; ch <= 16; ++ch)
         midiChannelBox.addItem (juce::String (ch), ch + 1);
-    addAndMakeVisible (midiChannelBox);
+    settingsPage.addAndMakeVisible (midiChannelBox);
     midiChannelLabel.attachToComponent (&midiChannelBox, true);
-    addAndMakeVisible (midiChannelLabel);
+    settingsPage.addAndMakeVisible (midiChannelLabel);
     midiChannelBox.onChange = [this]
     {
         const int itemId = midiChannelBox.getSelectedId();
         processorRef.getCcRouter().setMidiChannel (itemId <= 1 ? 0 : itemId - 1);
     };
 
-    // FR-30/31/33: numero CC per funzione + MIDI Learn. Non sono
+    // FR-30/31/33/79: numero CC per funzione (casella di testo numerica, non
+    // piu' slider trascinabile) + MIDI Learn. Non sono
     // AudioProcessorValueTreeState::SliderAttachment: i numeri CC non sono
-    // parametri APVTS (vedi PluginProcessor::getStateInformation), quindi
-    // slider e bottoni si collegano direttamente a CcRouter e si
-    // risincronizzano dal timer esistente (syncCcControlsFromRouter).
-    setupCcRow (rootCcSlider, rootCcLabel, learnRootButton, *this);
-    setupCcRow (presetCcSlider, presetCcLabel, learnPresetButton, *this);
-    setupCcRow (bypassCcSlider, bypassCcLabel, learnBypassButton, *this);
+    // parametri APVTS (vedi PluginProcessor::getStateInformation), quindi le
+    // caselle si collegano direttamente a CcRouter e si risincronizzano dal
+    // timer esistente (syncCcControlsFromRouter).
+    setupCcRow (rootCcEditor, rootCcLabel, learnRootButton, settingsPage);
+    setupCcRow (presetCcEditor, presetCcLabel, learnPresetButton, settingsPage);
+    setupCcRow (bypassCcEditor, bypassCcLabel, learnBypassButton, settingsPage);
 
-    rootCcSlider.onValueChange   = [this] { processorRef.getCcRouter().setRootCc   ((int) rootCcSlider.getValue()); };
-    presetCcSlider.onValueChange = [this] { processorRef.getCcRouter().setPresetCc ((int) presetCcSlider.getValue()); };
-    bypassCcSlider.onValueChange = [this] { processorRef.getCcRouter().setBypassCc ((int) bypassCcSlider.getValue()); };
+    auto commitRootCc = [this]
+    {
+        const int v = juce::jlimit (0, 127, rootCcEditor.getText().getIntValue());
+        rootCcEditor.setText (juce::String (v), juce::dontSendNotification);
+        processorRef.getCcRouter().setRootCc (v);
+    };
+    rootCcEditor.onReturnKey = commitRootCc;
+    rootCcEditor.onFocusLost = commitRootCc;
+
+    auto commitPresetCc = [this]
+    {
+        const int v = juce::jlimit (0, 127, presetCcEditor.getText().getIntValue());
+        presetCcEditor.setText (juce::String (v), juce::dontSendNotification);
+        processorRef.getCcRouter().setPresetCc (v);
+    };
+    presetCcEditor.onReturnKey = commitPresetCc;
+    presetCcEditor.onFocusLost = commitPresetCc;
+
+    auto commitBypassCc = [this]
+    {
+        const int v = juce::jlimit (0, 127, bypassCcEditor.getText().getIntValue());
+        bypassCcEditor.setText (juce::String (v), juce::dontSendNotification);
+        processorRef.getCcRouter().setBypassCc (v);
+    };
+    bypassCcEditor.onReturnKey = commitBypassCc;
+    bypassCcEditor.onFocusLost = commitBypassCc;
 
     learnRootButton.onClick   = [this] { processorRef.getCcRouter().startLearning (CcRouter::LearnTarget::root); };
     learnPresetButton.onClick = [this] { processorRef.getCcRouter().startLearning (CcRouter::LearnTarget::preset); };
     learnBypassButton.onClick = [this] { processorRef.getCcRouter().startLearning (CcRouter::LearnTarget::bypass); };
 
-    // FR-30/34/36: bypass e' un parametro APVTS come gli altri (automatizzabile
-    // dall'host); il CC lo mette in override esattamente come root/preset
-    // (vedi PluginProcessor::processBlock, OverrideManager). Il bottone qui
-    // serve a testare senza un controller MIDI a disposizione.
-    bypassToggle.setButtonText ("Bypass");
-    addAndMakeVisible (bypassToggle);
-    bypassAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "bypass", bypassToggle);
+    // FR-51: tetto voci simultanee — resta uno slider lineare, non fa parte
+    // del gruppo FR-78.
+    setupSlider (maxVoicesSlider, maxVoicesLabel, settingsPage);
+    maxVoicesAttachment = std::make_unique<SliderAttachment> (apvtsRef, "maxSimultaneousVoices", maxVoicesSlider);
 
-    // FR-24/28: interruttore Harmonizer/Play.
-    playModeToggle.setButtonText ("Play Mode");
-    addAndMakeVisible (playModeToggle);
-    playModeAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "playModeEnabled", playModeToggle);
-
-    // Sessione 10: vedi Phrase.h per la semantica completa.
-    keepTailsToggle.setButtonText ("Keep Tails");
-    addAndMakeVisible (keepTailsToggle);
-    keepTailsAttachment = std::make_unique<ButtonAttachment> (apvtsRef, "keepPhraseTails", keepTailsToggle);
-
-    // Diagnostica PRD §8.1 "Display della nota rilevata" — sessione 10.
-    // Non e' un parametro: sincronizzata dal timer esistente come
-    // activeVoicesValueLabel.
+    // FR-83: diagnostica completa (confidenza, stabile/instabile, gate,
+    // late-bindings, block size) — spostata qui da Main, testo invariato.
     detectedLabel.attachToComponent (&detectedValueLabel, true);
-    addAndMakeVisible (detectedLabel);
-    addAndMakeVisible (detectedValueLabel);
+    settingsPage.addAndMakeVisible (detectedLabel);
+    settingsPage.addAndMakeVisible (detectedValueLabel);
 
     syncCcControlsFromRouter();
 
     presetListEditor.refresh();
     syncPresetSelectionFromParameter();
 
+    showPage (Page::main);
+
     setResizable (true, true);
-    // Sessione M5: la griglia preset (12x8 + intestazione, ~214px) aggiunge
-    // circa 220px di altezza minima necessaria e richiede un minimo di
-    // larghezza maggiore (12 colonne + colonna di intestazione riga devono
-    // restare leggibili). Limiti/dimensione precedenti erano (460,950)-(1200,1230)/500x990.
-    // Sessione 21: la ComboBox a riga singola (26px+6px gap) diventa la lista
-    // preset drag&drop (7 righe visibili di default, vedi resized()) —
-    // netto +122px di altezza minima necessaria.
-    // Sessione 23 (FR-11/§8.1): le due righe Fix/Move e Fmt/Voice diventano
-    // una striscia a 4 righe + intestazione (Fix/Fmt/Pan/Gain) — netto
-    // +106px di altezza minima (74px prima, 180px ora, vedi resized()).
-    setResizeLimits (500, 1398, 1200, 1678);
-    setSize (520, 1428);
+    // Sessione 25 (PRD-UI.md, "Passo 1"): il pannello piatto da 1428px al
+    // minimo (tutti i controlli impilati in un'unica colonna) diventa tre
+    // schermate, dimensionate sulla piu' alta delle tre (verosimilmente
+    // Edit: tabella 12x8 + due righe di bottoni + striscia voci a 4 righe).
+    // Beneficio collaterale atteso in PRD-UI §8 (stima 550-650px) — qui
+    // confermato per calcolo sulla somma delle righe di layoutEdit().
+    setResizeLimits (520, 620, 1200, 900);
+    setSize (900, 660);
 
     startTimerHz (15);
 }
@@ -362,6 +427,79 @@ void HarmonizerAudioProcessorEditor::resized()
     auto area = getLocalBounds().reduced (16);
     area.removeFromTop (28); // spazio per il titolo disegnato in paint()
 
+    // FR-73: barra di navigazione a 3 pulsanti, sempre visibile.
+    auto navBar = area.removeFromTop (28);
+    layoutRowOfButtons (navBar, { &navMainButton, &navEditButton, &navSettingsButton });
+    area.removeFromTop (10);
+
+    // Le tre pagine condividono sempre gli stessi bounds (PRD-UI §2:
+    // cambiare schermata non ridimensiona la finestra ne' fa scattare il
+    // layout) — showPage() alterna solo la visibilita'.
+    mainPage.setBounds (area);
+    editPage.setBounds (area);
+    settingsPage.setBounds (area);
+
+    layoutMain (mainPage.getLocalBounds());
+    layoutEdit (editPage.getLocalBounds());
+    layoutSettings (settingsPage.getLocalBounds());
+}
+
+void HarmonizerAudioProcessorEditor::layoutMain (juce::Rectangle<int> area)
+{
+    const int labelWidth = 60;
+    const int rowHeight = 26;
+    const int gap = 6;
+
+    // FR-74/75/76: griglia fondamentale (2x6) a sinistra, lista preset (5
+    // righe) a destra, stessa riga — vedi il mockup ASCII di PRD-UI §3.
+    {
+        constexpr int visiblePresetRows = 5; // FR-76
+        constexpr int gridRows = 6;          // FR-75
+        constexpr int cellHeight = 26;
+        const int topRowHeight = juce::jmax (visiblePresetRows * ui::PresetListEditor::rowHeight,
+                                              gridRows * cellHeight);
+        auto row = area.removeFromTop (topRowHeight);
+
+        auto leftHalf = row.removeFromLeft (row.getWidth() / 2);
+        rootNoteLabel.setBounds (leftHalf.removeFromLeft (labelWidth));
+        rootNoteGrid.setBounds (leftHalf);
+
+        presetLabel.setBounds (row.removeFromLeft (labelWidth));
+        presetListViewport.setBounds (row);
+        presetListEditor.setContentWidth (presetListViewport.getWidth()
+                                          - presetListViewport.getScrollBarThickness());
+        area.removeFromTop (gap);
+    }
+
+    // FR-78: riga di manopole — (Dry/Wet) (Stability) (Fmt Spread) (Glide)
+    // (Voices), stesso ordine del mockup ASCII di PRD-UI §3. Una riga di
+    // didascalie sopra la riga di manopole vere e proprie (le manopole non
+    // usano attachToComponent, vedi setupKnob).
+    {
+        auto labelRow = area.removeFromTop (14);
+        layoutRowOfButtons (labelRow, { &dryWetLabel, &stabilityLabel, &formantSpreadLabel, &glideLabel, &numVoicesLabel });
+        area.removeFromTop (2);
+        auto knobRow = area.removeFromTop (70);
+        layoutRowOfButtons (knobRow, { &dryWetKnob, &stabilityKnob, &formantSpreadSlider, &glideTimeSlider, &numVoicesSlider });
+        area.removeFromTop (gap);
+    }
+
+    layoutRowOfButtons (area.removeFromTop (rowHeight), { &bypassToggle, &playModeToggle });
+    area.removeFromTop (gap);
+
+    // Nota rilevata (sintetica) + voci attive, affiancate.
+    {
+        auto row = area.removeFromTop (rowHeight);
+        const int half = row.getWidth() / 2;
+        detectedShortLabel.setBounds (row.removeFromLeft (labelWidth));
+        detectedShortValueLabel.setBounds (row.removeFromLeft (juce::jmax (0, half - labelWidth)));
+        activeVoicesLabel.setBounds (row.removeFromLeft (labelWidth));
+        activeVoicesValueLabel.setBounds (row);
+    }
+}
+
+void HarmonizerAudioProcessorEditor::layoutEdit (juce::Rectangle<int> area)
+{
     const int labelWidth = 60;
     const int rowHeight = 26;
     const int gap = 6;
@@ -374,22 +512,6 @@ void HarmonizerAudioProcessorEditor::resized()
         area.removeFromTop (gap);
     };
 
-    layoutRow (rootNoteGrid);
-
-    {
-        // Sessione 21 (drag&drop preset, FR-06/07/§8.2): 7 righe visibili di
-        // default (il numero di preset di fabbrica, cosi' non scrolla nulla
-        // finche' l'utente non ne aggiunge altri) — deve restare in sync con
-        // ui::PresetListEditor::rowHeight.
-        constexpr int visiblePresetRows = 7;
-        auto row = area.removeFromTop (visiblePresetRows * ui::PresetListEditor::rowHeight);
-        row.removeFromLeft (labelWidth);
-        presetListViewport.setBounds (row);
-        presetListEditor.setContentWidth (presetListViewport.getWidth()
-                                          - presetListViewport.getScrollBarThickness());
-        area.removeFromTop (gap);
-    }
-
     layoutRow (presetNameEditor);
 
     {
@@ -401,22 +523,17 @@ void HarmonizerAudioProcessorEditor::resized()
         area.removeFromTop (gap);
     }
 
-    layoutRow (numVoicesSlider);
-    layoutRow (dryLevelSlider);
-    layoutRow (wetLevelSlider);
-    layoutRow (stabilityBox);
-    layoutRow (glideTimeSlider);
-    layoutRow (maxVoicesSlider);
-    layoutRow (formantSpreadSlider);
-    layoutRow (activeVoicesValueLabel);
+    layoutRowOfButtons (area.removeFromTop (rowHeight),
+                        { &addButton, &duplicateButton, &deleteButton });
+    area.removeFromTop (gap);
 
+    layoutRowOfButtons (area.removeFromTop (rowHeight),
+                        { &importCsvButton, &exportCsvButton, &loadGlobalButton, &saveGlobalButton });
     area.removeFromTop (gap);
 
     // Sessione 23 (FR-11/§8.1): striscia unica "voci" — una colonna per
-    // voce (V1..V8), Fix/Fmt/Pan/Gain impilati verticalmente (ordine scelto
-    // dall'utente). Sostituisce le due righe separate Fix/Move e Fmt/Voice
-    // di sessione 9: gli stessi quattro controlli per voce, prima sparsi in
-    // righe lontane, ora si leggono come una colonna sola.
+    // voce (V1..V8), Fix/Fmt/Pan/Gain impilati verticalmente. Sessione 25:
+    // il blocco intero vive su Edit (PRD-UI §4), nessuno split fra schermate.
     {
         const int headerRowHeight = 16;
         auto row = area.removeFromTop (headerRowHeight);
@@ -430,10 +547,6 @@ void HarmonizerAudioProcessorEditor::resized()
 
     {
         auto row = area.removeFromTop (rowHeight);
-        // Bug di sessione 6 corretto in sessione 10: il rettangolo tolto a
-        // sinistra andava assegnato alla label, non solo scartato — la
-        // label restava con bounds vuoti (invisibile), pur essendo
-        // aggiunta come figlia visibile.
         fixMoveLabel.setBounds (row.removeFromLeft (labelWidth));
         std::vector<juce::Component*> buttons;
         for (auto& b : voiceFixButtons)
@@ -443,14 +556,12 @@ void HarmonizerAudioProcessorEditor::resized()
     area.removeFromTop (gap);
 
     // Riga piu' alta delle altre: una manopola rotativa ha bisogno di piu'
-    // di 26px per essere leggibile (erano i "puntini" nello screenshot del
-    // test di sessione 10 — bounds validi ma minuscoli). Stessa altezza per
-    // Fmt/Pan/Gain, le tre manopole della striscia.
+    // di 26px per essere leggibile. Stessa altezza per Fmt/Pan/Gain.
     const int knobRowHeight = 36;
 
     {
         auto row = area.removeFromTop (knobRowHeight);
-        voiceFormantLabel.setBounds (row.removeFromLeft (labelWidth)); // stesso bug del blocco sopra
+        voiceFormantLabel.setBounds (row.removeFromLeft (labelWidth));
         std::vector<juce::Component*> knobs;
         for (auto& s : voiceFormantSliders)
             knobs.push_back (&s);
@@ -478,34 +589,54 @@ void HarmonizerAudioProcessorEditor::resized()
     }
     area.removeFromTop (gap);
 
-    layoutRow (midiChannelBox);
+    layoutRow (keepTailsToggle);
+}
 
-    auto layoutCcRow = [&] (juce::Slider& slider, juce::TextButton& button)
+void HarmonizerAudioProcessorEditor::layoutSettings (juce::Rectangle<int> area)
+{
+    const int labelWidth = 60;
+    const int rowHeight = 26;
+    const int gap = 6;
+
+    auto layoutRow = [&] (juce::Component& c)
+    {
+        auto row = area.removeFromTop (rowHeight);
+        row.removeFromLeft (labelWidth);
+        c.setBounds (row);
+        area.removeFromTop (gap);
+    };
+
+    auto layoutCcRow = [&] (juce::TextEditor& editor, juce::TextButton& button)
     {
         auto row = area.removeFromTop (rowHeight);
         row.removeFromLeft (labelWidth);
         auto buttonArea = row.removeFromRight (70);
         button.setBounds (buttonArea);
         row.removeFromRight (4);
-        slider.setBounds (row);
+        editor.setBounds (row);
         area.removeFromTop (gap);
     };
 
-    layoutCcRow (rootCcSlider, learnRootButton);
-    layoutCcRow (presetCcSlider, learnPresetButton);
-    layoutCcRow (bypassCcSlider, learnBypassButton);
+    layoutCcRow (rootCcEditor, learnRootButton);
+    layoutCcRow (presetCcEditor, learnPresetButton);
+    layoutCcRow (bypassCcEditor, learnBypassButton);
 
-    layoutRow (bypassToggle);
-    layoutRow (playModeToggle);
-    layoutRow (keepTailsToggle);
+    layoutRow (midiChannelBox);
+    layoutRow (maxVoicesSlider);
+
     layoutRow (detectedValueLabel);
+}
 
-    layoutRowOfButtons (area.removeFromTop (rowHeight),
-                        { &addButton, &duplicateButton, &deleteButton });
-    area.removeFromTop (gap);
+void HarmonizerAudioProcessorEditor::showPage (Page page)
+{
+    currentPage = page;
+    mainPage.setVisible (page == Page::main);
+    editPage.setVisible (page == Page::edit);
+    settingsPage.setVisible (page == Page::settings);
 
-    layoutRowOfButtons (area.removeFromTop (rowHeight),
-                        { &importCsvButton, &exportCsvButton, &loadGlobalButton, &saveGlobalButton });
+    navMainButton.setToggleState (page == Page::main, juce::dontSendNotification);
+    navEditButton.setToggleState (page == Page::edit, juce::dontSendNotification);
+    navSettingsButton.setToggleState (page == Page::settings, juce::dontSendNotification);
 }
 
 void HarmonizerAudioProcessorEditor::timerCallback()
@@ -529,6 +660,14 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     const float midiNote = processorRef.getLastDetectedMidiNote();
     const bool stable = processorRef.getLastInputStable();
     const bool gateOpen = processorRef.getLastGateOpen();
+
+    // FR-83: versione sintetica su Main — solo il nome della nota, o "--".
+    detectedShortValueLabel.setText (
+        midiNote >= 0.0f ? juce::MidiMessage::getMidiNoteName (juce::roundToInt (midiNote), true, true, 3)
+                          : juce::String ("--"),
+        juce::dontSendNotification);
+
+    // FR-83: versione diagnostica completa su Impostazioni — testo invariato.
     juce::String detectedText;
     if (midiNote >= 0.0f)
     {
@@ -556,14 +695,15 @@ void HarmonizerAudioProcessorEditor::syncCcControlsFromRouter()
 {
     auto& router = processorRef.getCcRouter();
 
-    // Non toccare uno slider mentre l'utente lo sta trascinando: eviterebbe
-    // che il valore "scatti" sotto il mouse durante il polling a 15Hz.
-    if (! rootCcSlider.isMouseButtonDown())
-        rootCcSlider.setValue (router.getRootCc(), juce::dontSendNotification);
-    if (! presetCcSlider.isMouseButtonDown())
-        presetCcSlider.setValue (router.getPresetCc(), juce::dontSendNotification);
-    if (! bypassCcSlider.isMouseButtonDown())
-        bypassCcSlider.setValue (router.getBypassCc(), juce::dontSendNotification);
+    // Non toccare una casella mentre l'utente ci sta scrivendo dentro:
+    // eviterebbe che il numero "scatti" sotto le dita durante il polling a
+    // 15Hz — stesso principio gia' in uso per presetNameEditor.
+    if (! rootCcEditor.hasKeyboardFocus (false))
+        rootCcEditor.setText (juce::String (router.getRootCc()), juce::dontSendNotification);
+    if (! presetCcEditor.hasKeyboardFocus (false))
+        presetCcEditor.setText (juce::String (router.getPresetCc()), juce::dontSendNotification);
+    if (! bypassCcEditor.hasKeyboardFocus (false))
+        bypassCcEditor.setText (juce::String (router.getBypassCc()), juce::dontSendNotification);
 
     const int channel = router.getMidiChannel();
     const int desiredItemId = channel == 0 ? 1 : channel + 1;

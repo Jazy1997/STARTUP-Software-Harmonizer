@@ -5,6 +5,9 @@ namespace ui
     namespace
     {
         constexpr int numPitchClasses = 12;
+        // FR-75: 2 colonne x 6 righe, non piu' 1x12 — indice = riga*2 + colonna.
+        constexpr int numCols = 2;
+        constexpr int numRows = 6;
     }
 
     RootNoteGrid::RootNoteGrid (HarmonizerAudioProcessor& processor)
@@ -20,12 +23,19 @@ namespace ui
         repaint();
     }
 
-    int RootNoteGrid::cellAt (int x) const noexcept
+    int RootNoteGrid::cellAt (int x, int y) const noexcept
     {
-        const int cellWidth = getWidth() / numPitchClasses;
-        if (cellWidth <= 0 || x < 0)
+        const int cellWidth  = getWidth() / numCols;
+        const int cellHeight = getHeight() / numRows;
+        if (cellWidth <= 0 || cellHeight <= 0 || x < 0 || y < 0)
             return -1;
-        const int cell = x / cellWidth;
+
+        const int col = x / cellWidth;
+        const int row = y / cellHeight;
+        if (col < 0 || col >= numCols || row < 0 || row >= numRows)
+            return -1;
+
+        const int cell = row * numCols + col;
         return (cell >= 0 && cell < numPitchClasses) ? cell : -1;
     }
 
@@ -37,11 +47,14 @@ namespace ui
 
         const auto& choices = choiceParam->choices;
         const int n = juce::jmin (numPitchClasses, choices.size());
-        const int cellWidth = getWidth() / numPitchClasses;
+        const int cellWidth  = getWidth() / numCols;
+        const int cellHeight = getHeight() / numRows;
 
         for (int i = 0; i < n; ++i)
         {
-            const juce::Rectangle<int> cell (i * cellWidth, 0, cellWidth, getHeight());
+            const int col = i % numCols;
+            const int row = i / numCols;
+            const juce::Rectangle<int> cell (col * cellWidth, row * cellHeight, cellWidth, cellHeight);
 
             g.setColour (i == selectedIndex ? juce::Colours::white.withAlpha (0.25f)
                                              : juce::Colours::white.withAlpha (0.06f));
@@ -67,7 +80,7 @@ namespace ui
 
     void RootNoteGrid::mouseUp (const juce::MouseEvent& e)
     {
-        const int cell = cellAt (e.x);
+        const int cell = cellAt (e.x, e.y);
         if (cell >= 0 && onNoteClicked)
             onNoteClicked (cell);
     }
