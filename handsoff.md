@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-06 (sessione 23)
+> Ultimo aggiornamento: 2026-08-07 (sessione 24)
 
 ---
 
@@ -32,6 +32,55 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 24 — `PRD-UI.md`, documento di design per le 3 schermate (nessun**
+**codice toccato, su richiesta esplicita dell'utente):**
+
+Richiesta iniziale dell'utente: implementare lo scaffold delle 3 schermate del PRD
+(§8). In fase di pianificazione, l'utente ha fermato l'implementazione e chiesto
+prima una discussione dedicata sulla struttura — "creiamo qualcosa stile 'portal'
+della Output", schermata principale volutamente minimale, resto dietro un salto
+esplicito a una vista di dettaglio — seguita da una decisione esplicita: **fissare
+la struttura per iscritto in un nuovo documento, `PRD-UI.md`, senza scrivere codice
+in questa sessione**.
+
+- **Discussione di design** (in chat, non nel codice): inventario completo di tutti
+  i parametri/controlli esistenti (APVTS + configurazione CC/MIDI + azioni sulla
+  libreria preset + display diagnostici), poi collocazione di ognuno in una delle 3
+  schermate decisa insieme, voce per voce. Tre decisioni tecniche poste esplicitamente
+  e confermate dall'utente: (1) knob Dry/Wet unico → **nuovo parametro** `dryWetMix`
+  a crossfade a potenza costante (non i due parametri `dryLevel`/`wetLevel` esistenti
+  pilotati da un solo knob) — questi ultimi restano dichiarati per sempre (CLAUDE.md
+  regola 6) ma smetteranno di essere letti; (2) pulsanti MIDI Learn mantenuti accanto
+  alle nuove caselle di testo CC (lo slider trascinabile sparisce); (3) auto-scroll
+  "stile smartphone" durante il drag della lista preset **rimandato** a una sessione
+  futura.
+- **`PRD-UI.md`** (nuovo file, radice del repository, accanto a `PRD-Harmonizer-v1.md`):
+  documento completo con le stesse convenzioni del PRD principale (`[MUST]`/
+  `[SHOULD]`/`[V1.1]`/`[LATER]`/`[DECISION]`, ID `FR-xx`). Numerazione FR proseguita
+  da dove finiva il documento principale (ultimo ID li' usato: FR-72) — nuovi
+  requisiti **FR-73..FR-83** in questo documento, stessa numerazione condivisa.
+  Contenuto: filosofia (§1, riferimento esplicito a Portal/Output), mappa e
+  navigazione fra le 3 schermate (§2, FR-73), contenuto chiuso di Main (§3, FR-74..78,
+  FR-83 — griglia fondamentale riformata 2 colonne × 6 righe, lista preset SOLO qui
+  a 5 righe visibili non 7, knob Dry/Wet/Stability/Num Voices/Fmt Spread/Glide),
+  contenuto chiuso di Edit (§4, FR-81 — tabella 12x8 + CRUD/CSV/globale + il blocco
+  voci a 4 righe di sessione 23 spostato qui INTERO, senza split fra schermate),
+  contenuto chiuso di Impostazioni (§5, FR-79/82/83 — CC come testo+Learn non piu'
+  slider, MIDI channel, voice cap, nota rilevata in versione diagnostica completa),
+  dettaglio tecnico del crossfade `dryWetMix` (§6, con nota esplicita CLAUDE.md
+  regola 12: il default 0.7 e' un punto di partenza, non un valore calcolato, va
+  confermato all'ascolto quando esistera' codice da ascoltare), fuori scope (§7 —
+  auto-scroll rimandato, licenza/M6, comportamento latenza, scaling/tema invariati
+  dal PRD principale), note per l'implementazione futura (§8 — cosa si riusa cosi'
+  com'e', cosa cambia, stima approssimativa della finestra 1428px→550-650px come
+  beneficio collaterale della divisione in 3 schermate).
+- **Nessun file di codice toccato**: solo `PRD-UI.md` (nuovo) e questo aggiornamento
+  di `handsoff.md`. Nessuna build, nessun test, nessun `pluginval` eseguiti — non
+  applicabile a un lavoro di solo documento.
+- **Prossimo passo naturale**: implementare quanto descritto in `PRD-UI.md` (lo
+  scaffold delle 3 schermate, rimasto l'obiettivo originale della sessione, solo
+  posticipato all'avere prima la struttura fissata per iscritto).
 
 **Novita' sessione 23 — gain e pan per voce (FR-11, §8.1/§3.1), ultimo buco funzionale**
 **di M3 rimasto indietro (roadmap: "formanti, gain/pan per voce" — le formanti c'erano,**
@@ -1348,6 +1397,13 @@ Nessuna modifica a `PsolaShifter`, `PitchDetector`, `OnsetDetector`, `PhraseSche
 | `tests/voice_test.cpp` | modificato | Adattato alla firma stereo di `processAdd`; 5 nuovi test T-1..T-5 (pan hard-left/right, potenza costante, regressione bit-per-bit, gain al minimo, anti-click al confine di blocco) |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 24 (PRD-UI.md, nessun codice):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `PRD-UI.md` | creato | Documento di design per le 3 schermate (Main/Edit/Impostazioni), stile Portal (Output), FR-73..FR-83 |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -1503,6 +1559,24 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 ---
 
 ## 6. Quale sarebbe il prossimo passo
+
+**Sessione 24 — `PRD-UI.md` scritto e completo (Main/Edit/Impostazioni, FR-73..83),**
+**nessun codice toccato per scelta esplicita dell'utente. PROSSIMO PASSO NATURALE:**
+**implementare quanto descritto li' dentro** — e' lo stesso lavoro di scaffold che
+era l'obiettivo iniziale di questa sessione, solo posticipato all'avere prima la
+struttura fissata per iscritto. Punti da tenere a mente iniziando l'implementazione
+(dettagliati in `PRD-UI.md` §6/§8):
+- `dryWetMix` e' un parametro NUOVO (non tocca `dryLevel`/`wetLevel`, che restano
+  dichiarati per sempre ma smettono di essere letti) — cambia il comportamento
+  sonoro reale, non solo la UI: **da confermare all'ascolto**, non dichiarabile a
+  posto per calcolo (CLAUDE.md regola 12), con un default (0.7) esplicitamente
+  segnalato come punto di partenza da verificare, non un valore calcolato.
+- La lista preset vive SOLO su Main (5 righe visibili, non 7) — non va duplicata
+  su Edit.
+- Il blocco voci di sessione 23 (Fix/Fmt/Pan/Gain) si sposta INTERO su Edit, senza
+  split fra schermate.
+- Auto-scroll del drag vicino al bordo della lista preset: rimandato esplicitamente,
+  non fa parte di questo primo scaffold.
 
 **Sessione 23 — gain e pan per voce (FR-11, §8.1/§3.1): scritti, verificati per calcolo,**
 **visivamente e CONFERMATI all'ascolto dall'utente in Ableton ("è tutto ok", feedback**
