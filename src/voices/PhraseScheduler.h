@@ -34,6 +34,11 @@ public:
     void setFormantSpread (float spread);
     // FR-41: come setVoiceMode, proprieta' della colonna armonica (0-7).
     void setVoiceFormantOffset (int harmonicVoiceIndex, float semitones);
+    // FR-11/§8.1: come setVoiceFormantOffset, proprieta' della colonna
+    // armonica (0-7) — gia' lineare in ingresso (conversione da dB fatta a
+    // monte, in PluginProcessor).
+    void setVoiceGainLinear (int harmonicVoiceIndex, float gainLinear);
+    void setVoicePan (int harmonicVoiceIndex, float pan);
     void setVoiceCap (int cap) noexcept { currentVoiceCap = cap; }
     // Vedi Phrase.h per la semantica completa. false (default) = tronca
     // subito una frase superata da un nuovo onset; true = comportamento
@@ -55,7 +60,8 @@ public:
     void requestStabilityChange (int newStabilityLevel) { voicePool.requestStabilityChange (newStabilityLevel); }
     void collectGarbage() { voicePool.collectGarbage(); }
 
-    // mixOutput deve avere numSamples campioni; viene azzerato internamente.
+    // mixL/mixR devono avere numSamples campioni ciascuno; vengono azzerati
+    // internamente (FR-11/§8.1: percorso wet stereo, gain/pan per voce).
     // currentOffsetsForTrigger sono gli offset calcolati ORA (preset/root/nota
     // correnti): usati per congelare una nuova frase al trigger, o per
     // aggiornare dal vivo la frase piu' recente (FR-17). Ritorna true se e'
@@ -79,7 +85,8 @@ public:
     // fra due note cantate legato, dove il segnale c'e' ancora (il gate resta
     // aperto) ma la stima di frequenza per quell'istante e' meno affidabile.
     bool process (const float* monoIn,
-                  float* mixOutput,
+                  float* mixL,
+                  float* mixR,
                   int numSamples,
                   bool onsetDetectedThisBlock,
                   bool signalPresent,

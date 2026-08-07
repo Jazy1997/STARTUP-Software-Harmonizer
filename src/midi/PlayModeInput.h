@@ -36,14 +36,21 @@ public:
     void collectGarbage() { voicePool.collectGarbage(); }
     int getLatencySamples() const { return voicePool.getLatencySamples(); }
 
+    // FR-11/§8.1: gain/pan per voce si applicano qui per INDICE DI SLOT
+    // (0..maxNotes-1), non per colonna armonica — a differenza di
+    // PhraseScheduler non esiste qui un concetto di frase/colonna: gli 8
+    // slot del pool dedicato SONO le 8 voci (vedi VoicePool sotto).
+    void setVoiceGainLinear (int slotIndex, float gainLinear) { voicePool.getSlot (slotIndex).setGainLinear (gainLinear); }
+    void setVoicePan (int slotIndex, float pan) { voicePool.getSlot (slotIndex).setPan (pan); }
+
     // Da chiamare ogni blocco, ANCHE quando la modalita' Play non e'
     // attiva (modeActive=false): il tracking delle note premute resta
     // aggiornato (riattivare Play non richiede un nuovo note-on) e il
     // cambio di Stability in sospeso continua ad essere applicato in modo
-    // uniforme indipendentemente dalla modalita' corrente. mixOutput viene
-    // sempre azzerato internamente (stesso contratto di PhraseScheduler::
-    // process); con modeActive=false resta a zero — FR-24, nessun
-    // contributo audio quando la modalita' non e' attiva.
+    // uniforme indipendentemente dalla modalita' corrente. mixL/mixR
+    // vengono sempre azzerati internamente (stesso contratto di
+    // PhraseScheduler::process); con modeActive=false restano a zero —
+    // FR-24, nessun contributo audio quando la modalita' non e' attiva.
     //
     // midiChannel: 0 = omni, 1..16 = canale specifico (stesso filtro
     // condiviso col controllo CC, vedi CcRouter — un'unica impostazione di
@@ -55,7 +62,8 @@ public:
                   int midiChannel,
                   bool modeActive,
                   const float* monoIn,
-                  float* mixOutput,
+                  float* mixL,
+                  float* mixR,
                   int numSamples,
                   bool inputIsStable,
                   float continuousInputMidiNote,

@@ -97,6 +97,20 @@ public:
     void setFormantSpread (float spread) noexcept { formantSpread = spread; }
     void setFormantOffsetSemitones (float semitones) noexcept { formantOffsetSemitones = semitones; }
 
+    // FR-11/§8.1: gain e pan per voce, proprieta' della colonna armonica
+    // (0-7) esattamente come formantOffsetSemitones sopra — si applicano a
+    // qualunque slot fisico la stia interpretando in questo momento (vedi
+    // PhraseScheduler::setVoiceGainLinear/setVoicePan). Entrambi passano da
+    // un Glide a kDeclickMs: un salto di gain o pan non rampato clicca
+    // esattamente come i salti di ampiezza delle sessioni 12/13 — stesso
+    // meccanismo, stessa costante di tempo, nessun nuovo tipo di rischio.
+    // gainLinear e' gia' lineare quando arriva qui: la conversione da dB
+    // (unita' del parametro APVTS) avviene in PluginProcessor::processBlock,
+    // cosi' Voice/voice_test restano privi di dipendenze JUCE.
+    void setGainLinear (float gainLinear) noexcept { gainGlide.setTarget (gainLinear); }
+    // pan in -1..+1 (-1 = tutto a sinistra, 0 = centro, +1 = tutto a destra).
+    void setPan (float pan) noexcept { panGlide.setTarget (pan); }
+
     // Offset armonico grezzo (semitoni) prima del glide (FR-17): la rampa
     // verso il nuovo valore avviene dentro processAdd, non qui. Imposta
     // sempre e solo il TARGET — se questa chiamata segue una riattivazione
@@ -115,10 +129,11 @@ public:
     // shifter sul message thread, mai qui — vedi PRD §9.4.
     void swapShifterNoAlloc (std::unique_ptr<PitchShifter>& shifterInOut) noexcept;
 
-    // Somma il segnale shiftato di questa voce dentro mixOutput (gia'
-    // inizializzato dal chiamante). Non-op se la voce e' muta.
+    // Somma il segnale shiftato di questa voce dentro mixL/mixR (gia'
+    // inizializzati dal chiamante) — §8.1: percorso wet stereo, gain/pan per
+    // voce (vedi setGainLinear/setPan sopra). Non-op se la voce e' muta.
     // quantizedPlayedNote / continuousInputMidiNote servono alla modalita' Fix.
-    void processAdd (const float* monoIn, float* mixOutput, int numSamples,
+    void processAdd (const float* monoIn, float* mixL, float* mixR, int numSamples,
                       int quantizedPlayedNote, float continuousInputMidiNote);
 
 private:
@@ -126,6 +141,8 @@ private:
     std::vector<float> scratch;
     Glide offsetGlide;
     Glide ampGlide; // sessione 12: dissolvenza di ampiezza anti-click, vedi setMuted/isSilent
+    Glide gainGlide; // FR-11: gain utente per voce, lineare, di default 1.0
+    Glide panGlide;  // FR-11: pan utente per voce, -1..+1, di default 0.0 (centro)
     static constexpr float kDeclickMs = 8.0f;
     ShiftMode mode = ShiftMode::move;
     bool muted = true;

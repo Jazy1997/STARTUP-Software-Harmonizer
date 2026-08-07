@@ -99,6 +99,17 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     maxVoicesAttachment  = std::make_unique<SliderAttachment> (apvtsRef, "maxSimultaneousVoices", maxVoicesSlider);
     formantSpreadAttachment = std::make_unique<SliderAttachment> (apvtsRef, "formantSpread", formantSpreadSlider);
 
+    // Sessione 23 (FR-11/§8.1): striscia unica "voci" — colonna V1..V8,
+    // Fix/Fmt/Pan/Gain impilati. voiceColumnHeaders e' solo testo, nessuna
+    // interazione, nessun parametro dietro.
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& header = voiceColumnHeaders[(size_t) v];
+        header.setText (juce::String (v + 1), juce::dontSendNotification);
+        header.setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (header);
+    }
+
     addAndMakeVisible (fixMoveLabel);
     for (int v = 0; v < harmony::numVoices; ++v)
     {
@@ -117,6 +128,26 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
         slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         addAndMakeVisible (slider);
         voiceFormantAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceFormantOffset" + juce::String (v + 1), slider);
+    }
+
+    addAndMakeVisible (voicePanLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& slider = voicePanSliders[(size_t) v];
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        addAndMakeVisible (slider);
+        voicePanAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voicePan" + juce::String (v + 1), slider);
+    }
+
+    addAndMakeVisible (voiceGainLabel);
+    for (int v = 0; v < harmony::numVoices; ++v)
+    {
+        auto& slider = voiceGainSliders[(size_t) v];
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        addAndMakeVisible (slider);
+        voiceGainAttachments[(size_t) v] = std::make_unique<SliderAttachment> (apvtsRef, "voiceGain" + juce::String (v + 1), slider);
     }
 
     for (auto* b : { &addButton, &duplicateButton, &deleteButton,
@@ -297,8 +328,11 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     // Sessione 21: la ComboBox a riga singola (26px+6px gap) diventa la lista
     // preset drag&drop (7 righe visibili di default, vedi resized()) —
     // netto +122px di altezza minima necessaria.
-    setResizeLimits (500, 1292, 1200, 1572);
-    setSize (520, 1322);
+    // Sessione 23 (FR-11/§8.1): le due righe Fix/Move e Fmt/Voice diventano
+    // una striscia a 4 righe + intestazione (Fix/Fmt/Pan/Gain) — netto
+    // +106px di altezza minima (74px prima, 180px ora, vedi resized()).
+    setResizeLimits (500, 1398, 1200, 1678);
+    setSize (520, 1428);
 
     startTimerHz (15);
 }
@@ -378,6 +412,22 @@ void HarmonizerAudioProcessorEditor::resized()
 
     area.removeFromTop (gap);
 
+    // Sessione 23 (FR-11/§8.1): striscia unica "voci" — una colonna per
+    // voce (V1..V8), Fix/Fmt/Pan/Gain impilati verticalmente (ordine scelto
+    // dall'utente). Sostituisce le due righe separate Fix/Move e Fmt/Voice
+    // di sessione 9: gli stessi quattro controlli per voce, prima sparsi in
+    // righe lontane, ora si leggono come una colonna sola.
+    {
+        const int headerRowHeight = 16;
+        auto row = area.removeFromTop (headerRowHeight);
+        row.removeFromLeft (labelWidth); // nessuna label a sinistra dell'intestazione
+        std::vector<juce::Component*> headers;
+        for (auto& h : voiceColumnHeaders)
+            headers.push_back (&h);
+        layoutRowOfButtons (row, headers);
+    }
+    area.removeFromTop (gap);
+
     {
         auto row = area.removeFromTop (rowHeight);
         // Bug di sessione 6 corretto in sessione 10: il rettangolo tolto a
@@ -392,15 +442,37 @@ void HarmonizerAudioProcessorEditor::resized()
     }
     area.removeFromTop (gap);
 
+    // Riga piu' alta delle altre: una manopola rotativa ha bisogno di piu'
+    // di 26px per essere leggibile (erano i "puntini" nello screenshot del
+    // test di sessione 10 — bounds validi ma minuscoli). Stessa altezza per
+    // Fmt/Pan/Gain, le tre manopole della striscia.
+    const int knobRowHeight = 36;
+
     {
-        // Riga piu' alta delle altre: una manopola rotativa ha bisogno di
-        // piu' di 26px per essere leggibile (erano i "puntini" nello
-        // screenshot del test di sessione 10 — bounds validi ma minuscoli).
-        const int knobRowHeight = 36;
         auto row = area.removeFromTop (knobRowHeight);
         voiceFormantLabel.setBounds (row.removeFromLeft (labelWidth)); // stesso bug del blocco sopra
         std::vector<juce::Component*> knobs;
         for (auto& s : voiceFormantSliders)
+            knobs.push_back (&s);
+        layoutRowOfButtons (row, knobs);
+    }
+    area.removeFromTop (gap);
+
+    {
+        auto row = area.removeFromTop (knobRowHeight);
+        voicePanLabel.setBounds (row.removeFromLeft (labelWidth));
+        std::vector<juce::Component*> knobs;
+        for (auto& s : voicePanSliders)
+            knobs.push_back (&s);
+        layoutRowOfButtons (row, knobs);
+    }
+    area.removeFromTop (gap);
+
+    {
+        auto row = area.removeFromTop (knobRowHeight);
+        voiceGainLabel.setBounds (row.removeFromLeft (labelWidth));
+        std::vector<juce::Component*> knobs;
+        for (auto& s : voiceGainSliders)
             knobs.push_back (&s);
         layoutRowOfButtons (row, knobs);
     }

@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-05 (sessione 22)
+> Ultimo aggiornamento: 2026-08-06 (sessione 23)
 
 ---
 
@@ -32,6 +32,103 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Novita' sessione 23 — gain e pan per voce (FR-11, §8.1/§3.1), ultimo buco funzionale**
+**di M3 rimasto indietro (roadmap: "formanti, gain/pan per voce" — le formanti c'erano,**
+**gain/pan no). Scritto, verificato per calcolo e visivamente. CONFERMATO all'ascolto**
+**dall'utente in Ableton ("è tutto ok") — lavoro committato e pushato:**
+
+Verificato a inizio sessione (Explore + lettura diretta) che gain e pan per voce non
+esistevano affatto: nessun parametro APVTS (solo `voiceFix1..8`/`voiceFormantOffset1..8`),
+nessun campo in `Voice` (`ampGlide` e' solo la dissolvenza anti-click, non un gain
+utente), e il percorso wet era MONO da capo a fondo — `Voice::processAdd` sommava in un
+solo buffer, `PhraseScheduler`/`PlayModeInput` producevano un solo canale, l'uscita
+duplicava lo stesso mix mono su ogni canale. Il pan era quindi strutturalmente
+impossibile prima di questo lavoro, non solo assente dalla UI.
+
+- **`src/voices/Voice.{h,cpp}`**: due nuovi `Glide` (`gainGlide`, `panGlide`, stesso
+  `kDeclickMs=8ms` di `ampGlide` — un gain che scatta invece di rampare clicca,
+  lezione delle sessioni 12/13, si applica identica a un valore guidato da un knob o
+  dall'automazione). `setGainLinear`/`setPan`, proprieta' della COLONNA armonica (0-7)
+  come gia' `setFormantOffsetSemitones`. **`processAdd` ora e' stereo**:
+  `(monoIn, mixL, mixR, numSamples, ...)`. Legge di pan a potenza costante
+  normalizzata (`gL=sqrt2*cos(theta)`, `gR=sqrt2*sin(theta)`, non 0.707/0.707) cosi'
+  che pan=0 dia `gL=gR=1.0` — con gain/pan al default l'uscita stereo e' identica
+  campione per campione al vecchio mix mono duplicato, nessun calo di ~3dB da spiegare
+  all'ascolto. **Tre casi (centro, hard-left, hard-right) sono espliciti nel codice**,
+  non lasciati al calcolo trigonometrico: `kPiOverFour` e' un'approssimazione float di
+  pi/4, quindi ne' pan=0 (gL==gR esatti) ne' pan=±1 (canale opposto ESATTAMENTE zero)
+  erano garantiti dal solo calcolo — scoperto per calcolo scrivendo T-1/T-3 (vedi sotto),
+  non ipotizzato a priori (CLAUDE.md regola 13: il primo tentativo, solo trigonometria,
+  falliva T-1 con un residuo di 1.455e-08 a pan=+1 — non udibile, ma non "esatto" come
+  la garanzia voluta).
+- **`src/voices/PhraseScheduler.{h,cpp}`**: `setVoiceGainLinear`/`setVoicePan`
+  (ricalcano `setVoiceFormantOffset`), `process()` ora produce `mixL`/`mixR`.
+- **`src/midi/PlayModeInput.{h,cpp}`**: stessa modifica di firma; qui gain/pan si
+  applicano per INDICE DI SLOT (0..7), non per colonna armonica — a differenza di
+  PhraseScheduler non esiste un concetto di frase qui, gli 8 slot del pool dedicato
+  SONO le 8 voci.
+- **`src/PluginProcessor.{h,cpp}`**: nuovi parametri `voiceGain1..8` (dB, -60..+6,
+  default 0 — CLAUDE.md regola 6, range scelto ora perche' non cambiera' piu') e
+  `voicePan1..8` (-1..+1, default 0). Conversione dB->lineare fatta QUI
+  (`juce::Decibels::decibelsToGain(db, -60.0f)`, -60dB=silenzio esatto), non dentro
+  `Voice`: `Voice`/`voice_test` restano privi di dipendenze JUCE. `voicesMixScratch`/
+  `playVoicesMixScratch` ora stereo (2 canali). Stadio di uscita: bus stereo legge
+  L/R sui due canali, bus mono fa la media dei due (unico downmix sensato per un
+  segnale che ora porta pan).
+- **`src/PluginEditor.{h,cpp}`**: le due righe separate Fix/Move e Fmt/Voice
+  diventano una **striscia unica a 8 colonne** (una per voce, V1..V8) con
+  **Fix/Fmt/Pan/Gain impilati verticalmente** (ordine scelto esplicitamente
+  dall'utente) — nessun nuovo componente custom, stessi `std::array<juce::Slider,8>`
+  gia' in uso per i formanti, cambia solo `resized()`. Finestra: +106px di altezza
+  minima (74px la vecchia coppia di righe, 180px la nuova striscia a 5 righe incluso
+  header) — `setResizeLimits`/`setSize` aggiornati.
+- **Nessuna modifica a `HarmonyPreset.h`/`PresetLibrary`/`CsvIo`/`PresetTableEditor`**:
+  gain/pan sono FR-11 (preset TIMBRICO, non ancora costruito), restano parametri APVTS
+  piatti come Stability/Dry/Glide — CLAUDE.md regola 3 (0 vs cella vuota) non c'entra qui.
+- **Test nuovi in `tests/voice_test.cpp`** (gia' in ctest, target `voice_test`): T-1
+  (pan hard-left/right: canale opposto ESATTAMENTE zero, non solo piccolo), T-2
+  (potenza costante: energia L+R indipendente dalla posizione del pan, stesso
+  segmento sorgente confrontato a pan diversi), T-3 (**il piu' importante**:
+  con gain/pan al default L ed R sono bit-identici — la garanzia che questo lavoro
+  non cambi il suono di prima), T-4 (gain lineare 0.0 = uscita esattamente nulla),
+  T-5 (salto di gain/pan al CONFINE fra due blocchi da 4096 campioni — il caso
+  peggiore misurato in sessione 13 con MME/DirectX — non deve clickare; cattura
+  UNICA e continua attraverso il confine, non due catture separate, altrimenti il
+  test non vede la discontinuita' che deve rilevare — primo tentativo scartato dopo
+  essersene accorti, CLAUDE.md regola 13). Le funzioni di supporto preesistenti
+  (`captureOutput`/`runSilently`) sono state adattate alla nuova firma stereo
+  mantenendo lo stesso contratto di ritorno (solo L) per i test H1/H3/H4/controllo
+  negativo preesistenti: **nessuna soglia toccata**, tutti restano identici.
+- **Verificato per calcolo**: tutte e 6 le suite `ctest` verdi (incluse le nuove T-1..T-5
+  e le H1/H3/H4/controllo negativo preesistenti, bit-per-bit invariate). Build VST3 e
+  Standalone riuscite su **entrambe** le configurazioni Debug e Release (lezione di
+  sessione 22 applicata). `pluginval --strictness-level 10` **SUCCESS** su Debug e
+  Release VST3 (AU non applicabile su Windows).
+- **Verificato visivamente** (screenshot reale via PowerShell/System.Drawing, finestra
+  riposizionata — stessa tecnica di sessione 21/22): la striscia mostra l'ordine
+  richiesto Fix/Fmt/Pan/Gain dall'alto in basso, tutti i controlli presenti e
+  numerati V1..V8. **Limite noto, NON introdotto da questa modifica**: alla larghezza
+  disponibile su questo schermo (DPI del monitor di test), l'ottava colonna resta
+  tagliata — stesso limite gia' segnalato per la griglia fondamentale e la tabella
+  12x8 (soluzione naturale: `Viewport` orizzontale, gia' rimandata). **Non simulato
+  il trascinamento delle manopole** (Pan/Gain, rotary): stessa scelta deliberata gia'
+  presa in sessione 21 per la lista preset — il drag reale va verificato dall'utente,
+  non da un click/drag automatizzato.
+- **CONFERMATO all'ascolto dall'utente in Ableton**: "è tutto ok" — feedback generale,
+  non dettagliato punto per punto sui 4 aspetti elencati sopra (default indistinguibile,
+  pan senza click, gain senza click, Play mode). Nessun segnale che uno specifico
+  aspetto sia un problema, solo non isolato esplicitamente uno per uno — stesso schema
+  gia' visto in altre sessioni (es. sessione 12) per un feedback positivo ma non
+  granulare. Se in futuro dovesse emergere un residuo su uno di questi quattro punti
+  in particolare, ripartire da li' con una verifica mirata invece che da zero.
+- **Limite preesistente, notato ma non toccato**: `PlayModeInput` non riceve ne'
+  `setFormantSpread` ne' `setVoiceFormantOffset` (`PluginProcessor.cpp` li propaga solo
+  a `phraseScheduler`) — in Play mode le voci restano allo spread di formanti di
+  default. Buco preesistente rispetto a FR-42, non peggiorato qui (gain/pan sono
+  propagati a ENTRAMBI i percorsi fin da subito), ma della stessa famiglia — da
+  sistemare quando si torna sui formanti.
+- **Lavoro committato e pushato** (vedi §2 in cima e cronologia git).
 
 **Novita' sessione 22 (continuazione) — griglia cromatica dei 12 pulsanti per la fondamentale**
 **(terzo slice di M5, §8.1/FR-15), su richiesta esplicita dell'utente. CONFERMATA dall'utente:**
@@ -1239,6 +1336,18 @@ Nessuna modifica a `PsolaShifter`, `PitchDetector`, `OnsetDetector`, `PhraseSche
 | `src/PluginProcessor.{h,cpp}` | modificato | `dryGlide`/`wetGlide`: dry/wet/bypass non piu' un salto istantaneo per blocco |
 | `handsoff.md` | aggiornato | Questo aggiornamento |
 
+**Sessione 23 (gain e pan per voce, FR-11/§8.1):**
+
+| File | Stato | Scopo |
+|---|---|---|
+| `src/voices/Voice.{h,cpp}` | modificato | `gainGlide`/`panGlide`, `setGainLinear`/`setPan`; `processAdd` ora stereo (`mixL`/`mixR`); legge di pan a potenza costante con 3 casi esatti (centro, hard-left, hard-right) |
+| `src/voices/PhraseScheduler.{h,cpp}` | modificato | `setVoiceGainLinear`/`setVoicePan` (per colonna armonica); `process()` produce `mixL`/`mixR` |
+| `src/midi/PlayModeInput.{h,cpp}` | modificato | `setVoiceGainLinear`/`setVoicePan` (per indice di slot); `process()` produce `mixL`/`mixR` |
+| `src/PluginProcessor.{h,cpp}` | modificato | Parametri `voiceGain1..8` (dB)/`voicePan1..8`; conversione dB->lineare qui (non in `Voice`); `voicesMixScratch`/`playVoicesMixScratch` ora stereo; stadio di uscita split mono/stereo |
+| `src/PluginEditor.{h,cpp}` | modificato | Righe Fix/Move e Fmt/Voice sostituite da striscia unica a 8 colonne (Fix/Fmt/Pan/Gain impilati); finestra +106px di altezza minima |
+| `tests/voice_test.cpp` | modificato | Adattato alla firma stereo di `processAdd`; 5 nuovi test T-1..T-5 (pan hard-left/right, potenza costante, regressione bit-per-bit, gain al minimo, anti-click al confine di blocco) |
+| `handsoff.md` | aggiornato | Questo aggiornamento |
+
 ---
 
 ## 4. Cambiamenti in questa sessione
@@ -1395,6 +1504,15 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
+**Sessione 23 — gain e pan per voce (FR-11, §8.1/§3.1): scritti, verificati per calcolo,**
+**visivamente e CONFERMATI all'ascolto dall'utente in Ableton ("è tutto ok", feedback**
+**generale non dettagliato punto per punto — vedi §2). Committato e pushato.**
+Prossimi slice di M5 ancora da iniziare: indicatore stato licenza, scaffold delle 3
+schermate PRD, tema chiaro/scuro (FR-61, `[SHOULD]`). Se in una prossima sessione
+dovesse emergere un residuo specifico su pan/gain (click, cambio di suono al default,
+comportamento diverso in Play mode), ripartire da `Voice.cpp` (dove vive la legge di
+pan e il mix campione-per-campione) prima di guardare altrove.
+
 **Sessione 22 — DUE slice completati e CONFERMATI dall'utente (vedi §2):**
 1. Badge di evidenziazione dei primi 5 preset — confermato su Standalone e VST3 in Ableton,
    dopo aver ricompilato anche la build Release (la Debug da sola non bastava — vedi nota su
@@ -1403,7 +1521,8 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
    click funziona davvero (non solo la resa visiva).
 
 Prossimi slice di M5 ancora da iniziare (lista invariata, tolti i due sopra): gain/pan per
-voce (assenti dall'UI), indicatore stato licenza, scaffold delle 3 schermate PRD, tema
+voce (assenti dall'UI — **fatto in sessione 23, vedi sopra e §2**, in attesa di conferma
+all'ascolto), indicatore stato licenza, scaffold delle 3 schermate PRD, tema
 chiaro/scuro (FR-61, `[SHOULD]`).
 
 **Punto aperto non bloccante, emerso in questa sessione**: sia la griglia fondamentale sia la

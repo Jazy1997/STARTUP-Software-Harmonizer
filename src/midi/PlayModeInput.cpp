@@ -18,7 +18,8 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
                               int midiChannel,
                               bool modeActive,
                               const float* monoIn,
-                              float* mixOutput,
+                              float* mixL,
+                              float* mixR,
                               int numSamples,
                               bool inputIsStable,
                               float continuousInputMidiNote,
@@ -26,7 +27,8 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
 {
     const bool appliedStabilityChange = voicePool.applyPendingStabilityChangeIfSafe (applyStabilityChangeNow);
 
-    std::fill (mixOutput, mixOutput + numSamples, 0.0f);
+    std::fill (mixL, mixL + numSamples, 0.0f);
+    std::fill (mixR, mixR + numSamples, 0.0f);
 
     // Il tracking delle note premute resta sempre aggiornato, anche a
     // modalita' spenta: vedi il commento su modeActive nell'header.
@@ -84,7 +86,7 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
             auto& voice = voicePool.getSlot (i);
             voice.setMuted (true);
             if (! voice.isSilent())
-                voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
+                voice.processAdd (monoIn, mixL, mixR, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
         }
         return appliedStabilityChange;
     }
@@ -99,7 +101,7 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
             // da un rilascio precedente, lascialo finire (sessione 12).
             voice.setMuted (true);
             if (! voice.isSilent())
-                voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
+                voice.processAdd (monoIn, mixL, mixR, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
             continue;
         }
 
@@ -114,12 +116,12 @@ bool PlayModeInput::process (const juce::MidiBuffer& midi,
         {
             voice.setMuted (true);
             if (! voice.isSilent())
-                voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
+                voice.processAdd (monoIn, mixL, mixR, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
             continue;
         }
 
         voice.setMuted (false);
-        voice.processAdd (monoIn, mixOutput, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
+        voice.processAdd (monoIn, mixL, mixR, numSamples, /*quantizedPlayedNote*/ 0, continuousInputMidiNote);
     }
 
     return appliedStabilityChange;

@@ -61,6 +61,32 @@ void PhraseScheduler::setVoiceFormantOffset (int harmonicVoiceIndex, float semit
     }
 }
 
+void PhraseScheduler::setVoiceGainLinear (int harmonicVoiceIndex, float gainLinear)
+{
+    // Stessa logica di setVoiceFormantOffset: proprieta' della COLONNA
+    // armonica, applicata a qualunque slot fisico la stia interpretando ora.
+    for (auto& p : phrases)
+    {
+        if (! p.active)
+            continue;
+        const int slot = p.slotIndices[(size_t) harmonicVoiceIndex];
+        if (slot >= 0)
+            voicePool.getSlot (slot).setGainLinear (gainLinear);
+    }
+}
+
+void PhraseScheduler::setVoicePan (int harmonicVoiceIndex, float pan)
+{
+    for (auto& p : phrases)
+    {
+        if (! p.active)
+            continue;
+        const int slot = p.slotIndices[(size_t) harmonicVoiceIndex];
+        if (slot >= 0)
+            voicePool.getSlot (slot).setPan (pan);
+    }
+}
+
 bool PhraseScheduler::isSlotInUse (int slotIndex) const
 {
     for (auto& p : phrases)
@@ -170,7 +196,8 @@ void PhraseScheduler::triggerNewPhrase (const std::array<harmony::Cell, harmony:
 }
 
 bool PhraseScheduler::process (const float* monoIn,
-                                float* mixOutput,
+                                float* mixL,
+                                float* mixR,
                                 int numSamples,
                                 bool onsetDetectedThisBlock,
                                 bool signalPresent,
@@ -263,7 +290,8 @@ bool PhraseScheduler::process (const float* monoIn,
     // aggiornarlo con un valore rumoroso o di liberare tutto (il segnale
     // c'e' ancora, il performer non si e' fermato).
 
-    std::fill (mixOutput, mixOutput + numSamples, 0.0f);
+    std::fill (mixL, mixL + numSamples, 0.0f);
+    std::fill (mixR, mixR + numSamples, 0.0f);
     int activeCount = 0;
 
     for (auto& p : phrases)
@@ -291,7 +319,7 @@ bool PhraseScheduler::process (const float* monoIn,
 
                 if (! voice.isSilent())
                 {
-                    voice.processAdd (monoIn, mixOutput, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+                    voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
                     stillFading = true;
                 }
             }
@@ -319,13 +347,13 @@ bool PhraseScheduler::process (const float* monoIn,
                 // frase resta viva, questa voce sfuma senza tagliare di netto.
                 voice.setMuted (true);
                 if (! voice.isSilent())
-                    voice.processAdd (monoIn, mixOutput, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+                    voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
                 continue;
             }
 
             voice.setMuted (false);
             voice.setTargetOffsetSemitones ((float) *cell);
-            voice.processAdd (monoIn, mixOutput, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+            voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
             ++activeCount;
         }
     }

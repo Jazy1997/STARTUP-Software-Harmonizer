@@ -161,8 +161,11 @@ private:
     // PlayModeInput.h per il perche' non condivide phraseScheduler).
     PlayModeInput playModeInput;
 
-    // Buffer di lavoro mono, dimensionati sul caso peggiore in prepareToPlay
+    // Buffer di lavoro, dimensionati sul caso peggiore in prepareToPlay
     // (NFR-03): nessuna riallocazione in processBlock (CLAUDE.md regola 1).
+    // monoInputScratch resta mono (rilevamento pitch/onset e dry path
+    // lavorano su un solo canale, PRD §3.1); i due mix wet sono STEREO
+    // (FR-11/§8.1: gain/pan per voce, canale 0=L, 1=R).
     juce::AudioBuffer<float> monoInputScratch;
     juce::AudioBuffer<float> voicesMixScratch;
     juce::AudioBuffer<float> playVoicesMixScratch;

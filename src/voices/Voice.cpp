@@ -1,5 +1,7 @@
 #include "Voice.h"
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 void Voice::prepare (double sampleRate, int maxBlockSize, int stabilityLevel)
 {
@@ -13,6 +15,14 @@ void Voice::prepare (double sampleRate, int maxBlockSize, int stabilityLevel)
     ampGlide.prepare (sampleRate);
     ampGlide.setGlideTimeMs (kDeclickMs);
     ampGlide.reset (0.0f); // silenzioso all'avvio, coerente con muted=true di default
+
+    gainGlide.prepare (sampleRate);
+    gainGlide.setGlideTimeMs (kDeclickMs);
+    gainGlide.reset (1.0f); // FR-11: default 0 dB = 1.0 lineare, nessun cambiamento
+
+    panGlide.prepare (sampleRate);
+    panGlide.setGlideTimeMs (kDeclickMs);
+    panGlide.reset (0.0f); // FR-11: default centro
 }
 
 void Voice::reset()
@@ -31,7 +41,7 @@ void Voice::swapShifterNoAlloc (std::unique_ptr<PitchShifter>& shifterInOut) noe
     shifter.swap (shifterInOut);
 }
 
-void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
+void Voice::processAdd (const float* monoIn, float* mixL, float* mixR, int numSamples,
                          int quantizedPlayedNote, float continuousInputMidiNote)
 {
     // Sessione 12: NON si esce piu' subito perche' muted e' vero — si esce
@@ -112,17 +122,72 @@ void Voice::processAdd (const float* monoIn, float* mixOutput, int numSamples,
     shifter->setPitchShiftSemitones (semitonesToApply);
     shifter->process (monoIn, scratch.data(), numSamples);
 
-    // Guadagno campione-per-campione: ampRamp.rampSamples puo' essere minore
-    // di numSamples (la rampa finisce dentro questo blocco), nel qual caso i
-    // campioni restanti restano fermi al target (ampRamp.startValue +
-    // rampSamples*increment, gia' pari a ampGlide.getCurrentValue()).
-    float amp = ampRamp.startValue;
-    int i = 0;
-    for (; i < ampRamp.rampSamples; ++i)
+    // FR-11: gain e pan utente per voce, con lo stesso trattamento anti-click
+    // campione-per-campione gia' usato per ampRamp (sessioni 12/13 — un
+    // guadagno che scatta invece di rampare clicca, a prescindere da cosa lo
+    // sta guidando: fine frase, un knob trascinato, o l'automazione host).
+    const auto gainRamp = gainGlide.processRamp (numSamples);
+    const auto panRamp = panGlide.processRamp (numSamples);
+
+    // Legge di pan a potenza costante, normalizzata cosi' che pan=0 dia
+    // gL=gR=1.0 (non 0.707/0.707): con gain e pan al default lo stereo
+    // risultante e' identico campione per campione al vecchio mix mono
+    // duplicato sui due canali — nessun calo di ~3dB da spiegare all'ascolto
+    // quando questo lavoro e' stato introdotto. Calcolata solo agli estremi
+    // della rampa (due sin/cos per blocco, non per campione) e interpolata
+    // linearmente: su una rampa di 8ms non e' distinguibile dalla curva vera.
+    static constexpr float kPiOverFour = 0.78539816339744830961f;
+    static constexpr float kSqrt2 = 1.41421356237309504880f;
+    const auto panToLR = [] (float pan) noexcept
     {
-        mixOutput[i] += scratch[(size_t) i] * amp;
-        amp += ampRamp.increment;
+        // Tre casi espliciti (centro ed estremi), non lasciati al calcolo
+        // trigonometrico: kPiOverFour e' un'APPROSSIMAZIONE in float di
+        // pi/4, quindi 2*kPiOverFour non e' bit-esattamente pi/2 —
+        // std::cos(theta) a pan=+1 non torna mai esattamente 0.0f (nella
+        // pratica ~1e-8 per il segnale di prova, vedi tests/voice_test.cpp
+        // T-1), e std::cos/std::sin non sono comunque garantiti bit-esatti
+        // fra loro allo stesso argomento (implementazioni indipendenti). Un
+        // utente che porta il pan a un estremo si aspetta silenzio VERO
+        // sul canale opposto, non un residuo a -150dB; il pan di default e'
+        // inoltre esattamente 0.0f (mai toccato finche' l'utente non sposta
+        // il knob): qui si garantiscono gL/gR ESATTI nei tre casi, cosi'
+        // pan centrale produce uno stereo bit-per-bit identico al vecchio
+        // mix mono (T-3) e pan hard-left/right un canale ESATTAMENTE zero
+        // (T-1) — non solo "vicino".
+        if (pan == 0.0f)  return std::pair<float, float> { 1.0f, 1.0f };
+        if (pan <= -1.0f) return std::pair<float, float> { kSqrt2, 0.0f };
+        if (pan >= 1.0f)  return std::pair<float, float> { 0.0f, kSqrt2 };
+        const float theta = (pan + 1.0f) * kPiOverFour;
+        return std::pair<float, float> { kSqrt2 * std::cos (theta), kSqrt2 * std::sin (theta) };
+    };
+    const auto [gLStart, gRStart] = panToLR (panRamp.startValue);
+    const auto [gLEnd, gREnd] = panToLR (panRamp.startValue + panRamp.increment * (float) panRamp.rampSamples);
+    const float gLIncrement = panRamp.rampSamples > 0 ? (gLEnd - gLStart) / (float) panRamp.rampSamples : 0.0f;
+    const float gRIncrement = panRamp.rampSamples > 0 ? (gREnd - gRStart) / (float) panRamp.rampSamples : 0.0f;
+
+    // Guadagno campione-per-campione: ogni rampa.rampSamples puo' essere
+    // minore di numSamples (finisce dentro questo blocco), nel qual caso i
+    // campioni restanti restano fermi al valore raggiunto — stesso schema
+    // gia' in uso per ampRamp da solo, qui esteso a quattro rampe insieme.
+    const int rampSamples = std::max ({ ampRamp.rampSamples, gainRamp.rampSamples, panRamp.rampSamples });
+    float amp = ampRamp.startValue;
+    float gain = gainRamp.startValue;
+    float gL = gLStart;
+    float gR = gRStart;
+    int i = 0;
+    for (; i < rampSamples; ++i)
+    {
+        const float s = scratch[(size_t) i] * amp * gain;
+        mixL[i] += s * gL;
+        mixR[i] += s * gR;
+        if (i < ampRamp.rampSamples) amp += ampRamp.increment;
+        if (i < gainRamp.rampSamples) gain += gainRamp.increment;
+        if (i < panRamp.rampSamples) { gL += gLIncrement; gR += gRIncrement; }
     }
     for (; i < numSamples; ++i)
-        mixOutput[i] += scratch[(size_t) i] * amp;
+    {
+        const float s = scratch[(size_t) i] * amp * gain;
+        mixL[i] += s * gL;
+        mixR[i] += s * gR;
+    }
 }

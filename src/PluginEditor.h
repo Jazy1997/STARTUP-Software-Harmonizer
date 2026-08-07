@@ -13,6 +13,9 @@
 // Sessione 22: fondamentale ora selezionata da una griglia cromatica di 12
 // pulsanti (ui::RootNoteGrid, §8.1/FR-15) al posto della ComboBox. Resta
 // comunque un pannello piatto, non le tre schermate definitive.
+// Sessione 23: aggiunti gain e pan per voce (FR-11/§8.1) — le due righe
+// separate Fix/Move e Fmt/Voice diventano una striscia unica a 8 colonne
+// (una per voce) con Fix/Fmt/Pan/Gain impilati verticalmente, vedi resized().
 class HarmonizerAudioProcessorEditor : public juce::AudioProcessorEditor,
                                         private juce::Timer
 {
@@ -61,10 +64,20 @@ private:
     // perche' tutti quei percorsi chiamano selectPresetIndex() a valle).
     ui::PresetTableEditor presetTableEditor;
 
+    // Sessione 23 (FR-11/§8.1): striscia unica "voci" — una colonna per
+    // voce (V1..V8), con Fix/Fmt/Pan/Gain impilati verticalmente. I quattro
+    // array restano paralleli fra loro (stesso indice = stessa voce);
+    // voiceColumnHeaders e' solo testo ("1".."8"), nessuna interazione.
+    std::array<juce::Label, harmony::numVoices> voiceColumnHeaders;
     // FR-23: Fix/Move per singola voce — un bottone a due stati per voce.
     std::array<juce::ToggleButton, harmony::numVoices> voiceFixButtons;
     // FR-41: offset formantico manuale per voce, in semitoni-equivalenti.
     std::array<juce::Slider, harmony::numVoices> voiceFormantSliders;
+    // FR-11/§8.1: pan per voce, -1..+1 (vedi Voice::processAdd per la legge
+    // di pan a potenza costante).
+    std::array<juce::Slider, harmony::numVoices> voicePanSliders;
+    // FR-11/§8.1: gain per voce, in dB (-60..+6, vedi ParamIDs::voiceGain).
+    std::array<juce::Slider, harmony::numVoices> voiceGainSliders;
 
     // FR-31/32/33: numeri CC (non parametri APVTS, vedi PluginProcessor —
     // sono configurazione di routing, non valori automatizzabili) + MIDI
@@ -106,6 +119,8 @@ private:
     juce::Label activeVoicesLabel { {}, "Active" };
     juce::Label formantSpreadLabel { {}, "Fmt Spread" };
     juce::Label voiceFormantLabel  { {}, "Fmt/Voice" };
+    juce::Label voicePanLabel      { {}, "Pan/Voice" };
+    juce::Label voiceGainLabel     { {}, "Gain/Voice" };
     juce::Label detectedLabel { {}, "Detected" };
     juce::Label midiChannelLabel { {}, "MIDI Ch" };
     juce::Label rootCcLabel      { {}, "CC Root" };
@@ -126,6 +141,8 @@ private:
     std::unique_ptr<SliderAttachment> formantSpreadAttachment;
     std::array<std::unique_ptr<ButtonAttachment>, harmony::numVoices> voiceFixAttachments;
     std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voiceFormantAttachments;
+    std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voicePanAttachments;
+    std::array<std::unique_ptr<SliderAttachment>, harmony::numVoices> voiceGainAttachments;
     std::unique_ptr<ButtonAttachment> bypassAttachment;
     std::unique_ptr<ButtonAttachment> playModeAttachment;
     std::unique_ptr<ButtonAttachment> keepTailsAttachment;

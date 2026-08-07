@@ -64,20 +64,48 @@ static constexpr double SR = 44100.0; // stessa SR della config reale dell'utent
 // ---------------------------------------------------------------------------
 // Fa processare a `voice` `totalSamples` campioni consecutivi presi da `src`
 // a partire da `srcOffset`, in blocchi da `blockSize` (l'ultimo blocco puo'
-// essere piu' corto). mixOutput deve essere pre-azzerato (Voice::processAdd
-// ACCUMULA, come da contratto in Voice.h) — un vector<float> appena
-// costruito e' gia' a zero, nessuna inizializzazione esplicita necessaria.
+// essere piu' corto). Ritorna SOLO il canale L (FR-11: processAdd e' ora
+// stereo, ma tutti i test H1/H3/H4/controllo negativo preesistenti misurano
+// un solo canale — con gain/pan al default L ed R sono bit-identici, vedi
+// T-3 piu' sotto, quindi restare su L basta a preservare esattamente le
+// stesse misure di prima senza toccarne le soglie, CLAUDE.md regola 13). Il
+// buffer R viene comunque prodotto (processAdd lo richiede) e scartato.
+// mixL/mixR devono essere pre-azzerati (Voice::processAdd ACCUMULA, come da
+// contratto in Voice.h) — un vector<float> appena costruito e' gia' a zero.
 // ---------------------------------------------------------------------------
 static std::vector<float> captureOutput (Voice& voice, const std::vector<float>& src, size_t srcOffset,
                                          int blockSize, int totalSamples,
                                          int quantizedPlayedNote, float continuousMidi)
 {
-    std::vector<float> out ((size_t) totalSamples, 0.0f);
+    std::vector<float> outL ((size_t) totalSamples, 0.0f);
+    std::vector<float> outR ((size_t) totalSamples, 0.0f);
     int done = 0;
     while (done < totalSamples)
     {
         const int n = std::min (blockSize, totalSamples - done);
-        voice.processAdd (&src[srcOffset + (size_t) done], &out[(size_t) done], n,
+        voice.processAdd (&src[srcOffset + (size_t) done], &outL[(size_t) done], &outR[(size_t) done], n,
+                          quantizedPlayedNote, continuousMidi);
+        done += n;
+    }
+    return outL;
+}
+
+// Come captureOutput, ma ritorna ENTRAMBI i canali — usato dai test T-1..T-5
+// (FR-11), che devono ispezionare L ed R separatamente.
+struct StereoOutput { std::vector<float> left, right; };
+
+static StereoOutput captureStereoOutput (Voice& voice, const std::vector<float>& src, size_t srcOffset,
+                                          int blockSize, int totalSamples,
+                                          int quantizedPlayedNote, float continuousMidi)
+{
+    StereoOutput out;
+    out.left.assign ((size_t) totalSamples, 0.0f);
+    out.right.assign ((size_t) totalSamples, 0.0f);
+    int done = 0;
+    while (done < totalSamples)
+    {
+        const int n = std::min (blockSize, totalSamples - done);
+        voice.processAdd (&src[srcOffset + (size_t) done], &out.left[(size_t) done], &out.right[(size_t) done], n,
                           quantizedPlayedNote, continuousMidi);
         done += n;
     }
@@ -86,19 +114,21 @@ static std::vector<float> captureOutput (Voice& voice, const std::vector<float>&
 
 // Fa avanzare lo stato di `voice` di `totalSamples` campioni senza
 // conservare l'uscita (usato per le fasi di "assestamento" prima della
-// misura vera e propria: portare offsetGlide a convergenza, o svuotare
-// ampGlide fino al silenzio).
+// misura vera e propria: portare offsetGlide/gainGlide/panGlide a
+// convergenza, o svuotare ampGlide fino al silenzio).
 static void runSilently (Voice& voice, const std::vector<float>& src, size_t srcOffset,
                          int blockSize, int totalSamples,
                          int quantizedPlayedNote, float continuousMidi)
 {
-    std::vector<float> scratch ((size_t) blockSize, 0.0f);
+    std::vector<float> scratchL ((size_t) blockSize, 0.0f);
+    std::vector<float> scratchR ((size_t) blockSize, 0.0f);
     int done = 0;
     while (done < totalSamples)
     {
         const int n = std::min (blockSize, totalSamples - done);
-        std::fill (scratch.begin(), scratch.begin() + n, 0.0f);
-        voice.processAdd (&src[srcOffset + (size_t) done], scratch.data(), n,
+        std::fill (scratchL.begin(), scratchL.begin() + n, 0.0f);
+        std::fill (scratchR.begin(), scratchR.begin() + n, 0.0f);
+        voice.processAdd (&src[srcOffset + (size_t) done], scratchL.data(), scratchR.data(), n,
                           quantizedPlayedNote, continuousMidi);
         done += n;
     }
@@ -393,6 +423,211 @@ int main()
         if (! freshOk) ++failures;
         std::printf ("  controllo positivo (voce mai riattivata, stesso target da sempre): scostamento %.2f cent  %s\n",
                      freshErr, freshOk ? "OK" : "FALLITO — la misura di F0 stessa non e' affidabile qui");
+    }
+
+    // =========================================================================
+    // FR-11/§8.1 — gain e pan per voce (sessione 23). Cinque test, T-1..T-5,
+    // pianificati PRIMA di scrivere il fix (CLAUDE.md regola 12/13): T-3 in
+    // particolare e' la garanzia che il default (gain 0dB, pan centro) non
+    // cambi il suono rispetto a prima di questo lavoro.
+    // =========================================================================
+
+    // T-1 — pan hard left/right: un canale deve restare ESATTAMENTE a zero
+    // (non solo piccolo), l'altro deve portare tutto il segnale.
+    std::printf ("\nT-1 — pan tutto a sinistra/destra: il canale opposto deve restare ESATTAMENTE zero\n");
+    {
+        auto measureHardPan = [&] (float panValue, bool expectRightSilent) -> bool
+        {
+            Voice voice;
+            voice.prepare (SR, maxBlockPrepare, Stability::defaultLevel);
+            voice.setMuted (false);
+            voice.setTargetOffsetSemitones (0.0f);
+            voice.setPan (panValue);
+
+            // Lascia assestare la rampa anti-click di pan (kDeclickMs=8ms =
+            // 353 campioni a questa SR) ben oltre la sua durata prima di
+            // misurare — altrimenti si misurerebbe un pan ancora in transito.
+            runSilently (voice, carrier, 0, 256, 2000, 0, continuousMidi);
+
+            const int total = 4096;
+            const auto stereo = captureStereoOutput (voice, carrier, 2000, 256, total, 0, continuousMidi);
+
+            const auto& silentChannel = expectRightSilent ? stereo.right : stereo.left;
+            const auto& fullChannel   = expectRightSilent ? stereo.left  : stereo.right;
+
+            double maxAbsSilent = 0.0, maxAbsFull = 0.0;
+            for (float s : silentChannel) maxAbsSilent = std::max (maxAbsSilent, (double) std::fabs (s));
+            for (float s : fullChannel)   maxAbsFull   = std::max (maxAbsFull,   (double) std::fabs (s));
+
+            const bool ok = maxAbsSilent == 0.0 && maxAbsFull > 0.01;
+            std::printf ("  pan=%+.0f: canale %s max|.|=%.3e (atteso 0 esatto), canale %s max|.|=%.4f (atteso >0)  %s\n",
+                         panValue, expectRightSilent ? "R" : "L", maxAbsSilent,
+                         expectRightSilent ? "L" : "R", maxAbsFull, ok ? "OK" : "FALLITO");
+            if (! allFinite (stereo.left) || ! allFinite (stereo.right)) return false;
+            return ok;
+        };
+
+        if (! measureHardPan (-1.0f, /*expectRightSilent*/ true))  ++failures;
+        if (! measureHardPan (+1.0f, /*expectRightSilent*/ false)) ++failures;
+    }
+
+    // T-2 — potenza costante: L^2+R^2 sommati sull'intero buffer non deve
+    // dipendere dalla posizione del pan (nessun calo/salto di volume
+    // ruotando il knob). Stesso segmento sorgente per ogni pan testato, cosi'
+    // l'unica variabile e' il fattore di pan, non il contenuto del segnale.
+    std::printf ("\nT-2 — potenza costante: energia L+R non deve dipendere dalla posizione del pan\n");
+    {
+        const std::vector<float> panPositions { -1.0f, -0.5f, 0.0f, 0.5f, 1.0f };
+        const int total = 4096;
+        double referenceEnergy = -1.0;
+        bool ok = true;
+
+        for (float pan : panPositions)
+        {
+            Voice voice;
+            voice.prepare (SR, maxBlockPrepare, Stability::defaultLevel);
+            voice.setMuted (false);
+            voice.setTargetOffsetSemitones (0.0f);
+            voice.setPan (pan);
+            runSilently (voice, carrier, 0, 256, 2000, 0, continuousMidi);
+
+            const auto stereo = captureStereoOutput (voice, carrier, 2000, 256, total, 0, continuousMidi);
+
+            double energy = 0.0;
+            for (int i = 0; i < total; ++i)
+                energy += (double) stereo.left[(size_t) i] * stereo.left[(size_t) i]
+                        + (double) stereo.right[(size_t) i] * stereo.right[(size_t) i];
+
+            if (referenceEnergy < 0.0)
+                referenceEnergy = energy;
+
+            const double ratio = energy / referenceEnergy;
+            const bool thisOk = ratio > 0.98 && ratio < 1.02;
+            if (! thisOk) ok = false;
+            std::printf ("  pan=%+.2f  energia L+R=%.4f  rapporto al primo campione=%.4f  %s\n",
+                         pan, energy, ratio, thisOk ? "OK" : "FALLITO");
+        }
+        if (! ok) ++failures;
+    }
+
+    // T-3 — regressione bit-per-bit: con gain/pan al DEFAULT (mai toccati),
+    // L ed R devono essere ESATTAMENTE identici campione per campione. E'
+    // la garanzia che introdurre questo lavoro non cambi il suono prodotto
+    // finora dal plugin (vedi Voice.cpp, panToLR: caso pan==0.0f esplicito,
+    // non lasciato al calcolo trigonometrico, proprio per questa garanzia).
+    std::printf ("\nT-3 — con gain/pan di default L ed R devono essere IDENTICI campione per campione\n");
+    {
+        Voice voice;
+        voice.prepare (SR, maxBlockPrepare, Stability::defaultLevel);
+        voice.setMuted (false);
+        voice.setTargetOffsetSemitones (3.0f); // shift reale, non unisono: non banale
+
+        const int total = 8192;
+        const auto stereo = captureStereoOutput (voice, carrier, 0, 300, total, 0, continuousMidi);
+
+        bool identical = true;
+        double maxDiff = 0.0;
+        for (int i = 0; i < total; ++i)
+        {
+            const double diff = std::fabs ((double) stereo.left[(size_t) i] - (double) stereo.right[(size_t) i]);
+            maxDiff = std::max (maxDiff, diff);
+            if (stereo.left[(size_t) i] != stereo.right[(size_t) i])
+                identical = false;
+        }
+        std::printf ("  differenza massima L-R = %.3e (atteso 0 esatto)  %s\n",
+                     maxDiff, identical ? "OK (bit-identici)" : "FALLITO");
+        if (! identical) ++failures;
+        if (! allFinite (stereo.left) || ! allFinite (stereo.right)) { ++failures; std::printf ("  FALLITO: uscita non finita\n"); }
+    }
+
+    // T-4 — gain al minimo (-60dB, gia' convertito in lineare da
+    // PluginProcessor prima di arrivare qui — vedi juce::Decibels::
+    // decibelsToGain nel commento di ParamIDs::voiceGain): l'uscita deve
+    // essere esattamente nulla, nessun residuo.
+    std::printf ("\nT-4 — gain lineare 0.0 (equivalente a -60dB) deve produrre uscita ESATTAMENTE nulla\n");
+    {
+        Voice voice;
+        voice.prepare (SR, maxBlockPrepare, Stability::defaultLevel);
+        voice.setMuted (false);
+        voice.setTargetOffsetSemitones (0.0f);
+        voice.setGainLinear (0.0f);
+        runSilently (voice, carrier, 0, 256, 2000, 0, continuousMidi); // assesta gainGlide
+
+        const int total = 4096;
+        const auto stereo = captureStereoOutput (voice, carrier, 2000, 256, total, 0, continuousMidi);
+
+        double maxAbsL = 0.0, maxAbsR = 0.0;
+        for (float s : stereo.left)  maxAbsL = std::max (maxAbsL, (double) std::fabs (s));
+        for (float s : stereo.right) maxAbsR = std::max (maxAbsR, (double) std::fabs (s));
+
+        const bool ok = maxAbsL == 0.0 && maxAbsR == 0.0;
+        std::printf ("  max|L|=%.3e  max|R|=%.3e (atteso 0 esatto su entrambi)  %s\n",
+                     maxAbsL, maxAbsR, ok ? "OK" : "FALLITO");
+        if (! ok) ++failures;
+    }
+
+    // T-5 — anti-click con un blocco LUNGO (4096 campioni, il caso reale
+    // misurato in sessione 13 con MME/DirectX in Ableton): un salto brusco
+    // di gain e di pan, impostato esattamente al confine fra due blocchi da
+    // 4096 campioni (come farebbe processBlock leggendo un nuovo valore di
+    // parametro a inizio blocco), non deve produrre una discontinuita'
+    // campione-per-campione AL CONFINE. E' il rischio piu' concreto di
+    // questo lavoro: se le rampe di gain/pan fossero applicate una volta per
+    // blocco invece che per campione (esattamente il bug di sessione 13 su
+    // ampGlide/dry/wet), il campione all'inizio del secondo blocco
+    // salterebbe gia' al valore di regime finale, e questo test lo deve
+    // rilevare. Cattura UNICA e continua (non due chiamate separate): solo
+    // cosi' maxJump puo' vedere il confine fra gli ultimi campioni del primo
+    // blocco e i primi del secondo.
+    std::printf ("\nT-5 — salto di gain/pan al confine fra due blocchi da 4096 campioni non deve clickare\n");
+    {
+        Voice voice;
+        voice.prepare (SR, 4096, Stability::defaultLevel);
+        voice.setMuted (false);
+        voice.setTargetOffsetSemitones (0.0f);
+        voice.setGainLinear (1.0f);
+        voice.setPan (0.0f);
+
+        // Assesta tutto (offset/gain/pan glide, PSOLA a regime) ben oltre
+        // l'attacco — stessa convenzione di regimeFrom=0.30s usata in H1.
+        runSilently (voice, carrier, 0, 4096, (int) (0.30 * SR), 0, continuousMidi);
+
+        constexpr int blockLen = 4096;
+        const size_t srcOffset = (size_t) (0.30 * SR);
+        std::vector<float> outL ((size_t) (2 * blockLen), 0.0f);
+        std::vector<float> outR ((size_t) (2 * blockLen), 0.0f);
+
+        // Primo blocco: ancora a gain=1/pan=0 (regime).
+        voice.processAdd (&carrier[srcOffset], outL.data(), outR.data(), blockLen, 0, continuousMidi);
+
+        // Salto brusco A CONFINE DI BLOCCO: -20dB circa (0.1 lineare) e pan
+        // tutto a destra, impostati PRIMA di chiamare processAdd sul secondo
+        // blocco — esattamente come processBlock legge un parametro cambiato
+        // a inizio blocco.
+        voice.setGainLinear (0.1f);
+        voice.setPan (1.0f);
+        voice.processAdd (&carrier[srcOffset + (size_t) blockLen], outL.data() + blockLen, outR.data() + blockLen,
+                          blockLen, 0, continuousMidi);
+
+        // Finestra CENTRATA sul confine (indice blockLen-1 -> blockLen):
+        // misura esattamente il salto che l'anti-click deve evitare.
+        const int winLen = (int) (0.05 * SR);
+        const int boundaryFrom = blockLen - winLen / 2;
+        const double slewAtBoundary = maxJump (outL, boundaryFrom, winLen);
+
+        // Riferimento "a regime": stessa larghezza di finestra, ma lontano
+        // da qualunque confine o cambio di parametro (dentro il primo blocco).
+        const double slewRegime = maxJump (outL, blockLen / 2 - winLen / 2, winLen);
+        const double slewRatio = (slewRegime > 0.0) ? slewAtBoundary / slewRegime : 1.0e9;
+
+        // Soglia diagnostica: stesso ordine di grandezza usato per H1/H4 sopra
+        // (rapporto < 3x fra lo slew al confine e lo slew a regime).
+        const bool ok = slewRatio < 3.0;
+        std::printf ("  slew a regime = %.5f | slew al confine fra i due blocchi = %.5f | rapporto = %.2f  %s\n",
+                     slewRegime, slewAtBoundary, slewRatio, ok ? "OK" : "FALLITO (click)");
+        if (! ok) ++failures;
+
+        if (! allFinite (outL) || ! allFinite (outR)) { ++failures; std::printf ("  FALLITO: uscita non finita\n"); }
     }
 
     std::printf ("\n===================================\n");

@@ -19,6 +19,10 @@ namespace ParamIDs
 
     static juce::String voiceFix (int voiceIndex) { return "voiceFix" + juce::String (voiceIndex + 1); }
     static juce::String voiceFormantOffset (int voiceIndex) { return "voiceFormantOffset" + juce::String (voiceIndex + 1); }
+    // FR-11/§8.1: gain (dB) e pan per voce — id mai piu' rinominati dopo
+    // pubblicazione (CLAUDE.md regola 6), stessa convenzione 1-based.
+    static juce::String voiceGain (int voiceIndex) { return "voiceGain" + juce::String (voiceIndex + 1); }
+    static juce::String voicePan (int voiceIndex) { return "voicePan" + juce::String (voiceIndex + 1); }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::createParameterLayout()
@@ -88,6 +92,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
             juce::ParameterID { ParamIDs::voiceFormantOffset (v), 1 }, "Voice " + juce::String (v + 1) + " Formant",
             juce::NormalisableRange<float> (-24.0f, 24.0f), 0.0f));
 
+    // FR-11/§8.1: gain per voce in dB, -60 (silenzio, vedi
+    // juce::Decibels::decibelsToGain in processBlock) .. +6, default 0 dB —
+    // nessun cambiamento rispetto al comportamento preesistente.
+    for (int v = 0; v < harmony::numVoices; ++v)
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::voiceGain (v), 1 }, "Voice " + juce::String (v + 1) + " Gain",
+            juce::NormalisableRange<float> (-60.0f, 6.0f), 0.0f));
+
+    // FR-11/§8.1: pan per voce, -1 (tutto a sinistra) .. +1 (tutto a
+    // destra), default 0 (centro) — vedi Voice::processAdd per la legge a
+    // potenza costante normalizzata cosi' che il default non cambi il suono.
+    for (int v = 0; v < harmony::numVoices; ++v)
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::voicePan (v), 1 }, "Voice " + juce::String (v + 1) + " Pan",
+            juce::NormalisableRange<float> (-1.0f, 1.0f), 0.0f));
+
     // FR-34/36: automatizzabile come tutti gli altri; il CC di bypass (FR-30)
     // puo' mettere l'automazione host in override per questo parametro,
     // esattamente come per root/preset (vedi processBlock, OverrideManager).
@@ -137,8 +157,8 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     const int scratchSize = juce::jmax (samplesPerBlock, absoluteMaxBlockSize);
 
     monoInputScratch.setSize (1, scratchSize, false, false, true);
-    voicesMixScratch.setSize (1, scratchSize, false, false, true);
-    playVoicesMixScratch.setSize (1, scratchSize, false, false, true);
+    voicesMixScratch.setSize (2, scratchSize, false, false, true);
+    playVoicesMixScratch.setSize (2, scratchSize, false, false, true);
 
     pitchDetector.prepare (sampleRate);
     onsetDetector.prepare (sampleRate);
@@ -330,6 +350,19 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
         const float formantOffset = *apvts.getRawParameterValue (ParamIDs::voiceFormantOffset (v));
         phraseScheduler.setVoiceFormantOffset (v, formantOffset);
+
+        // FR-11/§8.1: conversione dB->lineare fatta QUI, non dentro Voice —
+        // Voice/voice_test restano privi di dipendenze JUCE (vedi Voice.h).
+        // -60dB e' trattato come silenzio esatto (minusInfinityDb, il terzo
+        // argomento), non un numero molto piccolo ma diverso da zero.
+        const float gainDb = *apvts.getRawParameterValue (ParamIDs::voiceGain (v));
+        const float gainLinear = juce::Decibels::decibelsToGain (gainDb, -60.0f);
+        phraseScheduler.setVoiceGainLinear (v, gainLinear);
+        playModeInput.setVoiceGainLinear (v, gainLinear);
+
+        const float pan = *apvts.getRawParameterValue (ParamIDs::voicePan (v));
+        phraseScheduler.setVoicePan (v, pan);
+        playModeInput.setVoicePan (v, pan);
     }
 
     // Snapshot immutabile: sicuro da leggere sull'audio thread (vedi header).
@@ -409,14 +442,16 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const bool harmonizerSignalPresent = (! playModeEnabled) && signalPresent;
     const bool harmonizerInputIsStable = (! playModeEnabled) && inputIsStable;
 
-    voicesMixScratch.setSize (1, numSamples, false, false, true);
-    const bool appliedStabilityChangeHarmonizer = phraseScheduler.process (mono, voicesMixScratch.getWritePointer (0), numSamples,
+    // FR-11/§8.1: mix wet STEREO (gain/pan per voce) — canale 0 = L, 1 = R.
+    voicesMixScratch.setSize (2, numSamples, false, false, true);
+    const bool appliedStabilityChangeHarmonizer = phraseScheduler.process (mono,
+        voicesMixScratch.getWritePointer (0), voicesMixScratch.getWritePointer (1), numSamples,
         onsetDetectedThisBlock, harmonizerSignalPresent, harmonizerInputIsStable, quantizedPlayedNote, continuousInputMidiNote,
         offsets, numActiveVoices, canApplyStabilityChangeNow());
 
-    playVoicesMixScratch.setSize (1, numSamples, false, false, true);
+    playVoicesMixScratch.setSize (2, numSamples, false, false, true);
     const bool appliedStabilityChangePlay = playModeInput.process (midiMessages, ccRouter.getMidiChannel(), playModeEnabled,
-        mono, playVoicesMixScratch.getWritePointer (0), numSamples,
+        mono, playVoicesMixScratch.getWritePointer (0), playVoicesMixScratch.getWritePointer (1), numSamples,
         inputIsStable, continuousInputMidiNote, canApplyStabilityChangeNow());
 
     if (appliedStabilityChangeHarmonizer || appliedStabilityChangePlay)
@@ -424,7 +459,8 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Le due modalita' sono mutuamente esclusive (FR-24): si sceglie l'una
     // o l'altra, non si sommano.
-    const auto* voicesMix = playModeEnabled ? playVoicesMixScratch.getReadPointer (0) : voicesMixScratch.getReadPointer (0);
+    const auto* voicesMixL = playModeEnabled ? playVoicesMixScratch.getReadPointer (0) : voicesMixScratch.getReadPointer (0);
+    const auto* voicesMixR = playModeEnabled ? playVoicesMixScratch.getReadPointer (1) : voicesMixScratch.getReadPointer (1);
 
     // Bypass (FR-30): solo dry, esattamente come se Dry=1/Wet=0 — il
     // percorso dry e' gia' il segnale in ingresso non processato, quindi
@@ -446,21 +482,46 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const auto dryRamp = dryGlide.processRamp (numSamples);
     const auto wetRamp = wetGlide.processRamp (numSamples);
 
-    for (int ch = 0; ch < numOutputChannels; ++ch)
+    // FR-11/§8.1: il mix wet e' ora stereo. Con un bus di uscita stereo il
+    // canale 0 legge L e il canale 1 legge R; con un bus mono
+    // (isBusesLayoutSupported lo consente) non esiste un canale "giusto" da
+    // scegliere, quindi si fa la media dei due — l'unico downmix sensato
+    // per un segnale che ora porta informazione di pan.
+    if (numOutputChannels == 1)
     {
-        auto* out = buffer.getWritePointer (ch);
+        auto* out = buffer.getWritePointer (0);
         float dry = dryRamp.startValue;
         float wet = wetRamp.startValue;
         const int rampSamples = juce::jmax (dryRamp.rampSamples, wetRamp.rampSamples);
         int i = 0;
         for (; i < rampSamples; ++i)
         {
-            out[i] = dry * mono[i] + wet * voicesMix[i];
+            out[i] = dry * mono[i] + wet * 0.5f * (voicesMixL[i] + voicesMixR[i]);
             if (i < dryRamp.rampSamples) dry += dryRamp.increment;
             if (i < wetRamp.rampSamples) wet += wetRamp.increment;
         }
         for (; i < numSamples; ++i)
-            out[i] = dry * mono[i] + wet * voicesMix[i];
+            out[i] = dry * mono[i] + wet * 0.5f * (voicesMixL[i] + voicesMixR[i]);
+    }
+    else
+    {
+        for (int ch = 0; ch < numOutputChannels; ++ch)
+        {
+            auto* out = buffer.getWritePointer (ch);
+            const float* voicesMix = (ch == 1) ? voicesMixR : voicesMixL;
+            float dry = dryRamp.startValue;
+            float wet = wetRamp.startValue;
+            const int rampSamples = juce::jmax (dryRamp.rampSamples, wetRamp.rampSamples);
+            int i = 0;
+            for (; i < rampSamples; ++i)
+            {
+                out[i] = dry * mono[i] + wet * voicesMix[i];
+                if (i < dryRamp.rampSamples) dry += dryRamp.increment;
+                if (i < wetRamp.rampSamples) wet += wetRamp.increment;
+            }
+            for (; i < numSamples; ++i)
+                out[i] = dry * mono[i] + wet * voicesMix[i];
+        }
     }
 }
 
