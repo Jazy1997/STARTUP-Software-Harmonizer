@@ -157,10 +157,46 @@ void PsolaShifter::epochPopFront() noexcept
     --epochCount;
 }
 
+// Sessione 26 — "timbro granuloso/che respira" a shift profondo (V3/V4 del
+// preset Maj, offset fino a -10 semitoni): diagnosi completa in
+// handsoff.md. Riassunto per chi legge questo codice senza il contesto
+// completo:
+//
+// Il criterio precedente sceglieva, entro +-P/4 campioni dalla posizione
+// predetta, il campione di AMPIEZZA ASSOLUTA MASSIMA — un'euristica a
+// singolo campione, cieca alla forma d'onda circostante. Su materiale
+// armonicamente ricco (non un treno di impulsi puro) il campione piu' "alto"
+// puo' spostarsi da un ciclo al successivo per battimenti fra armoniche/
+// formanti o rumore di soffio, indipendentemente dal vero periodo.
+//
+// Misurato direttamente (strumentazione temporanea, PSOLA_DEBUG_EPOCHS, sul
+// file reale dell'utente, plateau C4 di "Test 1 - Basic Silk Horns.wav",
+// unisono): il 90.9% degli epoch cade entro +-1 campione dal periodo vero,
+// ma l'1.9% sono "scatti" fino a 42 campioni (25% del periodo), quasi
+// sempre in COPPIE compensanti (un epoch troppo presto seguito da uno
+// troppo tardi) — la firma di un argmax che salta fra due picchi quasi
+// equivalenti nella finestra di ricerca. Le finestre temporali di questi
+// scatti coincidono, campione per campione, con le finestre di instabilita'
+// gia' misurate sull'export reale da voice_reference_probe.cpp.
+//
+// Confermato che NON e' un artefatto della misura (SpectralShifter, un
+// motore spettrale completamente diverso, resta a 0% di instabilita' a
+// qualunque profondita' sullo stesso file) ne' un'interferenza di
+// sovrapposizione fra grani legata a 1/alpha (uno sweep esteso fino a -19
+// semitoni non mostra i minimi netti a -12/-19 che quel meccanismo
+// prevederebbe — la curva e' monotona).
+//
+// Fix: sostituire "campione piu' forte" con "il lag che massimizza la
+// SIMILARITA' DI FORMA D'ONDA (cross-correlazione normalizzata) con
+// l'ultimo epoch confermato" — tecnica WSOLA. Il rumore additivo si media
+// su un periodo intero di campioni invece di dipendere da un solo
+// campione, quindi la scelta smette di saltare fra due picchi quasi pari.
 void PsolaShifter::detectEpochs()
 {
     const int P = currentPeriod();
     if (P <= 0) return;
+
+    const int w = std::max (2, P / 4);
 
     if (lastEpoch < 0)
     {
@@ -168,21 +204,38 @@ void PsolaShifter::detectEpochs()
         lastEpoch = absWrite - 2 * (long long) P;
     }
 
-    const int w = std::max (2, P / 4);
-
     // Un grano legge fino a epoch + P, quindi l'epoch e' utilizzabile solo
     // quando quei campioni sono gia' entrati.
     while (lastEpoch + P + w + P < absWrite)
     {
-        const long long pred = lastEpoch + P;
-
-        long long bestIdx = pred;
-        float     bestMag = -1.0f;
-
-        for (long long k = pred - w; k <= pred + w; ++k)
+        // SEED: quando il ring e' vuoto (nessun epoch ancora CONFERMATO su
+        // questa nota/riattivazione) non esiste un segmento di riferimento
+        // vero da cui correlare — questo primo epoch resta scelto per
+        // AMPIEZZA ASSOLUTA MASSIMA entro +-w, esattamente come tutta la
+        // funzione prima di sessione 26 (stessa larghezza di ricerca,
+        // stesso `pred`). Misurato: un primo tentativo che cercava il seed
+        // su una finestra piu' larga (+-P/2, un periodo intero) poteva
+        // agganciarsi a un picco secondario di risonanza invece che al vero
+        // transiente — la correlazione lo avrebbe poi preservato in modo
+        // consistente ma SBAGLIATO, e la fase sbagliata faceva regredire
+        // Test 3 (formanti) e Test 6 (inviluppo di sovrapposizione) su
+        // psola_test.cpp. Da qui in poi (ring non vuoto) la correlazione
+        // preserva la fase scelta qui, ciclo dopo ciclo.
+        long long bestIdx;
+        if (epochEmpty())
         {
-            const float m = std::fabs (inBuf[(size_t) (k & mask)]);
-            if (m > bestMag) { bestMag = m; bestIdx = k; }
+            const long long pred = lastEpoch + P;
+            float bestMag = -1.0f;
+            bestIdx = pred;
+            for (long long k = pred - w; k <= pred + w; ++k)
+            {
+                const float m = std::fabs (inBuf[(size_t) (k & mask)]);
+                if (m > bestMag) { bestMag = m; bestIdx = k; }
+            }
+        }
+        else
+        {
+            bestIdx = findEpochByCorrelation (lastEpoch, P, w);
         }
 
         lastEpoch = bestIdx;
@@ -193,6 +246,71 @@ void PsolaShifter::detectEpochs()
     const long long oldest = absWrite - bufSize / 2;
     while (! epochEmpty() && epochFront() < oldest)
         epochPopFront();
+}
+
+long long PsolaShifter::findEpochByCorrelation (long long anchor, int P, int w) const noexcept
+{
+    const long long pred = anchor + P;
+
+    // Segmento di confronto: PIU' STRETTO di un periodo intero,
+    // deliberatamente (v1 con half=P/2 misurato REGREDIRE Test 3/Test 6 di
+    // psola_test.cpp — una finestra larga quanto tutto il periodo include
+    // anche la coda risonante lontana dal transiente, "smarrendo" l'ancoraggio
+    // a un punto di fase preciso su segnali con un transiente netto seguito
+    // da un decadimento, esattamente il modello sorgente-filtro di
+    // makeVowel). Larga quanto la finestra di ricerca (w = P/4): abbastanza
+    // per mediare il rumore additivo su un numero di campioni comparabile
+    // (vedi il commento esteso su detectEpochs() sopra), abbastanza stretta
+    // da restare ancorata al transiente.
+    const int half = std::max (2, w);
+
+    // L'energia del riferimento non dipende da k: non entra nell'argmax,
+    // serve solo a riconoscere il silenzio, dove la correlazione non ha
+    // significato (si tiene allora la previsione pura, zero jitter aggiunto).
+    double refEnergy = 0.0;
+    for (int j = -half; j < half; ++j)
+    {
+        const double r = (double) inBuf[(size_t) ((anchor + j) & mask)];
+        refEnergy += r * r;
+    }
+    if (refEnergy <= 1.0e-12)
+        return pred;
+
+    // Energia del candidato al primo lag della ricerca, poi aggiornata in
+    // O(1) per lag (finestra scorrevole) invece di ricalcolata da zero ad
+    // ogni k — lo stesso principio di un filtro RMS a finestra scorrevole.
+    double candEnergy = 0.0;
+    for (int j = -half; j < half; ++j)
+    {
+        const double c = (double) inBuf[(size_t) ((pred - w + j) & mask)];
+        candEnergy += c * c;
+    }
+
+    long long bestIdx   = pred;
+    double    bestScore = -1.0;
+
+    for (long long k = pred - w; k <= pred + w; ++k)
+    {
+        double num = 0.0;
+        for (int j = -half; j < half; ++j)
+            num += (double) inBuf[(size_t) ((anchor + j) & mask)]
+                 * (double) inBuf[(size_t) ((k      + j) & mask)];
+
+        // Normalizzato per l'energia del CANDIDATO, non del riferimento:
+        // senza questo, il massimo andrebbe semplicemente dove il segnale
+        // e' piu' forte — un'euristica di ampiezza travestita, non una
+        // vera ricerca di similarita' di forma.
+        const double score = num / std::sqrt (candEnergy + 1.0e-12);
+        if (score > bestScore) { bestScore = score; bestIdx = k; }
+
+        // Aggiorna candEnergy per il prossimo k (finestra [k-half, k+half)
+        // che scorre di un campione): esce inBuf[k-half], entra inBuf[k+half].
+        const double outSample = (double) inBuf[(size_t) ((k - half) & mask)];
+        const double inSample  = (double) inBuf[(size_t) ((k + half) & mask)];
+        candEnergy += inSample * inSample - outSample * outSample;
+    }
+
+    return bestIdx;
 }
 
 long long PsolaShifter::nearestEpoch (long long t) const

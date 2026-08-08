@@ -351,6 +351,56 @@ inline FrameStat measureFrame (const std::vector<float>& x, int from, int len, d
 }
 
 // ---------------------------------------------------------------------------
+// Energia armonica / energia spettrale totale in banda — sessione 25/26,
+// timbro granuloso/robotico sulle voci con offset profondo.
+// ---------------------------------------------------------------------------
+//
+// Riusa goertzelMag (TestSignals.h, la stessa DFT a frequenza singola gia'
+// in uso da formantPeak): sulla stessa griglia di bin da loHz a hiHz, somma
+// l'energia (magnitudine al quadrato) SOLO nei bin piu' vicini alle
+// armoniche di f0Hz e la confronta con l'energia totale della griglia.
+// Bounded in [0,1] PER COSTRUZIONE (harmonicEnergy e' un sottoinsieme dei
+// bin che formano totalEnergy, non una normalizzazione indipendente sul
+// dominio del tempo che avrebbe dovuto tener conto del guadagno della
+// finestra di Hann) — un valore vicino a 1 vuol dire "quasi tutta l'energia
+// sta sulle armoniche attese", un valore basso vuol dire energia sparsa
+// altrove: la firma numerica di "granuloso"/"robotico" (rumore inarmonico)
+// quando f0Hz e' la f0 REALE della voce, e la firma di "periodicita'
+// originale che filtra" (l'artefatto descritto nel commento ATTENZIONE di
+// PsolaShifter::emitGrain) quando f0Hz e' invece la f0 del DRY non
+// trasposto per lo stesso istante.
+inline double harmonicEnergyRatio (const std::vector<float>& x, int from, int len, double sr,
+                                    double f0Hz, double loHz = 60.0, double hiHz = 4000.0,
+                                    double stepHz = 20.0)
+{
+    if (f0Hz <= 0.0 || from < 0 || len <= 2 || from + len > (int) x.size())
+        return 0.0;
+
+    const int nbins = (int) ((hiHz - loHz) / stepHz) + 1;
+    std::vector<double> mag2 ((size_t) nbins);
+    double totalEnergy = 0.0;
+    for (int k = 0; k < nbins; ++k)
+    {
+        const double m = goertzelMag (x, from, len, sr, loHz + k * stepHz);
+        mag2[(size_t) k] = m * m;
+        totalEnergy += mag2[(size_t) k];
+    }
+    if (totalEnergy <= 1.0e-12) return 0.0;
+
+    double harmonicEnergy = 0.0;
+    for (int h = 1; ; ++h)
+    {
+        const double freq = f0Hz * (double) h;
+        if (freq > hiHz) break;
+        if (freq < loHz) continue;
+        const int k = (int) std::lround ((freq - loHz) / stepHz);
+        if (k >= 0 && k < nbins) harmonicEnergy += mag2[(size_t) k];
+    }
+
+    return std::min (1.0, harmonicEnergy / totalEnergy);
+}
+
+// ---------------------------------------------------------------------------
 // Allineamento temporale fra due segnali
 // ---------------------------------------------------------------------------
 //

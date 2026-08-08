@@ -34,7 +34,7 @@
 //      un target headless) — rischio noto di divergenza dalla logica reale,
 //      da tenere a mente se i numeri non tornano.
 //
-// Uso: sample_click_finder <file.wav> [stability=2] [formantSpread=1.0] [rootPitchClass=0] [block=4096]
+// Uso: sample_click_finder <file.wav> [stability=2] [formantSpread=1.0] [rootPitchClass=0] [block=4096] [dumpPrefix] [traceStartSec traceEndSec] [fixedF0Hz] [fixedF0Semitones=0] [analysisStartSec=0.15] [analysisEndSec=1.90]
 // (block default 4096: e' il block size reale misurato in Ableton in
 // sessione 13, non 256 — con un buffer host grande il rilevatore di pitch si
 // legge una volta ogni ~93ms invece che ogni ~6ms)
@@ -109,6 +109,12 @@ namespace
     // esclusi misurando la traiettoria grezza di PitchDetector, pulita a
     // ogni block size) — deve venire dal posizionamento degli epoch/dalla
     // sintesi dei grani su questo specifico segnale non impulsivo.
+    //
+    // NOTA (sessione 25/26): `semitones` era ignorato, chiamato sempre a
+    // 0.0f in main() — bloccava il test a f0/offset fissi in unisono. Ora
+    // e' un argomento CLI vero (vedi main()), per riprodurre offline le
+    // profondita' di shift di V3/V4 (fino a -10 semitoni) senza dover
+    // chiedere altri export all'utente.
     std::vector<float> runFixedF0 (const std::vector<float>& mono, double sr, float semitones,
                                    int stabilityLevel, float formantSpread, double fixedF0Hz, int block)
     {
@@ -120,11 +126,19 @@ namespace
 
         const float fixedMidi = (float) (69.0 + 12.0 * std::log2 (fixedF0Hz / 440.0));
 
+        // Voice::processAdd e' stereo dalla sessione 23 (gain/pan per voce).
+        // Qui gain/pan restano al default (mai toccati): L ed R sono
+        // bit-identici per costruzione (T-3, tests/voice_test.cpp) — si
+        // scrive comunque un canale R di scarto invece di riusare `wet` per
+        // entrambi, cosi' una futura chiamata a setGainLinear/setPan in
+        // questo file non produrrebbe silenziosamente un risultato sbagliato
+        // senza errore.
         std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f);
         int done = 0;
         while (done + block <= (int) mono.size())
         {
-            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, fixedMidi);
+            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, fixedMidi);
             done += block;
         }
         return wet;
@@ -145,6 +159,7 @@ namespace
         voice.setTargetOffsetSemitones (semitones);
 
         std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f); // canale di scarto, vedi nota su runFixedF0
 
         int done = 0;
         while (done + block <= (int) mono.size())
@@ -153,7 +168,7 @@ namespace
                 pitchDetector.pushSample (mono[(size_t) (done + i)]);
 
             const float continuousMidi = pitchDetector.getMidiNote();
-            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, continuousMidi);
+            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
             done += block;
         }
         return wet;
@@ -181,6 +196,7 @@ namespace
         int numRetriggers = 0;
 
         std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f); // canale di scarto, vedi nota su runFixedF0
 
         int done = 0;
         bool firstBlock = true;
@@ -202,7 +218,7 @@ namespace
                 {
                     for (int i = 0; i < block; ++i)
                         pitchDetector.pushSample (mono[(size_t) (done + i)]);
-                    voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, pitchDetector.getMidiNote());
+                    voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, pitchDetector.getMidiNote());
                     done += block;
                 }
 
@@ -216,7 +232,7 @@ namespace
                 continue;
             }
 
-            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, continuousMidi);
+            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
             done += block;
             firstBlock = false;
         }
@@ -246,6 +262,7 @@ namespace
         voice.setMuted (false);
 
         std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f); // canale di scarto, vedi nota su runFixedF0
         int done = 0;
         int numDegreeChanges = 0;
         int lastDegree = -1;
@@ -281,7 +298,7 @@ namespace
                 voice.setTargetOffsetSemitones (kMajV1Table[degree]);
             }
 
-            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, continuousMidi);
+            voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
             done += block;
         }
 
@@ -317,6 +334,7 @@ namespace
         bool anyPhraseYet = false;
 
         std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f); // canale di scarto, vedi nota su runFixedF0
         int done = 0;
         int numOnsets = 0;
 
@@ -361,7 +379,7 @@ namespace
 
             for (auto& s : slots)
                 if (! s.isSilent())
-                    s.processAdd (&mono[(size_t) done], &wet[(size_t) done], block, 0, continuousMidi);
+                    s.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
 
             done += block;
         }
@@ -376,7 +394,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::printf ("Uso: sample_click_finder <file.wav> [stability=2] [formantSpread=1.0] [rootPitchClass=0] [block=4096] [dumpPrefix] [traceStartSec traceEndSec]\n");
+        std::printf ("Uso: sample_click_finder <file.wav> [stability=2] [formantSpread=1.0] [rootPitchClass=0] [block=4096] [dumpPrefix] [traceStartSec traceEndSec] [fixedF0Hz] [fixedF0Semitones=0] [analysisStartSec=0.15] [analysisEndSec=1.90]\n");
         return 1;
     }
 
@@ -400,6 +418,21 @@ int main (int argc, char** argv)
     // salva l'uscita — non le 4 passate ne' la traccia.
     const bool doFixedF0 = argc > 9;
     const double fixedF0Hz = doFixedF0 ? std::stod (argv[9]) : 0.0;
+    // Sessione 25/26: offset in semitoni per runFixedF0, prima fisso a 0.0f
+    // in chiamata (unisono) — ora un argomento CLI vero, per riprodurre
+    // offline le profondita' di shift di V3/V4 (fino a -10 semitoni) senza
+    // altri export dall'utente. Default 0.0f: comportamento IDENTICO a prima
+    // se non specificato.
+    const float fixedF0Semitones = argc > 10 ? std::stof (argv[10]) : 0.0f;
+    // Sessione 26 (confronto motori): la finestra di analisi era fissa
+    // (0.15-1.90s), calibrata sulla latenza del PSOLA (~21ms a Balanced).
+    // SpectralShifter ha latenza ~90ms: con la finestra fissa il confronto
+    // fra motori sarebbe viziato (il transitorio di uno finirebbe dentro la
+    // finestra dell'altro). Ora due argomenti CLI opzionali — default
+    // IDENTICI a prima se non specificati, nessun cambiamento per l'uso
+    // gia' in produzione di questo strumento.
+    const double analysisStartSecArg = argc > 11 ? std::stod (argv[11]) : 0.15;
+    const double analysisEndSecArg   = argc > 12 ? std::stod (argv[12]) : 1.90;
 
     WavFile wav;
     std::string error;
@@ -424,8 +457,9 @@ int main (int argc, char** argv)
     // va controllato PRIMA, altrimenti doTrace lo intercetterebbe sempre.
     if (doFixedF0)
     {
-        std::printf ("\n=== f0 COSTANTE a %.1fHz, unisono (0 semitoni), bypassa PitchDetector/PitchLatch/Glide ===\n", fixedF0Hz);
-        const auto fixedWet = runFixedF0 (mono, sr, 0.0f, stabilityLevel, formantSpread, fixedF0Hz, block);
+        std::printf ("\n=== f0 COSTANTE a %.1fHz, offset %.1f semitoni, bypassa PitchDetector/PitchLatch/Glide ===\n",
+                     fixedF0Hz, fixedF0Semitones);
+        const auto fixedWet = runFixedF0 (mono, sr, fixedF0Semitones, stabilityLevel, formantSpread, fixedF0Hz, block);
         if (! dumpPrefix.empty())
         {
             writeWavMono (dumpPrefix + ".fixedf0.wav", fixedWet, sr);
@@ -435,6 +469,48 @@ int main (int argc, char** argv)
         {
             std::printf ("  ATTENZIONE: nessun dumpPrefix fornito, uscita non salvata su disco\n");
         }
+
+        // Sessione 25/26 (indagine sul timbro granuloso a offset profondo,
+        // V3/V4 del preset Maj): analisi diretta del segmento dove
+        // fixedF0Hz e' effettivamente valido — stessa finestra usata in
+        // sessione 20, Fase 0 (il plateau C4 di "Test 1 - Basic Silk
+        // Horns.wav" e' 0.09-2.01s: fuori da li' il file suona altre note e
+        // runFixedF0 e' degradato per costruzione, non per un difetto). Qui
+        // la f0 di TARGET e' NOTA per costruzione (fixedF0Hz spostato di
+        // fixedF0Semitones): a differenza di voice_reference_probe.cpp non
+        // serve un file "Ideal" separato per misurare periodicita'/energia
+        // armonica — permette di esplorare offline molte profondita' di
+        // shift senza altri export dall'utente.
+        {
+            const double targetF0Hz = fixedF0Hz * std::exp2 ((double) fixedF0Semitones / 12.0);
+            const double analysisStartSec = analysisStartSecArg, analysisEndSec = analysisEndSecArg;
+            const int winLenA = (int) (0.030 * sr);
+            const int hopA    = (int) (0.010 * sr);
+
+            int framesConsidered = 0, framesUnstable = 0, nHnr = 0;
+            double sumHnrTarget = 0.0, sumHnrOriginal = 0.0;
+
+            for (int from = (int) (analysisStartSec * sr); from + winLenA <= (int) (analysisEndSec * sr); from += hopA)
+            {
+                const auto fs = measureFrame (fixedWet, from, winLenA, sr);
+                if (fs.f0Hz <= 0.0) continue;
+                ++framesConsidered;
+                if (fs.periodicity < 0.90) ++framesUnstable;
+
+                sumHnrTarget   += harmonicEnergyRatio (fixedWet, from, winLenA, sr, targetF0Hz);
+                sumHnrOriginal += harmonicEnergyRatio (fixedWet, from, winLenA, sr, fixedF0Hz);
+                ++nHnr;
+            }
+
+            std::printf ("  Analisi %.2f-%.2fs (target f0=%.1fHz): finestre tonali=%d, instabili "
+                         "(periodicita'<0.90)=%d (%.1f%%), HNR medio al target=%.3f, HNR medio al pitch "
+                         "ORIGINALE non trasposto (%.1fHz)=%.3f\n",
+                         analysisStartSec, analysisEndSec, targetF0Hz, framesConsidered, framesUnstable,
+                         framesConsidered > 0 ? 100.0 * framesUnstable / framesConsidered : 0.0,
+                         nHnr > 0 ? sumHnrTarget / nHnr : 0.0,
+                         fixedF0Hz, nHnr > 0 ? sumHnrOriginal / nHnr : 0.0);
+        }
+
         return 0;
     }
 

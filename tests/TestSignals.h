@@ -21,6 +21,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 
 static constexpr double kPi = 3.14159265358979323846;
 
@@ -134,6 +135,111 @@ static std::vector<float> makeVibratoVowel (double f0Center, double depthCents, 
     return v;
 }
 
+// NOTA (sessione 25/26 — timbro "granuloso"/"che respira" a shift profondo,
+// V3/V4 del preset Maj): un generatore makeJitteredVowel (impulsi con
+// durata di periodo perturbata da un pattern deterministico a passo aureo,
+// invece che esattamente equispaziati come qui sopra) e' stato scritto per
+// riprodurre in laboratorio il jitter ciclo-per-ciclo che uno strumento
+// reale ha sempre. Un fix su PsolaShifter::synthesise() (media della
+// spaziatura locale fra epoch su una finestra di piu' intervalli invece di
+// uno solo, per ridurre l'amplificazione di 1/alpha misurata per calcolo a
+// shift profondo) migliorava la misura su QUESTO segnale sintetico — ma
+// PEGGIORAVA la stessa misura sul file reale dell'utente (sample_click_
+// finder --fixedF0, sweep -1..-10 semitoni: da 0% a 3-10% di finestre
+// instabili anche nel range -1..-4, prima perfetto). Il generatore e il
+// fix sono stati RITIRATI insieme (CLAUDE.md regola 13, stesso principio
+// gia' applicato in sessione 19 a makeCompetingPulsesVowel): il jitter
+// deterministico a passo aureo non riproduce fedelmente la statistica del
+// jitter reale, quindi un fix validato solo su questo generatore non e'
+// una prova sufficiente. Vedi handsoff.md sessione 25/26 per i numeri
+// completi — un tentativo futuro deve validarsi PRIMA sul file reale, non
+// solo su un segnale sintetico.
+//
+// Sessione 26 (ripresa): la causa vera e' stata trovata per misura diretta
+// (strumentazione temporanea di detectEpochs(), non il periodo di sintesi
+// di synthesise() come ipotizzato sopra) e corretta — vedi PsolaShifter.cpp
+// e makeRichNoisyVowel sotto, il generatore sintetico che sostituisce
+// makeJitteredVowel per la regressione permanente (Test 12,
+// tests/psola_test.cpp).
+
+// ---------------------------------------------------------------------------
+// Generatore: periodo ESATTAMENTE intero, costruito come somma di armoniche
+// con fasi pseudo-casuali deterministiche, piu' rumore bianco deterministico
+// a bassa ampiezza — sessione 26, sostituisce makeJitteredVowel (ritirato,
+// vedi nota sopra) come base per Test 12 (tests/psola_test.cpp).
+//
+// A differenza di un treno di impulsi puro (makeVowel: un solo picco netto
+// per periodo), fasi armoniche sparse producono tipicamente piu' massimi
+// locali entro il periodo, un segnale piu' vicino a materiale reale
+// (corno/voce) di un treno di impulsi puro.
+//
+// ATTENZIONE (onestamente riportato, non nascosto): un tentativo di rendere
+// questo generatore DISCRIMINANTE (fallisce sul codice pre-fix, passa dopo —
+// il criterio dichiarato per un test nuovo, CLAUDE.md regola 13) non e'
+// riuscito. Ne' aumentare il rumore (provato -34/-20/-19/-17/-14 dB: o il
+// vecchio algoritmo restava comunque sopra soglia, o l'ingresso stesso
+// diventava troppo instabile per fidarsi della misura) ne' un secondo
+// disegno esplicito a DUE impulsi per periodo di ampiezza vicina (nello
+// spirito di makeCompetingPulsesVowel, sessione 19, ma con ampiezze FISSE
+// invece che dinamiche per evitare il vizio che aveva fatto ritirare
+// quello) hanno prodotto una separazione pulita: quel secondo disegno ha
+// mandato in confusione la stima di periodicita' stessa (measureFrame ha
+// agganciato un lag sbagliato, dato lo spettro con due impulsi ravvicinati).
+// Stessa difficolta' gia' incontrata in sessione 19/20 nel riprodurre in
+// laboratorio questo specifico meccanismo. Test 12 resta quindi una
+// verifica di TRASPARENZA PERMANENTE (come Test 10/11), NON una prova del
+// meccanismo — quella e' venuta, per intero, dallo sweep sul file reale
+// (sample_click_finder --fixedF0) e dalla misura diretta del jitter degli
+// epoch (PSOLA_DEBUG_EPOCHS), entrambe in handsoff.md sessione 26.
+static std::vector<float> makeRichNoisyVowel (int periodSamples, double seconds, double sr,
+                                              int numHarmonics = 12, double noiseDb = -20.0)
+{
+    // LCG minimale e deterministico (Numerical Recipes): nessuna dipendenza
+    // da <random>, stesso principio "niente dipendenze non necessarie" del
+    // resto di questo header. Usato due volte con semi diversi (fasi,
+    // rumore) cosi' le due sorgenti di variazione sono indipendenti.
+    struct Lcg
+    {
+        uint32_t state;
+        explicit Lcg (uint32_t seed) : state (seed) {}
+        double next01() { state = state * 1664525u + 1013904223u; return (double) state / 4294967296.0; }
+    };
+
+    // Un solo periodo, costruito una volta e ripetuto identico.
+    std::vector<double> onePeriod ((size_t) periodSamples, 0.0);
+    Lcg phaseRng (12345);
+    for (int h = 1; h <= numHarmonics; ++h)
+    {
+        const double amp = 1.0 / (double) h;
+        const double phase = phaseRng.next01() * 2.0 * kPi;
+        for (int i = 0; i < periodSamples; ++i)
+            onePeriod[(size_t) i] += amp * std::sin (2.0 * kPi * (double) h * (double) i / (double) periodSamples + phase);
+    }
+    double peakAbs = 0.0;
+    for (double s : onePeriod) peakAbs = std::max (peakAbs, std::fabs (s));
+    for (double& s : onePeriod) s /= peakAbs; // normalizzato a picco 1.0
+
+    double sumSq = 0.0;
+    for (double s : onePeriod) sumSq += s * s;
+    const double periodicRms = std::sqrt (sumSq / (double) periodSamples);
+    const double noiseRms = periodicRms * std::pow (10.0, noiseDb / 20.0);
+
+    const int n = (int) (seconds * sr);
+    std::vector<float> v ((size_t) n, 0.0f);
+    Lcg noiseRng (67890);
+    for (int i = 0; i < n; ++i)
+    {
+        // Rumore uniforme centrato, scalato alla RMS voluta (varianza di
+        // uniforme[-a,a] = a^2/3 -> a = noiseRms*sqrt(3)): non serve la
+        // forma gaussiana, solo un pavimento di energia deterministico e
+        // non periodico.
+        const double u = 2.0 * noiseRng.next01() - 1.0;
+        const double noise = u * noiseRms * std::sqrt (3.0);
+        v[(size_t) i] = (float) (onePeriod[(size_t) (i % periodSamples)] + noise);
+    }
+    return v;
+}
+
 // ---------------------------------------------------------------------------
 // Misura di f0 per autocorrelazione, con interpolazione parabolica del picco.
 // ---------------------------------------------------------------------------
@@ -197,6 +303,29 @@ static double measureF0 (const std::vector<float>& x, int from, int len, double 
 }
 
 // ---------------------------------------------------------------------------
+// Goertzel a frequenza singola su una finestra di Hann: la "DFT a un solo
+// bin" gia' in uso dentro formantPeak, estratta qui (sessione 25/26) perche'
+// serve anche a SampleAnalysis.h (harmonicEnergyRatio) — un solo posto dove
+// vive la matematica invece di due copie che potrebbero divergere (CLAUDE.md,
+// stesso principio gia' applicato quando questo header e' stato estratto da
+// psola_test.cpp, vedi commento di testa del file).
+// ---------------------------------------------------------------------------
+static double goertzelMag (const std::vector<float>& x, int from, int len, double sr, double freqHz)
+{
+    const double w = 2.0 * kPi * freqHz / sr;
+    double re = 0.0, im = 0.0;
+
+    for (int i = 0; i < len; ++i)
+    {
+        const double win = 0.5 - 0.5 * std::cos (2.0 * kPi * i / len);
+        const double s   = (double) x[(size_t) (from + i)] * win;
+        re += s * std::cos (w * i);
+        im -= s * std::sin (w * i);
+    }
+    return std::sqrt (re * re + im * im);
+}
+
+// ---------------------------------------------------------------------------
 // Posizione del picco formantico: proxy numerico delle formanti.
 // ---------------------------------------------------------------------------
 static double formantPeak (const std::vector<float>& x, int from, int len, double sr,
@@ -208,20 +337,7 @@ static double formantPeak (const std::vector<float>& x, int from, int len, doubl
     std::vector<double> mag ((size_t) nbins, 0.0);
 
     for (int k = 0; k < nbins; ++k)
-    {
-        const double freq = loHz + k * stepHz;
-        const double w    = 2.0 * kPi * freq / sr;
-        double re = 0.0, im = 0.0;
-
-        for (int i = 0; i < len; ++i)
-        {
-            const double win = 0.5 - 0.5 * std::cos (2.0 * kPi * i / len);
-            const double s   = (double) x[(size_t) (from + i)] * win;
-            re += s * std::cos (w * i);
-            im -= s * std::sin (w * i);
-        }
-        mag[(size_t) k] = std::sqrt (re * re + im * im);
-    }
+        mag[(size_t) k] = goertzelMag (x, from, len, sr, loHz + k * stepHz);
 
     // La lisciatura deve essere piu' larga della spaziatura fra le armoniche
     // (qui 200 Hz, cioe' 10 bin): con una finestra piu' stretta il massimo si

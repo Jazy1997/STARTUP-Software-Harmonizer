@@ -53,6 +53,16 @@ private:
     // periodo di analisi LOCALE reale (epochAfter(e) - e) invece di
     // affidarsi al periodo quantizzato globale — vedi handsoff.md sessione 20.
     long long epochAfter (long long e) const;
+    // Posizione dell'epoch successivo ad `anchor`, scelta per SIMILARITA'
+    // DI FORMA D'ONDA (cross-correlazione normalizzata, stile WSOLA) entro
+    // +-w campioni dalla previsione anchor+P — sostituisce il criterio
+    // precedente (campione di ampiezza assoluta massima), cieco alla forma
+    // d'onda circostante. Vedi il commento esteso su detectEpochs() in
+    // PsolaShifter.cpp per la diagnosi e la misura che hanno portato a
+    // questo cambiamento (handsoff.md sessione 26). Nessuna allocazione/
+    // lock/IO/eccezione: gira sull'audio thread via processChunk() ->
+    // detectEpochs() (CLAUDE.md regola 1).
+    long long findEpochByCorrelation (long long anchor, int P, int w) const noexcept;
     void emitGrain (long long analysisEpoch, long long synthEpoch, double frac, int P);
 
     double sr        = 48000.0;

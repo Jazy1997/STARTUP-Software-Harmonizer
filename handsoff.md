@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-07 (sessione 25)
+> Ultimo aggiornamento: 2026-08-08 (sessione 26 continuazione: fix WSOLA CONFERMATO all'ascolto e committato, dryWetMix confermato e committato; nuovo problema aperto — click a inizio nota su preset a offset fissi)
 
 ---
 
@@ -32,6 +32,279 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ## 2. Stato attuale
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
+
+**Sessione 26 (continuazione) — l'utente ha fornito un confronto decisivo (stesso**
+**file/automazione passati attraverso "AutoShift" di Ableton) e un fix e' stato**
+**scritto, misurato, corretto due volte dopo regressioni, e infine VERIFICATO PER**
+**CALCOLO su tutti i fronti. NON ancora committato: manca la conferma all'ascolto**
+**(CLAUDE.md regola 12) e la riesportazione delle 4 voci reali per il confronto**
+**finale con AutoShift:**
+
+Il confronto fornito dall'utente (stesso dry, stessa automazione di semitoni,
+passata attraverso il plugin nativo "AutoShift" di Ableton) mostrava AutoShift
+piatto (~0.4-0.5% di instabilita') a QUALUNQUE profondita', contro il nostro
+output che degradava nettamente con lo shift (V1 1.5% — V4 9.3%), con eventi
+anche DENTRO le note tenute gia' a V1 (non solo ai cambi nota). Ho fatto
+validare l'ipotesi (redesign di `detectEpochs()` in stile WSOLA) da un agente
+di design con pieno contesto: ha corretto un errore nella mia derivazione
+precedente (l'errore RELATIVO di intonazione non scala con `1/alpha` come
+scritto sopra — solo l'errore ASSOLUTO in campioni lo fa) e ha proposto tre
+esperimenti a costo quasi nullo per separare tre meccanismi candidati PRIMA di
+riscrivere l'algoritmo.
+
+- **Fase 1 — tre esperimenti diagnostici, tutti concordi**:
+  - **Esperimento A** (Signalsmith Stretch, il secondo motore gia' presente
+    dietro `PitchShifter`, su `HARMONIZER_USE_SPECTRAL_SHIFTER`): sweep -1..-10
+    semitoni sullo stesso file, finestra di analisi allargata (nuovo argomento
+    CLI opzionale in `sample_click_finder.cpp`, `analysisStartSec`/
+    `analysisEndSec`, default invariati — necessario perche' Signalsmith ha
+    ~90ms di latenza contro i ~21ms del PSOLA). **Risultato: 0.0% di
+    instabilita' a QUALUNQUE profondita'** — esclude che sia un artefatto
+    della misura o del materiale (M3).
+  - **Esperimento B** (sweep esteso fino a -19/-20 semitoni, zero codice
+    toccato): cercava i minimi netti a -12/-19 semitoni che un'interferenza
+    di sovrapposizione fra grani legata a `1/alpha` non intero avrebbe
+    previsto. **Nessun minimo trovato, curva monotona** — esclude
+    quell'ipotesi (M2).
+  - **Esperimento C** (strumentazione temporanea `PSOLA_DEBUG_EPOCHS`, poi
+    rimossa prima del commit — fa I/O sull'audio thread, mai definita nei
+    target del plugin): misura diretta della spaziatura degli epoch scelti
+    sul plateau C4 di "Test 1", unisono. **Deviazione standard 4.16 campioni
+    contro il periodo vero** (soglia decisa prima: ≥2.0 = causa reale), con
+    l'1.9% degli epoch "scattati" fino a 42 campioni (25% del periodo), quasi
+    sempre in coppie compensanti — la firma di un argmax che salta fra due
+    picchi quasi equivalenti. **Le finestre temporali di questi scatti
+    coincidono, campione per campione, con le finestre di instabilita' gia'
+    misurate da `voice_reference_probe.cpp`.**
+- **Fix**: `src/dsp/PsolaShifter.{h,cpp}`, `detectEpochs()` — nuovo metodo
+  privato `findEpochByCorrelation()`. Dal SECONDO epoch di ogni nota/
+  riattivazione in poi, l'epoch si sceglie per SIMILARITA' DI FORMA D'ONDA
+  (cross-correlazione normalizzata sull'energia del candidato, non del
+  riferimento — altrimenti si torna a un'euristica di ampiezza travestita),
+  non piu' per ampiezza assoluta massima di un singolo campione. Il PRIMO
+  epoch di ogni nota (seed, quando il ring e' vuoto) resta scelto per
+  ampiezza assoluta massima, **esattamente il criterio precedente, stessa
+  larghezza di ricerca** — la correlazione ha bisogno di un riferimento vero
+  da cui partire.
+  - **Due regressioni misurate e corrette prima di considerare il fix
+    riuscito** (CLAUDE.md regola 13 — non allentare soglie, capire cosa e'
+    cambiato davvero): un primo tentativo usava una finestra di correlazione
+    larga un periodo intero (`half=P/2`) e un seed cercato anch'esso per
+    correlazione su una finestra larga altrettanto — misurato REGREDIRE Test
+    3 (formanti, beta=0.70: 900Hz misurati contro 770Hz attesi) e Test 6
+    (inviluppo, -17 semitoni: sotto la soglia 0.25). Diagnosticato: il seed
+    poteva agganciarsi a un picco di risonanza secondario invece del vero
+    transiente, e la correlazione lo preservava poi in modo consistente ma
+    SBAGLIATO. Corretto restringendo la finestra di correlazione a `half=w`
+    (la stessa larghezza della ricerca, P/4) e riportando il seed
+    ESATTAMENTE al criterio/larghezza precedenti (ampiezza massima, +-w) —
+    **con questo, tutti gli 11 test preesistenti di `psola_test.cpp` tornano
+    verdi, nessuna soglia toccata**.
+  - Nessuna modifica a `PitchShifter.h`, a firme/semantica di
+    `nearestEpoch()`/`epochAfter()`/`synthesise()`/`emitGrain()`, al
+    dimensionamento del ring di epoch, alla formula di latenza
+    (`2*maxPeriod + maxBlock`) — verificato per calcolo che i limiti di
+    lettura restano dentro la finestra viva del buffer e che la spaziatura
+    degli epoch resta in `[0.75P, 1.25P]` come prima.
+- **Risultato finale (dopo la correzione)**:
+  - Esperimento C ripetuto: deviazione standard del jitter **4.16 -> 0.084
+    campioni** (fattore ~50), nessun epoch oltre 0.74 campioni di scarto
+    (prima: 42 campioni).
+  - Sweep sul file reale (`sample_click_finder --fixedF0`, stesse condizioni
+    della tabella storica, Fmt Spread=1): **0.0% di finestre instabili su
+    TUTTO il range -1..-10 semitoni** (prima: 0% fino a -4, poi crescita fino
+    al 12-13% a -10) — supera con ampio margine tutti i criteri bloccanti
+    decisi prima (≤0.5% a -1..-4, ≤2.5% a -7, ≤6% a -10), e uguaglia/supera
+    il profilo piatto di AutoShift.
+  - **Confermato su un secondo timbro** ("Test 2 - E-Piano.wav", mai usato
+    per orientare il fix): 0.0% su tutto il range, stessa metodologia.
+  - Tutti e 12 i test di `psola_test.cpp` verdi (11 preesistenti + il nuovo
+    Test 12), tutte e 6 le suite `ctest` verdi.
+  - Build Debug e Release (VST3 + Standalone) riuscite (solo il consueto
+    fallimento di copia post-build per permessi). `pluginval
+    --strictness-level 10` **SUCCESS** su entrambe le build VST3.
+  - Revisione RT-safety manuale del diff finale: solo variabili locali
+    (`double`/`long long`/`float`) sullo stack, nessuna allocazione/lock/IO/
+    eccezione, `findEpochByCorrelation` marcato `noexcept` — CLAUDE.md
+    regola 1 rispettata.
+- **Test 12 nuovo** (`tests/psola_test.cpp`) — **onestamente NON riuscito a
+  essere reso discriminante** (fallisce pre-fix, passa dopo — il criterio
+  dichiarato per un test nuovo): ne' aumentare il rumore del generatore
+  (`makeRichNoisyVowel`, sostituisce `makeJitteredVowel` ritirato in
+  precedenza — provati -34/-20/-19/-17/-14 dB) ne' un secondo disegno
+  esplicito a due impulsi per periodo (nello spirito di
+  `makeCompetingPulsesVowel` di sessione 19, ma con ampiezze FISSE invece
+  che dinamiche) hanno separato pulito il comportamento pre/post fix senza
+  rompere il controllo di periodicita' dell'ingresso — il secondo disegno ha
+  addirittura mandato in confusione la stima di periodicita' stessa. Stessa
+  difficolta' gia' incontrata nelle sessioni 19/20 nel riprodurre questo
+  meccanismo in laboratorio. **Resta come Test 10/11: verifica di
+  TRASPARENZA PERMANENTE, non prova del meccanismo** — quella e' venuta per
+  intero dal file reale (Esperimenti A/B/C sopra + lo sweep finale).
+- **Igiene rispettata durante l'indagine**: nessun `git checkout -- src/` o
+  `git stash` ad ampio raggio (avrebbero distrutto `dryWetMix` di sessione 25
+  e i tool di sessione 26 non committati) — solo `git checkout --
+  src/dsp/PsolaShifter.h src/dsp/PsolaShifter.cpp` mirato durante le
+  iterazioni. Nessuna `target_compile_definitions` temporanea aggiunta a
+  `CMakeLists.txt` (gia' modificato, non ripulibile con git): gli
+  esperimenti A/C hanno usato build directory separate (`build-spectral/`,
+  `build-dbgepoch/`, coperte da `.gitignore`), rimosse a fine sessione.
+- **CONFERMATO ALL'ASCOLTO dall'utente** (build Release VST3/Standalone,
+  ricompilata apposta e consegnata all'utente): "il timbro ora è stabile per
+  tutta la nota" — il problema originale (granuloso/che respira a nota
+  tenuta, V3/V4 del preset Maj) è risolto. Riportato uno sporco residuo
+  SOLO all'attacco della nota, giudicato **accettabile** dall'utente (non lo
+  stesso problema, non richiede azione ora). **Lavoro committato e pushato**
+  (vedi cronologia git) — commit separato da `dryWetMix` sotto (FR-62 contro
+  FR-77/PRD-UI §6.1, due requisiti diversi, CLAUDE.md regola 10).
+  Riesportazione delle 4 voci del preset Maj per il confronto diretto con
+  `voice_reference_probe` contro la tabella AutoShift **non fatta**
+  (superata dalla conferma diretta all'ascolto dell'utente sulla build
+  reale) — se in futuro servisse un numero invece di un giudizio d'orecchio,
+  lo strumento e' pronto.
+- **`dryWetMix` (Passo 2 di sessione 25, FR-77/PRD-UI §6.1)**: l'utente ha
+  testato e confermato che funziona. **CONFERMATO ALL'ASCOLTO, committato e
+  pushato** in questa sessione (commit separato dal fix WSOLA sopra).
+- **NUOVO PROBLEMA APERTO, segnalato dall'utente ma esplicitamente NON
+  INDAGATO in questa sessione ("per il momento non fare niente")**: un
+  preset personalizzato a offset FISSI per voce (-7/-8/-10 semitoni — a
+  differenza di "Maj", non funzione del grado suonato: la stessa voce
+  applica sempre lo stesso offset assoluto a qualunque nota) ha il timbro
+  pulito e stabile A NOTA TENUTA (lo stesso miglioramento del fix WSOLA), ma
+  mostra **buchi e click all'inizio di ogni nota**. Materiale fornito
+  dall'utente, stesso schema comparativo delle sessioni precedenti (nostro
+  output vs AutoShift sulla stessa voce/automazione):
+  - `SAMPLE TEST/DBG Timbro/Custom Preset V1.wav` (nostro output)
+  - `SAMPLE TEST/DBG Timbro/Shifted Custom Preset V1.wav` (AutoShift,
+    riferimento "pulito")
+  Nessuna ipotesi sul meccanismo ancora verificata per calcolo — da
+  investigare nella prossima sessione. Candidato ovvio da controllare per
+  primo (non confermato): con offset fisso indipendente dal grado, ogni
+  nuovo attacco di nota puo' comportare uno shift MOLTO diverso dalla nota
+  precedente sullo stesso slot fisico (a differenza di un preset
+  scale-relative dove gli offset restano piu' vicini fra note adiacenti
+  della stessa scala) — se questo interagisce con la dissolvenza
+  anti-click di `Voice.cpp` (`ampGlide`/`justReactivated`, sessioni 12/13/16)
+  o con il transitorio di riempimento degli epoch subito dopo `reset()`,
+  potrebbe spiegare click localizzati esattamente all'attacco. Strumenti
+  diagnostici gia' pronti e riusabili senza altro export dall'utente:
+  `sample_click_finder` (in particolare `runRetriggered`/`runProduction`,
+  gia' pensate per simulare cambi di offset ad ogni onset) e
+  `voice_reference_probe` sui due file nuovi.
+
+**Novita' sessione 26 — timbro "granuloso"/"che respira" sulle voci con offset**
+**profondo (V3/V4 del preset Maj, fino a -10 semitoni), segnalato dall'utente**
+**dopo aver isolato le 4 voci di sessione 25. Diagnosi COMPLETA e quantificata,**
+**meccanismo identificato per calcolo, UN tentativo di fix scritto/misurato/**
+**RITIRATO (CLAUDE.md regola 13) — nessun codice di `src/` cambiato a fine**
+**sessione, la diagnosi resta il risultato principale:**
+
+Ripresa diretta da dove la sessione 25 si era interrotta. L'utente aveva gia'
+preparato il materiale: preset "Maj" su `Test 1 - Basic Silk Horns.wav`
+(Dry/Wet=1, Stability=Balanced, Fmt Spread=1, Glide=0, Voices=4), 4 voci
+esportate isolate (`SAMPLE TEST/DBG Timbro/Voice N.wav`) e 4 riferimenti
+"ideali" suonati direttamente dal synth via MIDI (`Ideal Voice N.wav`, non
+processati). Difetto riportato: misto fra "granuloso/robotico/metallico" e
+"wobbling/timbro che respira", che peggiora con la profondita' dell'offset —
+V1 (0/-2/0/0) e V2 (-1/-3/-4/-1) accettabili, V3 (-5/-7/-5/-5) e V4
+(-8/-10/-9/-8) no. **Accertato che non e' una regressione**: tutti gli export
+gia' validati (sessioni 19/20) erano a Voices=1 (solo V1, offset massimo -2
+semitoni) — e' la prima volta che V3/V4 vengono isolate e ascoltate, il motore
+non era mai stato verificato su materiale reale sotto i -2 semitoni.
+
+- **`tests/voice_reference_probe.cpp`** (scritto ma mai compilato a fine
+  sessione 25): aggiunto il target CMake (mancava), eseguito sulle 4 coppie.
+  Confermato per calcolo: instabilita' 1.5% (V1) / 1.1% (V2) / 4.7% (V3) / 9.3%
+  (V4) — la percezione dell'utente e' quantitativamente confermata. Aggiunte
+  due misure nuove (assenti a fine sessione 25): `harmonicEnergyRatio` (HNR,
+  energia armonica/energia spettrale totale in banda — la firma numerica di
+  "granuloso") e il residuo di energia al pitch ORIGINALE non trasposto (la
+  firma diretta dell'artefatto descritto nel commento ATTENZIONE di
+  `PsolaShifter::emitGrain`), entrambe in `tests/SampleAnalysis.h`, riusando
+  `goertzelMag` (estratta da `formantPeak`, prima duplicata — vedi
+  `tests/TestSignals.h`). **Nota metodologica aggiunta esplicitamente nel file**
+  (CLAUDE.md regola 13): "Ideal" NON e' un target bit-per-bit — e' il synth
+  che suona quella nota nel SUO registro, un colore diverso a -10 semitoni e'
+  fisiologico, non un errore da azzerare.
+- **Ipotesi 1 del piano (grano PSOLA piu' lungo della spaziatura via `beta`,
+  candidato gia' annotato in handsoff.md come mai esplorato) — REFUTATA su
+  tre fronti indipendenti**: (a) il residuo di energia al pitch originale
+  misurato sulle 4 voci NON cresce con la profondita' (V3/V4 piu' bassi di
+  V2 su alcune note); (b) l'aritmetica esatta di `Lg`/`W`/`synthMinLg` per
+  gli alpha/beta reali di V1..V10 semitoni resta PIATTA (~2.0-2.4 periodi
+  sorgente per grano) da -1 a -9 semitoni, sale solo leggermente a -10 — non
+  il profilo "cresce con la profondita'" che l'ipotesi richiedeva; (c) uno
+  sweep offline con Fmt Spread=0 (formanti disattivate) da' una curva quasi
+  identica a Fmt Spread=1.
+- **`tests/sample_click_finder.cpp` era ROTTO** (non compilava): tutte le 5
+  chiamate a `Voice::processAdd` usavano ancora la firma mono pre-sessione-23
+  (il refactor stereo gain/pan non l'aveva toccato, non essendo in ctest).
+  Corretto aggiungendo un canale R di scarto a ogni chiamata (gain/pan
+  restano al default, L=R bit-esatti per T-3 di `voice_test.cpp`). Aggiunto
+  anche un argomento CLI per i semitoni di `runFixedF0` (prima fisso a
+  `0.0f`, bloccava il test all'unisono) e un'analisi diretta nel branch
+  `--fixedF0` (HNR + periodicita' sul plateau dove la f0 fissa e' valida,
+  nessun file "Ideal" necessario: la f0 target e' nota per costruzione).
+- **Sweep offline decisivo** (`sample_click_finder --fixedF0`, f0=261.35Hz
+  sul plateau C4 di "Test 1", isolamento TOTALE da PitchDetector/PitchLatch):
+  soglia netta, 0% di finestre instabili da -1 a -4 semitoni, poi crescita
+  monotona da -5 in giu' (fino al 12-13% a -10) — combacia quasi esattamente
+  con la soglia riportata dall'utente. Confermato che il meccanismo e'
+  praticamente indipendente dalle formanti (Fmt Spread=0 da' la stessa
+  curva, con una differenza modesta solo oltre -7 semitoni).
+- **Meccanismo identificato per calcolo**: in `PsolaShifter::synthesise()`
+  il passo di sintesi e' `localPeriod/alpha` (fix di sessione 20, che usa il
+  periodo di analisi LOCALE reale invece di quello quantizzato globale). A
+  `alpha` piccolo (shift profondo), il rumore naturale nella stima di
+  `localPeriod` — misurato su UN SOLO intervallo fra due epoch adiacenti,
+  jitter ciclo-per-ciclo inevitabile su materiale reale, gia' misurato nelle
+  sessioni 19/20 — viene amplificato di `1/alpha`. Il fix di sessione 20 ha
+  eliminato la PROPAGAZIONE dell'errore (l'epoch sbagliato non si accumula
+  piu' su ~15 grani), ma non la sua AMPLIFICAZIONE quando alpha e' gia'
+  piccolo di suo.
+- **Un tentativo di fix TENTATO E RITIRATO** (CLAUDE.md regola 13, stesso
+  principio del test scartato in sessione 19): `epochBefore()` (simmetrico a
+  `epochAfter()`) + `localPeriodEstimate()`, media della spaziatura locale
+  su una finestra di piu' intervalli di analisi ADIACENTI (mai sulla storia
+  di `synthPos`, per non ripetere il tentativo scartato in sessione 20) —
+  con finestra a 2 intervalli per lato, il residuo scende sotto soglia su un
+  nuovo test sintetico (`makeJitteredVowel`, un generatore con la durata di
+  ogni periodo perturbata da un pattern deterministico a passo aureo,
+  costruito apposta perche' Test 10/11 di sessione 20 avevano gia' scoperto
+  che un tono a singola risonanza esatta non riproduce mai il jitter reale).
+  **Ma verificato sul file reale (lo stesso sweep sopra, prima/dopo): il fix
+  PEGGIORA la misura, non la migliora — anche nel range -1..-4 semitoni,
+  prima perfetto (0% -> 3-10% di finestre instabili)**. Il generatore
+  sintetico non riproduce fedelmente la statistica del jitter reale: un fix
+  validato solo su di esso non e' prova sufficiente. **Codice riportato al
+  checkpoint** (`git checkout -- src/dsp/PsolaShifter.h src/dsp/PsolaShifter.cpp`,
+  verificato pulito), `makeJitteredVowel` e il Test 12 che lo usava
+  **rimossi** (non lasciati come falso segnale), sostituiti da una nota nei
+  due file (`tests/TestSignals.h`, `tests/psola_test.cpp`) che spiega cosa e'
+  stato tentato e perche' non e' bastato — cosi' una sessione futura non
+  riparte da zero ne' ripete lo stesso tentativo aspettandosi un esito
+  diverso.
+- **Nessun file di `src/` e' cambiato a fine sessione** rispetto al checkpoint
+  di sessione 25 (`799db17`): `git status` su `src/dsp/` e `src/voices/`
+  pulito. Il lavoro pendente `dryWetMix` di sessione 25 (in
+  `PluginProcessor.cpp`/`PluginEditor.{h,cpp}`, in attesa di conferma
+  all'ascolto) e' rimasto intoccato, come da piano — non centrale a questa
+  indagine (a Dry/Wet=1 e' dry=0/wet=1 esatto).
+- **Verificato per calcolo**: `ctest` (6 suite) verde prima e dopo il lavoro
+  di questa sessione (baseline verificata a inizio sessione, poi di nuovo a
+  fine sessione dopo il ripristino). Nessuna build Release/pluginval
+  eseguita: nessun file che tocca il plugin vero e proprio e' cambiato
+  (`CMakeLists.txt` aggiunge solo un target diagnostico offline,
+  `tests/sample_click_finder.cpp` e' un tool headless fuori da ctest) — non
+  applicabile.
+- **Strumenti pronti per la prossima sessione** (nessuno ritirato tranne
+  `makeJitteredVowel`): `tests/voice_reference_probe.cpp` (ora nel build,
+  target CMake `voice_reference_probe`, con HNR/residuo pitch originale/
+  formante per plateau), `tests/sample_click_finder.cpp --fixedF0` (ora
+  funzionante, con argomento semitoni e analisi HNR/periodicita' integrata —
+  e' lo strumento che ha dato il risultato piu' pulito e piu' veloce da
+  iterare, senza bisogno di altri export dall'utente), `harmonicEnergyRatio`/
+  `goertzelMag` in `tests/SampleAnalysis.h`/`tests/TestSignals.h`.
 
 **Novita' sessione 25 — implementazione di `PRD-UI.md` "Passo 1": le tre schermate**
 **(Main/Edit/Impostazioni) con barra di navigazione sempre visibile, FR-73..83, a**
@@ -126,12 +399,53 @@ testato che si vede e funziona correttamente alla larghezza attuale).
   `(500,1398,1200,1678)`/`520x1428` a `(520,620,1200,900)`/`900x660` — dentro la
   stima 550-650px di PRD-UI §8 per il contenuto minimo (layoutEdit, la piu' alta
   delle tre), con margine per la finestra di default.
-- **Non ancora fatto in questa sessione**: `dryWetMix` (Passo 2 del piano) —
-  implementazione in corso subito dopo, richiede conferma all'ascolto dall'utente
-  prima di essere dichiarato completo (CLAUDE.md regola 12), commit separato.
-  L'auto-scroll della lista preset durante il drag (FR-80) resta esplicitamente
-  rimandato, come gia' deciso in sessione 24. Nessun commit ancora fatto per questo
-  lavoro al momento di scrivere questa nota (vedi sotto per il commit).
+L'auto-scroll della lista preset durante il drag (FR-80) resta esplicitamente
+rimandato, come gia' deciso in sessione 24. **Lavoro committato e pushato**
+(commit separato dal Passo 2 sotto, come da piano).
+
+**Sessione 25 (continuazione) — Passo 2: `dryWetMix` (FR-77/PRD-UI §6.1). Scritto e**
+**verificato PER CALCOLO, NON ANCORA CONFERMATO ALL'ASCOLTO (CLAUDE.md regola 12) —**
+**serve un ascolto reale in Ableton prima di considerarlo definitivo:**
+
+- **`src/PluginProcessor.cpp`**: nuovo `ParamIDs::dryWetMix`, `AudioParameterFloat`
+  0..1, default **0.7** (punto di partenza per restare vicino al bilanciamento "wet
+  in evidenza" di oggi entro i limiti di un vero crossfade — non un valore
+  calcolato). Nuova funzione libera `computeDryWetGains(mix, dryOut, wetOut)`
+  (crossfade a potenza costante, `dry=cos(mix*pi/2)`, `wet=sin(mix*pi/2)`, stessa
+  tecnica gia' in uso per il pan per voce in `Voice.cpp`) — un solo posto dove vive
+  la legge, usato sia in `prepareToPlay` (valore iniziale delle rampe anti-click
+  `dryGlide`/`wetGlide`) sia in `processBlock` (target delle rampe ad ogni blocco).
+  **`dryLevel`/`wetLevel` restano dichiarati nella `ParameterLayout` per sempre**
+  (CLAUDE.md regola 6 / NFR-07) ma **non sono piu' letti** in nessuno dei due punti —
+  tutta la logica a valle (rampe anti-click di sessione 12/13, bypass = dry
+  pieno/wet zero) resta bit-per-bit identica, il crossfade entra solo a monte del
+  calcolo di `dryLevel`/`wetLevel` locali dentro `processBlock`.
+- **`src/PluginEditor.h`/`.cpp`**: il knob "Dry/Wet" su Main (gia' esistente dal
+  Passo 1 come segnaposto su `wetLevel`) ora punta al vero parametro `dryWetMix`.
+- **Questo E' un cambiamento reale del comportamento sonoro**, non solo della UI
+  (PRD-UI §6.1): prima dry e wet erano due manopole indipendenti che potevano stare
+  entrambe al massimo insieme (somma libera); ora non e' piu' possibile per
+  costruzione — e' un vero crossfade.
+- **Verificato per calcolo**: build Debug+Release (VST3+Standalone) riuscite (solo
+  il consueto fallimento di copia post-build per permessi), tutte e 6 le suite
+  `ctest` verdi su entrambe le configurazioni (nessuna tocca `processBlock` sul
+  percorso dry/wet, quindi nessuna soglia in gioco), `pluginval
+  --strictness-level 10` **SUCCESS** su Debug e Release VST3. **Verificato allo
+  screenshot**: il knob mostra "0.7000000" al primo avvio (il nuovo default),
+  contro lo "0.8000000" di `wetLevel` che mostrava prima di questo cambiamento —
+  conferma che l'attach punta al parametro giusto.
+- **NON verificato all'ascolto** (CLAUDE.md regola 12: non dichiarabile completo
+  solo perche' il codice compila e produce il numero atteso). **Prossimo passo
+  per l'utente**: aprire il plugin in Ableton (o nello Standalone), muovere il
+  knob Dry/Wet e confermare che il crossfade suoni bene al default 0.7 e lungo
+  tutto il range — se il bilanciamento non convince, il default o la curva
+  (equal-power vs un'altra legge) potrebbero aver bisogno di un aggiustamento.
+  Nessun test numerico scritto per la legge stessa (non richiesto per dichiararla
+  "scritta", ma se in futuro servisse misurarla per calcolo invece che solo
+  verificarla all'ascolto, lo schema di riferimento e' `tests/voice_test.cpp`
+  T-1/T-2/T-3, stesso principio gia' usato per il pan per voce).
+- **Non ancora committato**: in attesa della conferma all'ascolto prima di
+  committare (commit separato dal Passo 1, come da piano approvato con l'utente).
 
 **Novita' sessione 24 — `PRD-UI.md`, documento di design per le 3 schermate (nessun**
 **codice toccato, su richiesta esplicita dell'utente):**
@@ -1660,17 +1974,38 @@ Rischi e nodi noti da tenere d'occhio, già identificati nel PRD e non ancora af
 
 ## 6. Quale sarebbe il prossimo passo
 
-**Sessione 25 — Passo 1 di `PRD-UI.md` implementato (tre schermate, FR-73..83, a**
-**suono invariato) e verificato (build/ctest/pluginval/screenshot/click reali —**
-**vedi §2). PROSSIMO PASSO NATURALE: Passo 2, `dryWetMix` (PRD-UI §6.1) — nuovo**
-**parametro APVTS, crossfade a potenza costante, sostituisce la lettura di**
-**`dryLevel`/`wetLevel` in `processBlock` (i due parametri restano dichiarati per**
-**sempre, CLAUDE.md regola 6). Tocca il suono per davvero: da confermare**
-**all'ascolto dall'utente prima di essere dichiarato completo (CLAUDE.md regola 12),**
-**il default 0.7 e' un punto di partenza non un valore calcolato.** Dopo la
-conferma (o un aggiustamento di default/curva se il primo ascolto non convince):
-aggiornare il knob "Dry/Wet" su Main per puntare a `dryWetMix` invece che a
-`wetLevel` (oggi un segnaposto funzionante, vedi §2). Slice di M5 ancora da
+**Sessione 26 (continuazione) — fix WSOLA su `PsolaShifter::detectEpochs()`**
+**CONFERMATO ALL'ASCOLTO dall'utente e COMMITTATO/PUSHATO (vedi §2 per il**
+**dettaglio tecnico completo). `dryWetMix` (sessione 25, FR-77) CONFERMATO e**
+**COMMITTATO/PUSHATO nello stesso lavoro (commit separato). PROSSIMO PASSO**
+**NATURALE: indagare il nuovo problema riportato dall'utente — buchi/click**
+**all'inizio di ogni nota su un preset a offset FISSI per voce (-7/-8/-10**
+**semitoni, non scale-relative come "Maj"), timbro a nota tenuta gia' pulito**
+(stesso miglioramento del fix WSOLA, quindi probabilmente un meccanismo
+DIVERSO, non un residuo dello stesso bug). Materiale gia' pronto, nessun
+altro export necessario per iniziare: `SAMPLE TEST/DBG Timbro/Custom Preset
+V1.wav` (nostro output) vs `Shifted Custom Preset V1.wav` (AutoShift,
+riferimento pulito). Candidato da controllare per primo (non confermato, solo
+un'ipotesi da verificare per calcolo prima di agire — CLAUDE.md regola 13):
+con offset assoluto indipendente dal grado, uno slot fisico puo' saltare fra
+offset molto diversi da una nota alla successiva, a differenza di un preset
+scale-relative — possibile interazione con la dissolvenza anti-click di
+`Voice.cpp` o con il transitorio di riempimento degli epoch dopo
+`reset()`/riattivazione di uno slot. Strumenti diagnostici gia' pronti:
+`sample_click_finder` (`runRetriggered`/`runProduction`) e
+`voice_reference_probe` sui due file nuovi.
+
+**Sessione 25 — Passo 1 di `PRD-UI.md` (tre schermate, FR-73..83, a suono**
+**invariato) COMPLETO, verificato e committato/pushato (vedi §2). Passo 2**
+**(`dryWetMix`, FR-77/PRD-UI §6.1) SCRITTO e verificato per calcolo, ma NON**
+**ancora committato: manca la conferma all'ascolto dall'utente (CLAUDE.md**
+**regola 12) — vedi §2 per il dettaglio tecnico. PROSSIMO PASSO NATURALE:**
+**aprire il plugin (Ableton o Standalone), muovere il knob Dry/Wet su Main e**
+**confermare che il crossfade suoni bene al default 0.7 e lungo tutto il range.**
+Se confermato: committare il Passo 2 (nessun altro codice da scrivere, solo il
+commit). Se il bilanciamento non convince: il default 0.7 o la curva stessa
+(oggi equal-power, `computeDryWetGains` in `PluginProcessor.cpp`) potrebbero
+aver bisogno di un aggiustamento — ripartire da li'. Slice di M5 ancora da
 iniziare dopo questo: indicatore stato licenza, tema chiaro/scuro (FR-61,
 `[SHOULD]`), auto-scroll della lista preset durante il drag (FR-80, rimandato).
 

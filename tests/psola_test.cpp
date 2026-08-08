@@ -571,6 +571,160 @@ int main()
         std::printf ("  esito: %s\n", staysClean ? "OK" : "FALLITO");
     }
 
+    // NOTA (sessione 25/26 — timbro "granuloso"/"che respira" a shift
+    // PROFONDO, riportato dall'utente su V3/V4 del preset Maj, offset fino
+    // a -10 semitoni). Uno sweep offline sul file reale
+    // (sample_click_finder.cpp, modalita' --fixedF0, vedi handsoff.md) ha
+    // misurato una soglia netta: 0% di finestre instabili da -1 a -4
+    // semitoni, poi una crescita monotona da -5 in giu' (fino al ~12% a
+    // -10), praticamente INDIPENDENTE dalla correzione formantica (Fmt
+    // Spread=0 da' quasi la stessa curva) — esclude il meccanismo
+    // ipotizzato sul ricampionamento del grano (Lg/W in emitGrain, gia'
+    // verificato per calcolo restare piatto in questo range). Ipotesi per
+    // calcolo: in synthesise() il passo di sintesi e' localPeriod/alpha —
+    // a alpha piccolo (shift profondo) il rumore naturale nella stima del
+    // periodo locale su un solo intervallo fra due epoch adiacenti (jitter
+    // ciclo-per-ciclo, inevitabile su materiale reale) viene amplificato
+    // di 1/alpha.
+    //
+    // Un primo Test 12 con un generatore (makeJitteredVowel, impulsi con
+    // periodo perturbato da un pattern deterministico) e un fix (media
+    // della spaziatura locale in synthesise() su piu' intervalli invece di
+    // uno solo) sono stati scritti e poi RITIRATI insieme (CLAUDE.md
+    // regola 13, stesso principio di sessione 19 su
+    // makeCompetingPulsesVowel): il fix migliorava la misura sul segnale
+    // sintetico ma PEGGIORAVA la stessa misura sul file reale — il jitter
+    // deterministico a passo aureo non riproduceva fedelmente la statistica
+    // del jitter reale.
+    //
+    // Causa reale trovata per MISURA DIRETTA (non piu' un'ipotesi):
+    // strumentazione temporanea di detectEpochs() (PSOLA_DEBUG_EPOCHS) sul
+    // file reale, unisono (indipendente da alpha: la scelta degli epoch non
+    // dipende dal rapporto di trasposizione) — l'86.9% degli epoch cade
+    // entro +-1 campione dal periodo vero, ma l'1.9% sono "scatti" fino a
+    // 42 campioni (25% del periodo), quasi sempre in coppie compensanti
+    // (un epoch troppo presto seguito da uno troppo tardi): la firma di un
+    // argmax che salta fra due picchi di ampiezza quasi equivalente nella
+    // finestra di ricerca +-P/4. Le finestre temporali di questi scatti
+    // coincidono, campione per campione, con le finestre di instabilita'
+    // gia' misurate da voice_reference_probe.cpp sull'export reale.
+    //
+    // Confermato che NON e' un artefatto della misura (SpectralShifter, un
+    // motore spettrale completamente diverso dietro la stessa interfaccia
+    // astratta, resta a 0% di instabilita' a qualunque profondita' sullo
+    // stesso file) ne' un'interferenza di sovrapposizione fra grani legata
+    // a 1/alpha (uno sweep esteso fino a -19 semitoni non mostra i minimi
+    // netti a -12/-19 che quel meccanismo prevederebbe).
+    //
+    // Fix (vedi il commento esteso su detectEpochs() in PsolaShifter.cpp):
+    // gli epoch, dal secondo in poi di ogni nota/riattivazione, si scelgono
+    // per SIMILARITA' DI FORMA D'ONDA (cross-correlazione normalizzata,
+    // stile WSOLA) invece che per ampiezza assoluta massima. Un primo
+    // tentativo cercava anche il SEED (il primo epoch) per correlazione su
+    // una finestra larga un periodo intero: misurato REGREDIRE Test 3
+    // (formanti, beta=0.70: 900Hz misurati contro 770Hz attesi) e Test 6
+    // (inviluppo, -17 st: RMS minimo/medio sotto la soglia 0.25) — il seed
+    // poteva agganciarsi a un picco di risonanza secondario invece del vero
+    // transiente, e la correlazione lo preservava poi in modo consistente
+    // ma SBAGLIATO. Il seed resta quindi ad ampiezza assoluta massima
+    // (esattamente il criterio precedente, stessa larghezza +-w), la
+    // correlazione entra solo dal secondo epoch in poi.
+    //
+    // Validato PRIMA sullo sweep sul file reale (obbligatorio, non solo sul
+    // test sintetico sotto — la lezione del tentativo precedente): 0% di
+    // finestre instabili su TUTTO il range -1..-10 semitoni (contro
+    // 0%/crescita fino al 12-13% prima del fix), confermato su un secondo
+    // timbro ("Test 2 - E-Piano.wav", mai usato per orientare il fix). La
+    // deviazione standard del jitter degli epoch (stessa misura sopra,
+    // stesso file, ripetuta dopo il fix) scende da 4.16 a 0.084 campioni.
+    // Vedi handsoff.md sessione 26 per tutti i numeri.
+    //
+    // Test 12 sotto NON e' riuscito a essere reso discriminante (fallisce
+    // pre-fix, passa dopo — il criterio dichiarato per un test nuovo,
+    // CLAUDE.md regola 13): ne' aumentare il rumore di makeRichNoisyVowel
+    // ne' un secondo disegno esplicito a due impulsi (vedi ATTENZIONE su
+    // makeRichNoisyVowel in TestSignals.h) hanno separato pulito il
+    // comportamento pre/post fix senza rompere il controllo di periodicita'
+    // dell'ingresso. Stessa difficolta' gia' incontrata in sessione 19/20
+    // nel riprodurre questo meccanismo in laboratorio. Resta quindi, come
+    // Test 10/11, una verifica di TRASPARENZA PERMANENTE (non deve
+    // regredire in futuro), non la prova del fix — quella e' venuta per
+    // intero dal file reale, sopra.
+    std::printf ("\nTEST 12 - forma d'onda ambigua + rumore, shift PROFONDO "
+                 "(indagine timbro granuloso — verifica di trasparenza, non "
+                 "prova del meccanismo)\n");
+    {
+        constexpr int    kPeriodSamples      = 200; // f0 = 240 Hz esatti a SR=48000
+        const double     f0                  = SR / (double) kPeriodSamples;
+        const double     seconds             = 1.5;
+        constexpr double kDeepShiftSemitones = -10.0; // dentro il range reale del preset Maj (V4)
+
+        const auto in = makeRichNoisyVowel (kPeriodSamples, seconds, SR);
+
+        const int win       = (int) (0.020 * SR);
+        const int hop       = win / 2;
+        const int maxLagCtx = (int) (SR / 50.0) + 2;
+        const int settleIn  = (int) (0.05 * SR);
+        const int settleOut = (int) (0.05 * SR) + 1536; // oltre la latenza dichiarata (Accurate)
+
+        double inMin = 1.0;
+        for (int from = settleIn; from + win + maxLagCtx < (int) in.size(); from += hop)
+        {
+            const auto fr = measureFrame (in, from, win, SR);
+            if (fr.periodicity > 0.0) inMin = std::min (inMin, fr.periodicity);
+        }
+
+        const bool inputPlausible = inMin > 0.98;
+        if (! inputPlausible)
+        {
+            ++failures;
+            std::printf ("  FALLITO: l'ingresso non e' abbastanza periodico per fidarsi "
+                         "della misura sull'uscita (regola 13)\n");
+        }
+
+        // Trasparenza in UNISONO (alpha=1, beta=1): la scelta degli epoch
+        // per correlazione deve restare consistente ciclo per ciclo anche
+        // senza trasposizione, non solo a shift profondo.
+        const auto outUnison = runShifter (in, f0, 0.0, 1.0, Stability::numLevels - 1);
+        double outUnisonMin = 1.0;
+        for (int from = settleOut; from + win + maxLagCtx < (int) outUnison.size(); from += hop)
+        {
+            const auto fr = measureFrame (outUnison, from, win, SR);
+            if (fr.periodicity > 0.0) outUnisonMin = std::min (outUnisonMin, fr.periodicity);
+        }
+        const bool unisonClean = inputPlausible && (outUnisonMin > 0.98);
+        if (! unisonClean) ++failures;
+        std::printf ("  unisono:      ingresso min %.4f  uscita min %.4f  %s\n",
+                     inMin, outUnisonMin, unisonClean ? "OK" : "FALLITO");
+
+        // Shift PROFONDO (beta=1): la misura che questa sessione ha
+        // riportato dentro soglia sul file reale.
+        const auto outDeep = runShifter (in, f0, kDeepShiftSemitones, 1.0, Stability::numLevels - 1);
+        double outDeepMin = 1.0;
+        for (int from = settleOut; from + win + maxLagCtx < (int) outDeep.size(); from += hop)
+        {
+            const auto fr = measureFrame (outDeep, from, win, SR);
+            if (fr.periodicity > 0.0) outDeepMin = std::min (outDeepMin, fr.periodicity);
+        }
+        const bool deepClean = inputPlausible && (outDeepMin > 0.90);
+        if (! deepClean) ++failures;
+        std::printf ("  %.0f semitoni: ingresso min %.4f  uscita min %.4f  %s\n",
+                     kDeepShiftSemitones, inMin, outDeepMin, deepClean ? "OK" : "FALLITO");
+
+        // Accuratezza di trasposizione allo stesso shift: il fix deve solo
+        // ridurre la varianza della spaziatura, non introdurre un bias
+        // sistematico di lag (che sposterebbe il pitch misurato).
+        const int    anaFromDeep = (int) (0.3 * SR);
+        const int    anaLenDeep  = 8192;
+        const double measured    = measureF0 (outDeep, anaFromDeep, anaLenDeep, SR);
+        const double expected    = f0 * std::pow (2.0, kDeepShiftSemitones / 12.0);
+        const double errC        = centsError (measured, expected);
+        const bool   pitchOk     = std::fabs (errC) < 10.0;
+        if (! pitchOk) ++failures;
+        std::printf ("  %.0f semitoni: atteso %.2fHz  misurato %.2fHz  errore %.2fc  %s\n",
+                     kDeepShiftSemitones, expected, measured, errC, pitchOk ? "OK" : "FALLITO");
+    }
+
     std::printf ("\n===================================\n");
     std::printf ("%s  (%d verifiche fallite)\n",
                  failures == 0 ? "TUTTI I TEST SUPERATI" : "TEST FALLITI", failures);

@@ -191,6 +191,23 @@ add_executable(real_export_probe
 target_include_directories(real_export_probe PRIVATE src)
 target_compile_features(real_export_probe PRIVATE cxx_std_20)
 
+# Strumento diagnostico OFFLINE — sessione 25/26, indagine sul ritorno del
+# "wobbling"/timbro granuloso sulle voci con offset profondo. A differenza di
+# real_export_probe (che PREDICE il pitch atteso applicando la tabella
+# armonica al dry), qui il target e' gia' noto per costruzione: confronta
+# direttamente l'export reale di una voce isolata con la nota "ideale" suonata
+# dal synth via MIDI (nessuna elaborazione del plugin). Vedi
+# tests/voice_reference_probe.cpp. Stessa dipendenza minima di
+# real_export_probe (solo PsolaShifter, per SampleAnalysis.h/TestSignals.h
+# header-only). NON in ctest: dipende da file WAV esterni forniti
+# dall'utente, non versionati (SAMPLE TEST/DBG Timbro/).
+add_executable(voice_reference_probe
+    tests/voice_reference_probe.cpp
+    src/dsp/PsolaShifter.cpp
+)
+target_include_directories(voice_reference_probe PRIVATE src)
+target_compile_features(voice_reference_probe PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
