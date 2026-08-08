@@ -109,10 +109,10 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     setupKnob (glideTimeSlider,   glideLabel,          mainPage);
     setupKnob (numVoicesSlider,   numVoicesLabel,      mainPage);
 
-    // FR-77: dryWetKnob resta agganciato a "wetLevel" in questo passo (vedi
-    // PluginEditor.h) — non e' ancora il crossfade dryWetMix (Passo 2,
-    // cambia processBlock, va confermato all'ascolto).
-    dryWetAttachment        = std::make_unique<SliderAttachment> (apvtsRef, "wetLevel",       dryWetKnob);
+    // FR-77/PRD-UI §6.1: crossfade a potenza costante, non i vecchi
+    // dryLevel/wetLevel indipendenti (che restano dichiarati per sempre,
+    // CLAUDE.md regola 6, ma non sono piu' letti in processBlock).
+    dryWetAttachment        = std::make_unique<SliderAttachment> (apvtsRef, "dryWetMix",      dryWetKnob);
     stabilityAttachment     = std::make_unique<SliderAttachment> (apvtsRef, "stabilityLevel", stabilityKnob);
     formantSpreadAttachment = std::make_unique<SliderAttachment> (apvtsRef, "formantSpread",  formantSpreadSlider);
     glideTimeAttachment     = std::make_unique<SliderAttachment> (apvtsRef, "glideTimeMs",    glideTimeSlider);

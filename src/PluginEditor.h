@@ -81,14 +81,11 @@ private:
     juce::Slider numVoicesSlider;      // FR-78: manopola
     juce::Slider glideTimeSlider;      // FR-78: manopola
     juce::Slider formantSpreadSlider;  // FR-78/FR-40: manopola
-    // FR-77: un solo knob "Dry/Wet" su Main. Il parametro dryWetMix vero e
-    // proprio e' Passo 2 di questa sessione (cambia processBlock, va
-    // confermato all'ascolto — CLAUDE.md regola 12): qui il knob resta
-    // agganciato a "wetLevel" come segnaposto funzionante, cosi' il Passo 1
-    // non cambia il suono. "dryLevel" resta un parametro APVTS dichiarato e
-    // letto in processBlock come oggi (default 1.0, invariato), solo senza
-    // un controllo UI dedicato per questo passo — coerente con PRD-UI §3
-    // (niente due slider Dry/Wet separati su Main).
+    // FR-77/PRD-UI §6.1: un solo knob "Dry/Wet" su Main, agganciato al
+    // nuovo parametro dryWetMix (crossfade a potenza costante). Sostituisce
+    // sulla UI i vecchi dryLevel/wetLevel indipendenti, che restano
+    // dichiarati per sempre (CLAUDE.md regola 6) ma non sono piu' letti in
+    // processBlock — vedi PluginProcessor::computeDryWetGains.
     juce::Slider dryWetKnob;
     juce::Label activeVoicesValueLabel; // FR-53: aggiornata dal timer, non un parametro
     // FR-83: versione SINTETICA sintetica su Main (solo nome nota o "--").

@@ -8,6 +8,11 @@ namespace ParamIDs
     static const juce::String numVoices { "numVoices" };
     static const juce::String dryLevel { "dryLevel" };
     static const juce::String wetLevel { "wetLevel" };
+    // FR-77/PRD-UI §6.1: sostituisce dryLevel/wetLevel nel calcolo del
+    // guadagno dry/wet effettivo (vedi computeDryWetGains sotto). dryLevel e
+    // wetLevel restano dichiarati per sempre (CLAUDE.md regola 6) ma
+    // smettono di essere letti in processBlock.
+    static const juce::String dryWetMix { "dryWetMix" };
     static const juce::String stabilityLevel { "stabilityLevel" };
     static const juce::String glideTimeMs { "glideTimeMs" };
     static const juce::String maxSimultaneousVoices { "maxSimultaneousVoices" };
@@ -23,6 +28,23 @@ namespace ParamIDs
     // pubblicazione (CLAUDE.md regola 6), stessa convenzione 1-based.
     static juce::String voiceGain (int voiceIndex) { return "voiceGain" + juce::String (voiceIndex + 1); }
     static juce::String voicePan (int voiceIndex) { return "voicePan" + juce::String (voiceIndex + 1); }
+}
+
+namespace
+{
+    // FR-77/PRD-UI §6.1: crossfade a potenza costante (stessa tecnica gia'
+    // in uso per il pan per voce, Voice.cpp, sessione 23) — mix=0 e' tutto
+    // dry, mix=1 e' tutto wet. A differenza dei vecchi dryLevel/wetLevel
+    // indipendenti, qui i due guadagni non possono stare entrambi al
+    // massimo contemporaneamente: e' un vero crossfade, non una somma
+    // libera. Usata sia in prepareToPlay (reset delle rampe) sia in
+    // processBlock (target delle rampe) — un solo posto dove vive la legge.
+    void computeDryWetGains (float mix, float& dryOut, float& wetOut) noexcept
+    {
+        constexpr float halfPi = juce::MathConstants<float>::halfPi;
+        dryOut = std::cos (mix * halfPi);
+        wetOut = std::sin (mix * halfPi);
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::createParameterLayout()
@@ -55,6 +77,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { ParamIDs::wetLevel, 1 }, "Wet Level",
         juce::NormalisableRange<float> (0.0f, 1.0f), 0.8f));
+
+    // FR-77/PRD-UI §6.1: nuovo parametro, sostituisce dryLevel/wetLevel nel
+    // calcolo del guadagno effettivo (vedi computeDryWetGains). Il default
+    // 0.7 e' un punto di partenza scelto per restare vicino al bilanciamento
+    // "wet in evidenza" di oggi entro i limiti di un vero crossfade — NON e'
+    // un valore calcolato, va confermato all'ascolto (CLAUDE.md regola 12)
+    // prima di considerarlo definitivo.
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { ParamIDs::dryWetMix, 1 }, "Dry/Wet",
+        juce::NormalisableRange<float> (0.0f, 1.0f), 0.7f));
 
     // FR-54: 5 posizioni discrete (Fast..Accurate). Il numero di posizioni e'
     // fisso a compile-time (a differenza dei preset armonici), quindi qui una
@@ -168,12 +200,17 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     // valore iniziale (senza rampa) e' quello attuale dei parametri, cosi'
     // il primo blocco non parte da un salto invece che da una rampa.
     constexpr float kMixDeclickMs = 8.0f;
+    // FR-77: il valore iniziale delle rampe viene dal crossfade dryWetMix,
+    // non piu' dai due parametri dryLevel/wetLevel indipendenti (che
+    // restano dichiarati ma non piu' letti qui — vedi computeDryWetGains).
+    float initialDry = 1.0f, initialWet = 0.0f;
+    computeDryWetGains (*apvts.getRawParameterValue (ParamIDs::dryWetMix), initialDry, initialWet);
     dryGlide.prepare (sampleRate);
     dryGlide.setGlideTimeMs (kMixDeclickMs);
-    dryGlide.reset (*apvts.getRawParameterValue (ParamIDs::dryLevel));
+    dryGlide.reset (initialDry);
     wetGlide.prepare (sampleRate);
     wetGlide.setGlideTimeMs (kMixDeclickMs);
-    wetGlide.reset (*apvts.getRawParameterValue (ParamIDs::wetLevel));
+    wetGlide.reset (initialWet);
 
     if (auto* stabilityParam = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::stabilityLevel)))
         lastKnownStabilityLevel = stabilityParam->getIndex();
@@ -327,8 +364,13 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const int rootPitchClass = effective.rootPitchClass;
     const int numActiveVoices = (int) *apvts.getRawParameterValue (ParamIDs::numVoices);
     const int voiceCap = (int) *apvts.getRawParameterValue (ParamIDs::maxSimultaneousVoices);
-    const float dryLevel = *apvts.getRawParameterValue (ParamIDs::dryLevel);
-    const float wetLevel = *apvts.getRawParameterValue (ParamIDs::wetLevel);
+    // FR-77/PRD-UI §6.1: dryWetMix sostituisce dryLevel/wetLevel nel calcolo
+    // del guadagno dry/wet effettivo — crossfade a potenza costante, non
+    // piu' due manopole indipendenti che possono sommarsi liberamente.
+    // dryLevel/wetLevel restano dichiarati (CLAUDE.md regola 6) ma non sono
+    // piu' letti qui.
+    float dryLevel = 1.0f, wetLevel = 0.0f;
+    computeDryWetGains (*apvts.getRawParameterValue (ParamIDs::dryWetMix), dryLevel, wetLevel);
     const float glideMs = *apvts.getRawParameterValue (ParamIDs::glideTimeMs);
 
     const float formantSpread = *apvts.getRawParameterValue (ParamIDs::formantSpread);
