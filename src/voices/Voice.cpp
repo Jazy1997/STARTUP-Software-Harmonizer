@@ -36,6 +36,26 @@ int Voice::getLatencySamples() const
     return shifter ? shifter->getLatencySamples() : 0;
 }
 
+void Voice::processWarmOnly (const float* monoIn, int numSamples, float continuousInputMidiNote)
+{
+    if (shifter == nullptr)
+        return;
+
+    // Stesso calcolo F0->Hz di processAdd (vedi sotto): serve al motore per
+    // posizionare gli epoch sul periodo reale, cosi' il ring resta
+    // sincronizzato col segnale in ingresso durante tutto il silenzio.
+    shifter->setInputF0Hz (440.0 * std::exp2 (((double) continuousInputMidiNote - 69.0) / 12.0));
+    shifter->process (monoIn, scratch.data(), numSamples);
+    // L'uscita in scratch e' scartata deliberatamente: questa voce non
+    // contribuisce al mix finche' non torna attiva (vedi processAdd).
+}
+
+void Voice::goCold() noexcept
+{
+    if (shifter != nullptr)
+        shifter->reset();
+}
+
 void Voice::swapShifterNoAlloc (std::unique_ptr<PitchShifter>& shifterInOut) noexcept
 {
     shifter.swap (shifterInOut);

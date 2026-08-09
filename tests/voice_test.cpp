@@ -228,12 +228,17 @@ int main()
             Voice voice;
             voice.prepare (SR, maxBlockPrepare, level);
             // Voice appena preparata e' gia' isSilent()==true (muted=true,
-            // ampGlide.reset(0) in Voice::prepare): setMuted(false) qui
-            // esegue esattamente lo stesso percorso di una riattivazione di
-            // uno slot fisico riusato (vedi Voice.h — reset() dello shifter
-            // scatta comunque sulla transizione, che lo slot sia "fresco" o
-            // "usato" non cambia lo stato dopo reset(), verificato in
-            // tests/psola_test.cpp Test 9).
+            // ampGlide.reset(0) in Voice::prepare) e il suo shifter e' gia'
+            // in stato "resettato" per costruzione (prepare() lo garantisce,
+            // vedi PsolaShifter::prepare). Sessione 27: setMuted(false) non
+            // resetta piu' incondizionatamente lo shifter (vedi Voice.h) —
+            // ma su una voce mai usata prima la distinzione non ha effetto,
+            // perche' un reset() su uno shifter gia' pulito e' un no-op
+            // (verificato in tests/psola_test.cpp Test 9, che continua a
+            // testare reset() direttamente su PsolaShifter). Questo blocco
+            // misura quindi l'attacco di un motore che parte pulito in
+            // entrambi i casi, non la differenza fra i due — quella e'
+            // isolata da H5 sotto, sullo stesso file.
             voice.setMuted (false);
             voice.setTargetOffsetSemitones (0.0f); // unisono: isola il fenomeno da qualunque artefatto di ricampionamento
 
@@ -325,10 +330,22 @@ int main()
     // =========================================================================
     // H3 — offsetGlide non si aggancia al nuovo target quando uno slot
     // silenzioso viene riassegnato: replica esatta della sequenza di
-    // PhraseScheduler.cpp (righe 326-328) — setMuted(false) POI
-    // setTargetOffsetSemitones(nuovo valore) — su una voce che aveva un
-    // offset diverso PRIMA di essere ammutolita.
-    // =========================================================================
+    // PhraseScheduler.cpp — setMuted(false) POI setTargetOffsetSemitones
+    // (nuovo valore) — su una voce che aveva un offset diverso PRIMA di
+    // essere ammutolita.
+    //
+    // Sessione 27: nel percorso ORDINARIO di ritiro/riassegnazione di uno
+    // slot fisico (fine naturale di una frase, non il furto d'emergenza di
+    // FR-52), PhraseScheduler chiama ORA esplicitamente Voice::goCold()
+    // prima di restituire lo slot al pool (vedi PhraseScheduler.cpp) — il
+    // reset che prima viveva incondizionatamente dentro Voice::setMuted.
+    // Riprodotto qui esplicitamente per restare fedele alla sequenza reale
+    // (il commento sopra lo dichiara: "replica esatta"): senza, questo test
+    // misurerebbe uno stato che la produzione non raggiunge piu' per questo
+    // percorso — uno slot mai ritirato ne' tenuto caldo, che infatti mostra
+    // un'intonazione sporca per un motivo diverso da H3 (contaminazione fra
+    // due alpha molto diversi nella pipeline PSOLA, non offsetGlide) e non
+    // e' cio' che H3 vuole isolare.
     std::printf ("\nH3 — intonazione all'attacco quando uno slot riassegnato aveva un offset diverso prima\n");
     {
         constexpr float kOldOffset = 7.0f;  // "nota precedente" sullo stesso slot fisico
@@ -351,9 +368,11 @@ int main()
         runSilently (voice, carrier, 0, 64, (int) (0.25 * SR), 0, continuousMidi); // >> kTestGlideMs
 
         // 2) si ammutolisce (fine frase/nota): la dissolvenza di 8ms la
-        // porta a isSilent()==true in poche decine di blocchi.
+        // porta a isSilent()==true in poche decine di blocchi, poi lo slot
+        // viene ritirato per davvero (goCold(), vedi commento sopra).
         voice.setMuted (true);
         runSilently (voice, carrier, (size_t) (0.25 * SR), 64, (int) (0.02 * SR), 0, continuousMidi);
+        voice.goCold();
 
         // 3) riassegnata a una nuova nota con un offset diverso — stessa
         // sequenza esatta di PhraseScheduler.cpp.
@@ -423,6 +442,142 @@ int main()
         if (! freshOk) ++failures;
         std::printf ("  controllo positivo (voce mai riattivata, stesso target da sempre): scostamento %.2f cent  %s\n",
                      freshErr, freshOk ? "OK" : "FALLITO — la misura di F0 stessa non e' affidabile qui");
+    }
+
+    // =========================================================================
+    // H5 (sessione 27 — feedback utente: "buchi e click a inizio nota" su un
+    // preset a offset FISSI con celle vuote su alcuni gradi; preset "Maj",
+    // tutti i 12 gradi compilati, non li mostra mai). Diagnosi completa in
+    // handsoff.md, confermata su due fronti indipendenti: misura
+    // dell'inviluppo sui file dell'utente (SAMPLE TEST/DBG Timbro/) e un
+    // esperimento dell'utente stesso (ricompilare tutti i 12 gradi con lo
+    // stesso valore fa sparire il difetto).
+    //
+    // Meccanismo: quando una cella e' vuota su una frase ancora viva
+    // (FR-17), PhraseScheduler smetteva di chiamare processAdd non appena la
+    // voce diventava isSilent() — il PitchShifter restava AFFAMATO (zero
+    // campioni in ingresso) per tutta la durata della cella vuota. Alla
+    // riattivazione, Voice::setMuted chiamava shifter->reset() su un motore
+    // gia' vuoto: da li' il motore produce silenzio per l'intera sua
+    // latenza dichiarata (21ms a Balanced) prima che il segnale vero
+    // rientri — il buco. "Maj" e' generato con tutti e 12 i gradi compilati
+    // (generateDropVoicingTable): la voce non si ammutolisce mai, il
+    // percorso non si imbocca mai.
+    //
+    // Fix: Voice::processWarmOnly tiene il motore alimentato (uscita
+    // scartata) per tutta la cella vuota; Voice::setMuted non chiama piu'
+    // reset() alla riattivazione (spostato in Voice::goCold(), chiamato da
+    // PhraseScheduler SOLO quando lo slot fisico e' davvero restituito al
+    // pool — vedi PhraseScheduler.cpp).
+    //
+    // Due varianti, non tre: un motore semplicemente affamato (nessuna
+    // chiamata a process() durante il silenzio, senza MAI un reset di
+    // mezzo) non e' uno stato che il codice di produzione raggiunge mai —
+    // ogni voce silenziosa o resta viva su una frase viva (allora oggi come
+    // dopo il fix riceve prima o poi un reset alla riattivazione: e' il
+    // comportamento SENZA il fix) oppure il suo slot fisico viene
+    // esplicitamente ritirato con goCold() quando la frase muore per
+    // davvero (il comportamento ACCETTATO che resta anche dopo il fix,
+    // vedi "residuo noto" in handsoff.md sessione 27). "Affamato + reset"
+    // e "affamato + goCold esplicito" sono lo stesso identico meccanismo:
+    // qui si misura una volta sola, con goCold() esplicito, e la si legge
+    // in entrambi i sensi.
+    //
+    // Questo test riproduce la sequenza esatta del ramo "cella vuota su
+    // frase viva" a livello di Voice — deve fallire senza il fix (criterio
+    // di accettazione per un test nuovo di questo progetto, vedi la nota su
+    // Test 12 in psola_test.cpp).
+    // =========================================================================
+    std::printf ("\nH5 — buco all'attacco quando una cella vuota affama il motore di una voce su una frase viva\n");
+    {
+        constexpr float kOffset = -7.0f; // offset fisso, come nel preset custom dell'utente
+        const size_t convergeLen = (size_t) (0.30 * SR);
+        const int gapLen = (int) (0.05 * SR); // 50ms: oltre la dissolvenza di 8ms, la voce e' isSilent() per la gran parte della finestra
+
+        // duringGap decide cosa succede al motore durante la finestra in cui
+        // la voce e' muta (setMuted(true), gia' isSilent() dopo pochi ms):
+        // processWarmOnly (il fix) o un ritiro esplicito con goCold() (il
+        // comportamento senza il fix — vedi il commento sopra).
+        auto measureDeadTimeMs = [&] (auto duringGap) -> double
+        {
+            Voice voice;
+            voice.prepare (SR, maxBlockPrepare, Stability::defaultLevel);
+            voice.setTargetOffsetSemitones (kOffset);
+
+            // 1) attiva, converge: stato interno reale (epoch/ring pieni),
+            //    non uno slot mai usato — esattamente come Test 9 in
+            //    psola_test.cpp, ma qui a livello di Voice/PhraseScheduler.
+            voice.setMuted (false);
+            runSilently (voice, carrier, 0, 64, (int) convergeLen, 0, continuousMidi);
+
+            // 2) cella vuota su frase viva: la voce si ammutolisce.
+            voice.setMuted (true);
+            duringGap (voice, convergeLen, gapLen);
+
+            // 3) la cella torna piena: STESSO identico offset (nessuna
+            //    rampa di offsetGlide a confondere la misura del solo buco
+            //    di ampiezza — quello e' gia' coperto da H3 sopra).
+            voice.setMuted (false);
+
+            const int captureLen = 4096;
+            const auto out = captureOutput (voice, carrier, convergeLen + (size_t) gapLen, 64, captureLen,
+                                            0, continuousMidi);
+            const auto env = movingRms (out, envWin);
+
+            const int regimeFrom = 2048, regimeLen = 1024; // ben oltre la latenza piu' lunga (30ms Accurate) e la salita
+            double regimeRmsSum = 0.0;
+            for (int i = 0; i < regimeLen; ++i) regimeRmsSum += env[(size_t) (regimeFrom + i)];
+            const double regimeEnv = regimeRmsSum / regimeLen;
+
+            const int t1 = firstCrossing (env, 0, 0.5 * regimeEnv);
+            return t1 < 0 ? 1.0e9 : (1000.0 * (double) t1 / SR);
+        };
+
+        const double deadTimeNoFix = measureDeadTimeMs ([&] (Voice& v, size_t gapStart, int len)
+        {
+            // Affamata (nessuna chiamata al motore durante il silenzio,
+            // esattamente come processAdd quando isSilent()) POI un reset
+            // esplicito prima di riattivare — e' cio' che accadeva SEMPRE
+            // alla riattivazione prima di questa sessione (Voice::setMuted
+            // resettava incondizionatamente), ed e' anche cio' che accade
+            // oggi quando lo slot e' stato davvero ritirato con goCold().
+            runSilently (v, carrier, gapStart, 64, len, 0, continuousMidi);
+            v.goCold();
+        });
+
+        const double deadTimeWarm = measureDeadTimeMs ([&] (Voice& v, size_t gapStart, int len)
+        {
+            int done = 0;
+            while (done < len)
+            {
+                const int n = std::min (64, len - done);
+                v.processWarmOnly (&carrier[gapStart + (size_t) done], n, continuousMidi);
+                done += n;
+            }
+        });
+
+        std::printf ("  affamata + reset (senza il fix / slot davvero ritirato): buco = %8.2f ms\n", deadTimeNoFix);
+        std::printf ("  processWarmOnly (il fix)                              : buco = %8.2f ms\n", deadTimeWarm);
+
+        // Il motore a Balanced dichiara ~21ms di latenza (2*maxPeriod+64 a
+        // 44.1kHz): un buco reale deve avvicinarcisi. Soglia larga (5ms) per
+        // non dipendere dal dettaglio esatto della formula di latenza.
+        const bool noFixReproducesTheBug = deadTimeNoFix > 5.0;
+        if (! noFixReproducesTheBug)
+        {
+            ++failures;
+            std::printf ("  FALLITO: il buco non e' riprodotto senza il fix — la diagnosi non e' completa, fermarsi qui\n");
+        }
+
+        const bool warmFixesIt = deadTimeWarm < 1.0;
+        if (! warmFixesIt)
+        {
+            ++failures;
+            std::printf ("  FALLITO: processWarmOnly non elimina il buco\n");
+        }
+
+        if (noFixReproducesTheBug && warmFixesIt)
+            std::printf ("  OK — il buco e' riprodotto senza il fix e sparisce con processWarmOnly\n");
     }
 
     // =========================================================================

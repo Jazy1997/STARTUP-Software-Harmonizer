@@ -1,6 +1,6 @@
 # Handoff — HARMONIZER
 
-> Ultimo aggiornamento: 2026-08-08 (sessione 26 continuazione: fix WSOLA CONFERMATO all'ascolto e committato, dryWetMix confermato e committato; nuovo problema aperto — click a inizio nota su preset a offset fissi)
+> Ultimo aggiornamento: 2026-08-09 (sessione 27: diagnosi e fix del buco/click a inizio nota su celle vuote di una frase viva, FR-17 — verificato per calcolo su tutti i fronti, NON ancora confermato all'ascolto ne' committato)
 
 ---
 
@@ -30,6 +30,164 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ---
 
 ## 2. Stato attuale
+
+**Sessione 27 — il "nuovo problema aperto" lasciato da sessione 26 (buchi e**
+**click all'inizio di ogni nota su un preset personalizzato a offset fissi,**
+**mentre "Maj" non li mostra mai) e' stato diagnosticato per intero e**
+**corretto. Verificato per calcolo su tutti i fronti (ctest, build**
+**Debug/Release, pluginval, RT-safety, CPU, e sul file reale dell'utente).**
+**NON ancora confermato all'ascolto dall'utente sul preset custom originale**
+**(CLAUDE.md regola 12) e NON committato — in attesa di quella conferma:**
+
+L'utente ha fornito il materiale comparativo (stesso schema delle sessioni
+precedenti, nostro output vs "AutoShift" di Ableton sulla stessa voce/
+automazione): `SAMPLE TEST/DBG Timbro/Custom Preset V1.wav` e
+`Shifted Custom Preset V1.wav`. Misura diretta (inviluppo RMS a 10ms) prima di
+scrivere qualunque codice:
+
+```
+Custom V1 (nostro)  t=2.0s  |..+++.   ###############|   buco di ~30 ms
+Custom V1 (AutoShift)       |..++####################|
+Custom V2 (nostro)  t=6.0s  | .++.   +.  +###########|   buco spezzato di ~50 ms
+Maj  V1 (nostro)    t=2.0s  |..++####################|   nessun buco
+Maj  V4 (nostro)    t=6.0s  |...++###################|   nessun buco (ed e' a -10 semitoni)
+```
+
+Maj V4 sta a -10 semitoni e non ha buchi: **il difetto non dipende dalla
+profondita' dello shift** e non e' una regressione del fix WSOLA di sessione
+26 (quel fix e' rimasto intoccato per l'intera sessione). Chiesto
+all'utente come fosse compilata la tabella del preset custom: **solo i gradi
+usati** erano compilati, gli altri vuoti. Un esperimento dell'utente
+(ricompilare tutti e 12 i gradi con lo stesso valore) ha fatto sparire il
+difetto — la diagnosi si e' concentrata li'.
+
+- **Meccanismo, confermato a lettura di codice**: `PhraseScheduler.cpp`, ramo
+  cella vuota su frase viva (FR-17) — la voce viene ammutolita e, appena
+  `Voice::isSilent()` diventa vero, `processAdd` non veniva piu' chiamata: da
+  quel momento il `PitchShifter` di quello slot non riceveva piu' un solo
+  campione, restava AFFAMATO per tutta la durata della cella vuota.
+  `Voice::setMuted` chiamava incondizionatamente `shifter->reset()` alla
+  riattivazione — su un motore gia' vuoto, il reset produce silenzio per
+  l'intera latenza dichiarata (21ms a Balanced, `2*maxPeriod+64` a 44.1kHz)
+  prima che il segnale vero rientri: il buco. La dissolvenza anti-click di
+  `ampGlide` (8ms) si consuma interamente dentro il buco, quindi il segnale
+  vero rientra a guadagno pieno: il click. "Maj" e' generato da
+  `generateDropVoicingTable` con tutti e 12 i gradi compilati — la voce non
+  si ammutolisce mai, il percorso non si imbocca mai.
+- **Perche' si e' scelto di correggerlo e non solo documentarlo**: la cella
+  vuota e' una funzione di prodotto (CLAUDE.md regola 3, FR-17 — "cella vuota
+  = voce muta"), non un uso scorretto del preset. Compilare tutti i 12 gradi
+  e' un workaround, non la semantica voluta: chiunque usi celle vuote (anche
+  l'utente stesso, in futuro) avrebbe risentito dello stesso buco.
+- **Motore**: nessun passaggio a `SpectralShifter`/Signalsmith considerato
+  seriamente (opzione scartata con l'utente in fase di pianificazione, prima
+  di scrivere codice) — la sua latenza minima e' ~30ms contro i ~21ms del
+  PSOLA a Balanced, quindi un cambio di motore avrebbe ALLUNGATO proprio
+  questo buco invece di risolverlo, e `SpectralShifter::setFormantRatio` non
+  e' implementato (FR-39..42 e' `[MUST]`). **Nessuna riga di
+  `PsolaShifter`/`SpectralShifter` toccata in questa sessione**: il fix vive
+  interamente in `Voice`/`PhraseScheduler`.
+- **Fix, due parti**:
+  - `src/voices/Voice.h`/`.cpp` — due metodi nuovi. `processWarmOnly(monoIn,
+    numSamples, continuousInputMidiNote)`: alimenta il motore
+    (`setInputF0Hz` + `shifter->process`) e SCARTA l'uscita, senza toccare
+    `ampGlide`/`gainGlide`/`panGlide`/`offsetGlide` — nessun contributo al
+    mix, nessuna rampa consumata. `goCold()`: chiama `shifter->reset()` —
+    e' il reset che fino a sessione 26 viveva incondizionatamente dentro
+    `setMuted`, spostato qui. `setMuted(bool)` non chiama piu' `reset()` da
+    sola: la riattivazione da `isSilent()` continua a innescare
+    `justReactivated` (il fix di sessione 16 sull'intonazione stantia,
+    `offsetGlide` — meccanismo indipendente, invariato).
+  - `src/voices/PhraseScheduler.cpp` — due punti di innesto. Nel ramo cella
+    vuota su frase viva: quando `voice.isSilent()`, invece di non fare
+    nulla si chiama `voice.processWarmOnly(...)`. Nel ramo `releasing`,
+    quando TUTTE le voci della frase sono confermate `isSilent()` (fine
+    naturale, non il furto d'emergenza di FR-52): si chiama `goCold()` su
+    ogni slot PRIMA di `hardFreePhrase(p)` — lo slot sta per essere
+    restituito al pool per davvero, nessuno lo rifornira' piu'.
+    **Deliberatamente NON toccato**: il furto d'emergenza dentro
+    `allocateFreeSlot()` (due call site di `hardFreePhrase`, sempre esistiti
+    senza toccare mai lo stato del `Voice`) — quel percorso si affida al
+    motore che CONTINUA A GIRARE e all'`offsetGlide` per lo scivolamento di
+    intonazione, un reset li' reintrodurrebbe esattamente questo buco sulla
+    voce rubata (vedi il commento esteso su `hardFreePhrase` nel codice).
+- **Test**:
+  - `tests/voice_test.cpp`, nuovo blocco **H5** (H4 era gia' in uso per
+    un'altra ipotesi, sessione 16): riproduce la sequenza esatta a livello
+    di `Voice`, due varianti — "affamata + reset" (il comportamento di
+    prima di questa sessione, e anche il residuo accettato per un ritiro
+    vero, misurate con lo stesso costrutto: mostrano lo stesso buco) e
+    "processWarmOnly" (il fix). **Misurato PRIMA di fidarsi del test**:
+    23.95ms senza il fix, 0.00ms con — la soglia (5ms per "il buco c'e'",
+    1ms per "e' sparito") separa nettamente le due varianti sullo stesso
+    segnale sintetico.
+  - **Regressione trovata e corretta durante la stesura**: H3 (sessione 16,
+    intonazione dopo riattivazione da uno slot con un offset diverso prima)
+    e' PASSATO A FALLIRE con la sola rimozione del reset da `setMuted`
+    (266 cent di scostamento, contro <15 atteso) — perche' H3 modella
+    esattamente il percorso ORDINARIO di ritiro/riassegnazione di uno slot
+    (non il furto d'emergenza), che nella produzione reale ora passa sempre
+    da `goCold()` PRIMA della riassegnazione. Il test bypassa
+    `PhraseScheduler` (opera direttamente su `Voice`, per design — vedi la
+    sua intestazione), quindi non replicava piu' quel passaggio da solo.
+    Aggiunta una chiamata esplicita a `voice.goCold()` fra il mute e la
+    riattivazione, per restare fedele alla sequenza reale che il test
+    stesso dichiara di replicare (CLAUDE.md regola 13 — capito COSA era
+    cambiato prima di correggere: non un test sbagliato dall'inizio, un
+    test che assumeva un contratto di `setMuted` che questa sessione ha
+    deliberatamente ristretto). Dopo il fix: 4 cent di scostamento, verde.
+  - `tests/psola_test.cpp` Test 9: **letto per intero, non modificato**.
+    Testa `PsolaShifter::reset()` direttamente (fresh/stale/resetThenResume),
+    non `Voice::setMuted` — resta un cancello di regressione valido cosi'
+    com'e', `goCold()` continua a chiamarlo.
+  - `tests/sample_click_finder.cpp`, nuova **Passata 5**: a differenza delle
+    Passate 1-4 (tutte su `kMajV1Table`, mai vuota per costruzione), usa una
+    tabella a gradi PARZIALI (0/4/7 compilati, gli altri vuoti — stesso
+    schema del preset dell'utente) e gira due volte sullo stesso file
+    (`warmEmptyCells` true/false) cosi' il buco si vede o non si vede sullo
+    stesso materiale. **Eseguita su `SAMPLE TEST/DBG Timbro/Custom Preset
+    V1.wav`**: senza il fix 23.95ms/7.98ms sui due rientri rilevati, con il
+    fix 5.99ms/3.99ms (residuo di misura su audio reale, hop 2ms — H5 sul
+    segnale sintetico va esattamente a 0.00ms). Diagnosi confermata anche
+    sul materiale reale, non solo in laboratorio.
+- **Verificato per calcolo**: tutte e 6 le suite `ctest` verdi su Debug e su
+  Release. Build Debug e Release riuscite per VST3 e Standalone (solo il
+  consueto fallimento di copia post-build per permessi su
+  `C:\Program Files\Common Files\VST3`, atteso — il vero artefatto in
+  `build/Harmonizer_artefacts/<config>/VST3/Harmonizer.vst3` e' stato
+  ricompilato e verificato per timestamp/dimensione). `pluginval
+  --strictness-level 10` **SUCCESS** su entrambe le build VST3 (Debug e
+  Release). Revisione RT-safety manuale del diff: `processWarmOnly` non
+  alloca/non prende lock/non fa I/O (stesso percorso RT-safe di
+  `processAdd`, solo senza il mix); `goCold()` chiama `shifter->reset()`
+  sull'audio thread esattamente come faceva gia' `setMuted` prima di questa
+  sessione, nessun rischio nuovo (CLAUDE.md regola 1). Costo CPU: benchmark
+  usa-e-getta (8 voci, stesso alpha su entrambi i percorsi per isolare la
+  sola differenza processWarmOnly/processAdd — un primo tentativo senza
+  allineare l'alpha aveva dato un rapporto fuorviante di 1.31x, causato
+  dalla diversa spaziatura dei grani PSOLA a alpha diversi, non dal costo
+  reale dei due metodi) — rapporto processWarmOnly/processAdd = **0.987**,
+  stesso ordine di grandezza, leggermente piu' economico (manca il mix
+  gain/pan). Il target CMake era temporaneo, rimosso subito dopo la misura
+  (`CMakeLists.txt` verificato pulito).
+- **Residuo noto, deliberatamente fuori scope** (scelta dell'utente): uno
+  slot APPENA ALLOCATO a una frase nuova dopo silenzio totale
+  (`freeAllPhrases` → `hardFreePhrase` → `goCold` → nuovo
+  `allocateFreeSlot`) parte comunque da un motore freddo, quindi mostra lo
+  stesso tipo di buco alla primissima nota. Non udibile sul materiale reale
+  visto finora (ne' Maj ne' il custom lo mostrano se non alla primissima
+  nota del file). Due strade per una sessione futura, se servisse: tenere
+  caldi anche gli slot LIBERI (costo: `hardVoiceSlotCapacity` motori sempre
+  attivi); oppure condividere l'analisi fra le voci (un solo ring di
+  ingresso + una sola `detectEpochs()`, N stadi di sola sintesi — cio' che
+  il PRD §9.2 gia' dava per acquisito "con 8 voci il vantaggio di CPU e'
+  decisivo perche' tutte condividono la stessa analisi": chiuderebbe la
+  classe di difetto per intero e taglierebbe la CPU, ma cambia la forma di
+  `PitchShifter`, lavoro a se').
+- **NON ancora fatto**: conferma all'ascolto dell'utente (CLAUDE.md regola
+  12) sul preset custom ORIGINALE a gradi parziali (non sulla versione con
+  tutti i 12 gradi compilati, che gia' funzionava e non prova nulla) — build
+  Release da consegnare. Nessun commit prima di quella conferma.
 
 **Fase: M0 completo dal punto di vista tecnico (restano solo licenza JUCE, certificati, nome prodotto — decisioni non tecniche, vedi §6). Vertical slice DSP M1/M2/M3 in corso su richiesta esplicita dell'utente: PresetLibrary (M2), Fix/Move+Glide+Stability (M1) e motore a frasi (M3, FR-43..53) sono completi e funzionali. Sessione 9: il PSOLA proprietario scoperto in sessione 8 e' stato PORTATO E INTEGRATO come motore di default dietro `PitchShifter`. Sessione 10: PRIMO TEST REALE in Ableton di tutto il lavoro di sessione 9 (PSOLA, Formanti, CC, Play) — trovato e corretto un bug reale nel ciclo di vita delle frasi, due bug di UI, aggiunta diagnostica. Sessione 11: canto legato non aggiornava l'armonizzazione — due bug distinti, non uno: isteresi di intonazione mancante (identificato dall'utente, corretto) E `freeAllPhrases()` innescato dalla confidenza del pitch invece che dalla presenza del segnale (la mia ipotesi originale, rivelatasi comunque necessaria dopo il primo fix). Sessione 12: causa delle "note saltate senza una logica precisa" (segnalata a fine sessione 11) confermata a lettura di codice — corsa fra `OnsetDetector` e `PitchDetector`, con una seconda causa concorrente (`pitchDetector` mai resettato al silenzio) — vedi sotto. **CONFERMATO ALL'ASCOLTO dall'utente**: "Active" non resta piu' a zero, armonizza sempre tutte le note, nessuna persa per strada. Sessione 12 (continuazione) — feedback utente sul timbro ("non fedele al segnale sorgente, robotico e granuloso"): trovato e corretto un bug reale in `PsolaShifter::emitGrain` (la correzione formantica automatica di `Voice.cpp`, attiva di default, accorciava i grani di sintesi sotto il minimo necessario alla sovrapposizione) — confermato con un nuovo test numerico (Test 8) che falliva PRIMA del fix e passa dopo, mentre tutti i test preesistenti restano bit-per-bit invariati. Sessione 12 (continuazione) — utente riporta "scricchiolii, click, glitch" e armonizzazione "non stabile al 100%": trovato un bug architetturale — QUALUNQUE voce smetteva di essere processata (fine frase, silenzio totale, cella tornata vuota su una frase viva/FR-17, uscita da Play mode) veniva tagliata di ampiezza piena a zero in un solo blocco, senza dissolvenza. Aggiunta una breve dissolvenza di ampiezza (8ms) per ogni voce, con un rilascio "morbido" invece che istantaneo per le frasi; stesso trattamento per il gain dry/wet/bypass (anch'esso applicato prima come salto istantaneo). **PARZIALMENTE CONFERMATO ALL'ASCOLTO**: l'utente riporta un miglioramento ("va meglio") ma con RESIDUI non ancora indagati — qualche click occasionale ancora presente, e un "wobbeling" nelle voci — deliberatamente NON approfonditi in questa sessione su richiesta esplicita dell'utente ("fermiamoci qua"), rimandati alla prossima. Sessione 13: uno screenshot delle impostazioni audio di Ableton usate nel test (buffer d'uscita 4096 campioni, driver MME/DirectX) ha permesso di diagnosticare ENTRAMBI i residui per calcolo diretto — click residui: la dissolvenza di sessione 12 (8ms = 353 campioni) era un no-op completo con un blocco da 4096 campioni, il salto restava pieno-scala in un solo campione; wobbling: ogni parametro del motore (pitch, formanti, f0) si aggiorna una volta per blocco, cioe' a ~10.8 Hz con questo block size. **Corretto e verificato (build/test/pluginval) solo il fix dei click** (`Glide::processRamp`, guadagno campione-per-campione), NON ancora confermato all'ascolto. Il wobbling resta diagnosticato ma non corretto: il fix (ciclo a sotto-blocchi dentro `processBlock`) e' un intervento strutturale, da discutere con l'utente prima di iniziare — vedi §6.**
 

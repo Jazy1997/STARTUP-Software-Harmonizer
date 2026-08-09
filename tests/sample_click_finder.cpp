@@ -388,6 +388,156 @@ namespace
                      numOnsets, rootPitchClass);
         return wet;
     }
+
+    // Passata 5 (sessione 27 — feedback utente: "buchi e click a inizio
+    // nota" su un preset personalizzato a offset FISSI con celle vuote su
+    // alcuni gradi; diagnosi completa in handsoff.md). A differenza delle
+    // Passate 1-4 (che usano sempre kMajV1Table, MAI vuota per costruzione
+    // — V1 non e' mai muta in un accordo a 4+ toni), qui la tabella e'
+    // PARZIALMENTE compilata come il preset dell'utente: un offset fisso
+    // indipendente dal grado, solo su ALCUNI gradi, gli altri vuoti — il
+    // ramo "cella vuota su frase viva" (FR-17) che le passate precedenti
+    // non esercitano mai.
+    //
+    // warmEmptyCells seleziona cosa succede al motore durante una cella
+    // vuota: true (il fix, Voice::processWarmOnly ad ogni blocco) o false
+    // (il comportamento precedente a questa sessione, nessuna chiamata) —
+    // permette di confrontare i due direttamente sullo STESSO file reale
+    // dell'utente senza ricompilare due volte. refillStartsOut riceve
+    // l'indice campione (assoluto, nel buffer restituito) di ogni rientro
+    // da una cella vuota a una piena: measureHoles() sotto lo usa per
+    // misurare il buco a ciascun rientro.
+    std::vector<float> runPartialTable (const std::vector<float>& mono, double sr,
+                                        int stabilityLevel, float formantSpread, int rootPitchClass,
+                                        int block, bool warmEmptyCells,
+                                        std::vector<int>& refillStartsOut)
+    {
+        // Stesso schema del preset custom dell'utente: offset fisso, solo
+        // tonica/terza/quinta (gradi 0/4/7) compilati, gli altri 9 vuoti.
+        static constexpr float kOffset = -7.0f;
+        static const std::optional<float> kSparseTable[12] =
+        {
+            kOffset, std::nullopt, std::nullopt, std::nullopt, kOffset, std::nullopt,
+            std::nullopt, kOffset, std::nullopt, std::nullopt, std::nullopt, std::nullopt
+        };
+
+        PitchDetector pitchDetector;
+        pitchDetector.prepare (sr);
+        OnsetDetector onsetDetector;
+        onsetDetector.prepare (sr);
+        harmony::PitchLatch pitchLatch;
+
+        Voice voice;
+        voice.prepare (sr, block, stabilityLevel);
+        voice.setFormantSpread (formantSpread);
+
+        // Vero se il blocco PRECEDENTE aveva questa colonna su una cella
+        // vuota di una frase viva (non silenzio vero — quello azzera anche
+        // wasEmpty, vedi sotto): serve a decidere se processWarmOnly va
+        // chiamata questo blocco E a rilevare la transizione vuoto->pieno.
+        bool wasEmpty = false;
+
+        std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f); // canale di scarto, vedi nota su runFixedF0
+        int done = 0;
+
+        while (done + block <= (int) mono.size())
+        {
+            bool onsetThisBlock = false;
+            for (int i = 0; i < block; ++i)
+            {
+                pitchDetector.pushSample (mono[(size_t) (done + i)]);
+                if (onsetDetector.pushSample (mono[(size_t) (done + i)]))
+                    onsetThisBlock = true;
+            }
+            const float continuousMidi = pitchDetector.getMidiNote();
+            const bool signalPresent = onsetDetector.isGateOpen();
+            const bool inputIsStable = pitchDetector.hasStableSignal();
+
+            if (! signalPresent)
+            {
+                // Silenzio vero (fine frase per davvero, FR-52/freeAllPhrases
+                // nella produzione reale): NON e' il caso che questa passata
+                // vuole isolare, wasEmpty si azzera senza scaldare nulla.
+                pitchLatch.reset();
+                voice.setMuted (true);
+                wasEmpty = false;
+            }
+            else if (inputIsStable)
+            {
+                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock);
+                const int degree = degreeOf (quantizedNote, rootPitchClass);
+                const auto& cell = kSparseTable[degree];
+
+                if (! cell.has_value())
+                {
+                    voice.setMuted (true);
+                    wasEmpty = true;
+                }
+                else
+                {
+                    if (wasEmpty)
+                        refillStartsOut.push_back (done); // rientro da cella vuota: il buco si misura da qui
+                    wasEmpty = false;
+                    voice.setMuted (false);
+                    voice.setTargetOffsetSemitones (*cell);
+                }
+            }
+            // else: segnale presente ma pitch non ancora confidente — si
+            // mantiene lo stato del blocco precedente, stessa logica di
+            // PhraseScheduler::process() (vedi il commento su quel ramo).
+
+            if (! voice.isSilent())
+                voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
+            else if (wasEmpty && warmEmptyCells)
+                voice.processWarmOnly (&mono[(size_t) done], block, continuousMidi);
+
+            done += block;
+        }
+
+        std::printf ("  (%zu rientri da cella vuota rilevati, tabella a gradi PARZIALI {0,4,7}=%.0f semitoni,\n"
+                     "   root pitch class %d, warmEmptyCells=%s)\n",
+                     refillStartsOut.size(), kOffset, rootPitchClass,
+                     warmEmptyCells ? "true (il fix)" : "false (comportamento precedente a sessione 27)");
+        return wet;
+    }
+
+    // Misura il buco a ogni rientro (refillStartsOut di runPartialTable):
+    // inviluppo RMS a hop fine (2ms) su una finestra locale subito dopo il
+    // rientro, confrontato col PROPRIO picco (non un tratto di regime
+    // separato — piu' robusto su materiale reale dove il livello a regime
+    // varia nota per nota). Stesso principio della misura in H5,
+    // tests/voice_test.cpp, qui su audio reale invece che sintetico.
+    void measureHoles (const std::vector<float>& wet, double sr, const std::vector<int>& refillStarts)
+    {
+        const int hop = std::max (1, (int) (0.002 * sr)); // 2ms
+        const int winSamples = (int) (0.080 * sr); // 80ms: copre il caso peggiore (Accurate, 30+8ms) con margine
+
+        for (int startSample : refillStarts)
+        {
+            if (startSample < 0 || startSample + winSamples > (int) wet.size())
+                continue;
+
+            const std::vector<float> segment (wet.begin() + startSample, wet.begin() + startSample + winSamples);
+            const auto env = envelopeRms (segment, hop);
+            if (env.empty())
+                continue;
+
+            const double peak = *std::max_element (env.begin(), env.end());
+            if (peak <= 1.0e-6)
+            {
+                std::printf ("    t=%7.3fs  nessun segnale utile nella finestra di misura\n", (double) startSample / sr);
+                continue;
+            }
+
+            int firstAbove = -1;
+            for (size_t i = 0; i < env.size(); ++i)
+                if (env[i] >= 0.5 * peak) { firstAbove = (int) i; break; }
+
+            const double holeMs = firstAbove < 0 ? -1.0 : (1000.0 * (double) firstAbove * hop / sr);
+            std::printf ("    t=%7.3fs  buco = %6.2f ms\n", (double) startSample / sr, holeMs);
+        }
+    }
 }
 
 int main (int argc, char** argv)
@@ -559,13 +709,34 @@ int main (int argc, char** argv)
     printReport ("WET", productionEvents);
     printWetOnly (productionEvents, dryEvents);
 
+    // Passata 5 (sessione 27): a differenza di 1-4, la tabella qui ha celle
+    // VUOTE su alcuni gradi (kMajV1Table non ce l'ha mai) — il ramo FR-17
+    // esatto colpito dal preset custom dell'utente. Eseguita due volte sullo
+    // STESSO file: senza il fix (comportamento precedente a questa sessione)
+    // e con (Voice::processWarmOnly) — cosi' il buco si vede o non si vede
+    // sullo stesso materiale, senza dover ricompilare.
+    std::printf ("\nPASSATA 5 (sessione 27) — tabella a gradi PARZIALI (0/4/7 compilati, gli altri\n"
+                 "vuoti): il ramo 'cella vuota su frase viva' che le passate 1-4 non esercitano mai.\n");
+    std::vector<int> refillsNoFix, refillsWithFix;
+    std::printf (" -- SENZA il fix (warmEmptyCells=false) --\n");
+    const auto partialNoFixWet = runPartialTable (mono, sr, stabilityLevel, formantSpread, rootPitchClass,
+                                                  block, false, refillsNoFix);
+    measureHoles (partialNoFixWet, sr, refillsNoFix);
+    std::printf (" -- CON il fix (warmEmptyCells=true) --\n");
+    const auto partialWithFixWet = runPartialTable (mono, sr, stabilityLevel, formantSpread, rootPitchClass,
+                                                    block, true, refillsWithFix);
+    measureHoles (partialWithFixWet, sr, refillsWithFix);
+
     if (! dumpPrefix.empty())
     {
         writeWavMono (dumpPrefix + ".passata1.wav", heldWet, sr);
         writeWavMono (dumpPrefix + ".passata2.wav", retriggeredWet, sr);
         writeWavMono (dumpPrefix + ".passata3.wav", liveHarmonyWet, sr);
         writeWavMono (dumpPrefix + ".passata4.wav", productionWet, sr);
-        std::printf ("\n(uscite salvate come %s.passata{1,2,3,4}.wav)\n", dumpPrefix.c_str());
+        writeWavMono (dumpPrefix + ".passata5_noFix.wav", partialNoFixWet, sr);
+        writeWavMono (dumpPrefix + ".passata5_withFix.wav", partialWithFixWet, sr);
+        std::printf ("\n(uscite salvate come %s.passata{1,2,3,4}.wav e %s.passata5_{noFix,withFix}.wav)\n",
+                     dumpPrefix.c_str(), dumpPrefix.c_str());
     }
 
     return 0;

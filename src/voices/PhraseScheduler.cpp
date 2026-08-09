@@ -99,11 +99,21 @@ bool PhraseScheduler::isSlotInUse (int slotIndex) const
 
 void PhraseScheduler::hardFreePhrase (Phrase& phrase)
 {
-    // SOLO furto d'emergenza (FR-52, vedi allocateFreeSlot): serve lo slot
-    // fisico SUBITO, non c'e' tempo per una dissolvenza. Non e' un problema
-    // per il click perche' il nuovo target arriva via Glide dell'offset
-    // (gia' presente in Voice) sullo stesso shifter che continua a girare:
-    // e' uno scivolamento di intonazione, non un salto di ampiezza.
+    // Non tocca MAI lo stato dei Voice delle slot che sta liberando —
+    // deliberatamente, perche' e' chiamata da due contesti con esigenze
+    // opposte (vedi i due call site):
+    //   - furto d'emergenza (FR-52, allocateFreeSlot): serve lo slot fisico
+    //     SUBITO, non c'e' tempo per una dissolvenza. Non e' un problema per
+    //     il click perche' il nuovo target arriva via Glide dell'offset
+    //     (gia' presente in Voice) sullo stesso shifter che CONTINUA A
+    //     GIRARE: e' uno scivolamento di intonazione, non un salto di
+    //     ampiezza. Un goCold() qui reintrodurrebbe esattamente il buco di
+    //     sessione 27 (vedi Voice.h) sulla voce rubata.
+    //   - fine naturale di una frase in rilascio (process(), sotto): li' il
+    //     chiamante ha GIA' verificato che tutte le voci sono isSilent() e
+    //     ha gia' chiamato goCold() su ciascuna, PRIMA di questa funzione —
+    //     e' il punto giusto per il reset (slot davvero restituito al pool,
+    //     nessuno lo rifornira' piu').
     phrase.active = false;
     phrase.isLive = false;
     phrase.releasing = false;
@@ -325,7 +335,22 @@ bool PhraseScheduler::process (const float* monoIn,
             }
 
             if (! stillFading)
+            {
+                // Tutte le voci di questa frase sono confermate isSilent():
+                // lo slot fisico sta per essere restituito al pool per
+                // davvero, nessuno lo rifornira' piu'. E' il punto giusto
+                // per il reset esplicito (sessione 27, vedi Voice.h/
+                // PhraseScheduler::hardFreePhrase) — a differenza del furto
+                // d'emergenza sotto (allocateFreeSlot), qui non c'e' alcuna
+                // dissolvenza in corso da interrompere.
+                for (int v = 0; v < harmony::numVoices; ++v)
+                {
+                    const int slotIndex = p.slotIndices[(size_t) v];
+                    if (slotIndex >= 0)
+                        voicePool.getSlot (slotIndex).goCold();
+                }
                 hardFreePhrase (p);
+            }
 
             continue;
         }
@@ -348,6 +373,17 @@ bool PhraseScheduler::process (const float* monoIn,
                 voice.setMuted (true);
                 if (! voice.isSilent())
                     voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+                else
+                    // Sessione 27: la frase e' ancora viva, quindi questo
+                    // stesso slot fisico puo' tornare a servire questa
+                    // colonna armonica al prossimo grado compilato — senza
+                    // questa chiamata il motore resterebbe AFFAMATO per
+                    // tutta la durata della cella vuota e produrrebbe un
+                    // buco pari alla sua latenza dichiarata alla
+                    // riattivazione (misurato su materiale reale, vedi
+                    // handsoff.md sessione 27 e Voice.h). Nessun contributo
+                    // al mix: l'uscita di processWarmOnly e' scartata.
+                    voice.processWarmOnly (monoIn, numSamples, continuousInputMidiNote);
                 continue;
             }
 

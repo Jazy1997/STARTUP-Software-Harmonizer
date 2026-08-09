@@ -28,29 +28,27 @@ public:
     {
         // Sessione 14 (click "a inizio nota", specialmente su note legate):
         // finche' la voce resta silenziosa, processAdd() non chiama piu'
-        // shifter->process() (vedi sotto) — il PitchShifter resta congelato
-        // con qualunque contenuto avesse nella sua pipeline interna in quel
-        // momento (buffer PSOLA, epoch). La dissolvenza anti-click dura solo
-        // kDeclickMs (8ms), ma la latenza dichiarata del motore e' SEMPRE
-        // piu' lunga (13.6-30ms secondo Stability): la pipeline non fa in
-        // tempo a svuotarsi del tutto. Se lo stesso slot fisico viene poi
-        // riassegnato a una nuova nota/frase (routine, mai successo un reset
-        // fra l'una e l'altra prima d'ora), i primi campioni della nuova
-        // nota sono in parte ancora contenuto residuo di quella precedente.
-        // Fix: alla transizione silenzio->attiva (non a ogni chiamata: la
-        // maggior parte delle chiamate qui non cambia nulla), si resetta lo
-        // stato interno dello shifter — verificato numericamente in
-        // tests/psola_test.cpp Test 9 (senza reset: scostamento misurabile
-        // dal riferimento pulito; con reset: uscita bit-per-bit identica a
-        // uno slot mai usato prima). SMENTITO ALL'ASCOLTO dall'utente in
-        // sessione 14: il meccanismo resta vero e misurato, ma non era la
-        // causa (o non l'unica) del click sentito — vedi handsoff.md
-        // sessione 16 per la causa confermata sotto (offsetGlide).
+        // shifter->process() — il PitchShifter resta congelato con
+        // qualunque contenuto avesse nella sua pipeline interna in quel
+        // momento (buffer PSOLA, epoch). Fino a sessione 26 questo metodo
+        // resettava lo shifter proprio qui, alla riattivazione — ma
+        // sessione 27 (feedback utente: "buchi e click a inizio nota" su un
+        // preset a offset fissi con celle vuote su alcuni gradi) ha
+        // misurato che quel reset, su uno slot rimasto AFFAMATO durante il
+        // silenzio (cella vuota su una frase ancora viva, FR-17 — non lo
+        // stesso caso della nota "precedente" su uno slot fisico
+        // riassegnato), produce un buco pari all'intera latenza dichiarata
+        // del motore (21ms a Balanced) prima che il segnale vero rientri:
+        // il motore riparte vuoto invece di restare sincronizzato col
+        // segnale in ingresso. Il reset resta corretto e necessario quando
+        // lo slot fisico viene DAVVERO restituito al pool (si e' spostato
+        // in goCold(), vedi sotto) — qui, alla semplice riattivazione di
+        // una frase che e' rimasta viva, non deve piu' scattare: e'
+        // compito del chiamante (PhraseScheduler) tenere il motore caldo
+        // con processWarmOnly() per tutta la durata della cella vuota,
+        // cosi' che alla riattivazione non ci sia nulla da resettare.
         if (! shouldBeMuted && isSilent())
         {
-            if (shifter != nullptr)
-                shifter->reset();
-
             // Sessione 16 (ripartenza da zero sul click dopo che il fix di
             // sessione 14 e' stato smentito all'ascolto — vedi handsoff.md
             // §6): misurato con tests/voice_test.cpp che l'inviluppo di
@@ -72,7 +70,8 @@ public:
             // (PhraseScheduler.cpp) sia quando lo imposta DOPO, in un
             // blocco successivo (PlayModeInput.cpp: target al note-on,
             // setMuted solo quando il segnale torna stabile) — vedi
-            // Voice.cpp.
+            // Voice.cpp. Questo meccanismo e' indipendente da quello del
+            // motore/reset sopra e resta invariato.
             justReactivated = true;
         }
 
@@ -135,6 +134,35 @@ public:
     // quantizedPlayedNote / continuousInputMidiNote servono alla modalita' Fix.
     void processAdd (const float* monoIn, float* mixL, float* mixR, int numSamples,
                       int quantizedPlayedNote, float continuousInputMidiNote);
+
+    // Sessione 27: tiene "caldo" il motore di una voce silenziosa la cui
+    // FRASE resta pero' viva (cella vuota su un grado, FR-17) — gli passa il
+    // segnale in ingresso e ne SCARTA l'uscita, senza contribuire al mix e
+    // senza toccare ampGlide/gainGlide/panGlide/offsetGlide (nessuno di
+    // questi conta se l'uscita non viene usata). Serve perche' un
+    // PitchShifter affamato (nessuna chiamata a process() per tutta la
+    // durata del silenzio), quando torna attivo, produce silenzio per
+    // l'intera sua latenza dichiarata prima che il segnale vero rientri —
+    // il buco misurato in handsoff.md sessione 27. RT-safe: stesso percorso
+    // di process() dentro processAdd, nessuna allocazione, nessun lock.
+    // Chiamare SOLO quando la voce e' effettivamente muta (isSilent()):
+    // il chiamante (PhraseScheduler) lo sa gia', non e' verificato qui.
+    void processWarmOnly (const float* monoIn, int numSamples, float continuousInputMidiNote);
+
+    // Lo slot fisico viene restituito al pool (fine naturale di una frase,
+    // tutte le sue voci gia' isSilent(): vedi PhraseScheduler::process()) —
+    // da qui in poi nessuno lo rifornisce piu', ne' con processAdd ne' con
+    // processWarmOnly. Azzera SUBITO lo stato interno del motore, cosi' una
+    // nota futura su questo stesso slot fisico non eredita contenuto
+    // residuo di questa (il reset che fino a sessione 26 viveva dentro
+    // setMuted, spostato qui — vedi il commento su setMuted sopra e
+    // tests/psola_test.cpp Test 9, che continua a verificare reset()
+    // direttamente su PsolaShifter, invariato da questo spostamento).
+    // NON va chiamato sul furto d'emergenza di una frase ancora viva/in
+    // dissolvenza (FR-52, PhraseScheduler::allocateFreeSlot): li' il motore
+    // deve continuare a girare senza interruzioni, per costruzione (vedi il
+    // commento su PhraseScheduler::hardFreePhrase).
+    void goCold() noexcept;
 
 private:
     std::unique_ptr<PitchShifter> shifter;
