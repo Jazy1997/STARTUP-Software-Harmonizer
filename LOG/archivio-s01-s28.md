@@ -1,6 +1,26 @@
-# Handoff — HARMONIZER
+# ARCHIVIO — sessioni 1–28
 
-> Ultimo aggiornamento: 2026-08-09 (sessione 27: diagnosi e fix del buco/click a inizio nota su celle vuote di una frase viva, FR-17 — verificato per calcolo su tutti i fronti, NON ancora confermato all'ascolto ne' committato)
+> ⚠️ **Questo è un archivio. Non si legge di default e non si aggiorna più.**
+>
+> Era `handsoff.md` fino alla sessione 29, quando i documenti sono stati divisi per ciclo
+> di vita (vedi `DECISIONS.md` § D-13). Conservato **integro e verbatim**: le sessioni sono
+> sparse su cinque sezioni, fuori ordine e con "(continuazione)" spezzate, quindi uno split
+> automatico per sessione avrebbe perso o misattribuito contenuto.
+>
+> **Dove guardare invece:**
+> `HANDOFF.md` stato di oggi · `BUGS.md` sintomi aperti con la loro storia ·
+> `DECISIONS.md` decisioni durature · `MAPPA.md` moduli · `LOG/sessione-NN.md` dalla 29 in poi.
+>
+> Si viene qui solo per recuperare il dettaglio di una sessione specifica — per esempio
+> una misura numerica, il ragionamento dietro un fix, o un tentativo già scartato.
+> Sezioni: §1 Goal · §2 Stato (s.28→s.15) · §3 File · §4 Cambiamenti · §5 Cosa non ha
+> funzionato · §6 Prossimo passo (s.26→s.12).
+
+---
+
+# Handoff — HARMONIZER (testo originale)
+
+> Ultimo aggiornamento: 2026-08-10 (sessione 28: diagnosi del "ribattuto" segnalato dopo sessione 27 — Meccanismo A e slot-round-robin ESCLUSI col codice vero, isteresi FR-17 scritta ma NON risolutiva sul buco reale misurato, causa piu' probabile un underrun audio real-time in fase di export/registrazione, non un bug deterministico del DSP — nessun commit, in attesa che l'utente riesporti con un bounce offline)
 
 ---
 
@@ -30,6 +50,150 @@ Fonte di verità: `PRD-Harmonizer-v1.md` (v1.0, luglio 2026). In caso di conflit
 ---
 
 ## 2. Stato attuale
+
+**Sessione 28 — indagine sul "ribattuto" segnalato dopo aver ascoltato la**
+**build di sessione 27 attiva ("il buco e' sparito, ma ora c'e' nota nota").**
+**Piano scritto in plan mode** (`ciao-claude-stiamo-facendo-crispy-hellman.md`)
+**seguito solo in parte: la Fase 0 obbligatoria ha smentito la premessa del**
+**resto del piano. Diagnosi finale: NON un bug deterministico del DSP che**
+**questa sessione sia riuscita a isolare — il sospetto piu' forte, dopo**
+**quattro riproduzioni offline fallite, e' un underrun audio real-time in**
+**fase di export/registrazione. Nessun commit: il lavoro scritto (isteresi**
+**FR-17) e' sicuro e testato ma NON confermato risolvere il sintomo reale.**
+
+Il piano (redatto in plan mode con una ricostruzione a mano del gate)
+ipotizzava due letture per il "ribattuto": uno slot fisico freddo dopo un
+ri-attacco (Meccanismo A/C, fix previsto: invariante F — riserva calda di
+`numRequestedVoices` slot) oppure ~11-16ms di testa a intonazione sbagliata
+sul rientro da uno slot di riserva (L3). Il piano imponeva esplicitamente una
+**Fase 0** prima di scrivere qualunque debounce del gate (L1): costruire una
+prova con l'`OnsetDetector` VERO (non una ricostruzione) sul materiale reale,
+prima di fidarsi della ricostruzione a mano fatta in sola lettura.
+
+- **Fase 0 (codice vero, non una ricostruzione)** — estesa
+  `tests/sample_click_finder.cpp` con una nuova passata (`runFaseZeroTrace`)
+  che traccia, sample per sample, ogni transizione del gate di
+  `OnsetDetector` REALE su `Test 1 - Basic Silk Horns.wav` (il DRY
+  confermato sorgente di questa sessione, stessa durata/confini di nota del
+  materiale dell'utente), PIU' un modello a 4 slot fisici con `Voice` REALI
+  che replica `allocateFreeSlot`/`triggerNewPhrase`/late-binding di
+  `PhraseScheduler` sulla colonna sparsa. **Risultato, inequivocabile: il
+  gate apre UNA sola volta in 8s e non si richiude MAI** (conferma
+  ESATTAMENTE la ricostruzione a mano del piano) **e la colonna tracciata
+  lega un fisico slot UNA sola volta per l'intero file** — nessun
+  ri-attacco, nessun furto, nessuno slot mai freddo per round-robin.
+  **Meccanismo A escluso. Invariante F (il fix principale del piano) non ha
+  nulla da correggere su questo materiale**: uno slot "in uso da una frase
+  attiva" e' gia' incondizionatamente caldo oggi (il passaggio generico
+  dell'invariante lo coprirebbe esattamente come gia' fa il codice attuale).
+  **Deciso con l'utente: non costruire l'invariante F** (Tasks corrispondenti
+  cancellati), **non scrivere L1** (nessuna chiusura spuria da debounciare).
+- **Isteresi FR-17 (fix scelto dall'utente al posto dell'invariante F)** —
+  nuovo `src/voices/EmptyCellHold.h`, funzione pura
+  (`stepEmptyCellHold`, zero dipendenze): una colonna GIA' legata a uno slot
+  su una frase viva non muta piu' ISTANTANEAMENTE quando la cella diventa
+  vuota, ma solo se resta vuota per almeno `emptyCellHoldSamples` campioni
+  consecutivi (`kEmptyCellHoldMs = 80.0f`, punto di partenza da tarare
+  all'ascolto — mai confermato). Sotto soglia: nessun mute, nessun
+  ri-target, la voce continua sull'ultimo target valido, cosi' un grado di
+  passaggio non produce un fade-out/fade-in completo e il target scatta
+  direttamente su quello successivo compilato (mai "sporcato" da un target
+  intermedio — la richiesta testuale dell'utente). Integrato in
+  `Phrase.h` (nuovo campo `emptyCellSamples` per voce, azzerato in
+  `triggerNewPhrase`) e `PhraseScheduler.cpp` (ramo cella-vuota-su-frase-viva
+  del loop di mixing). Nuovo target ctest `empty_cell_hold_test` (12
+  verifiche, tutte verdi: passaggio breve mai muta, vuoto persistente muta
+  esattamente al superamento soglia, soglia zero = comportamento
+  pre-sessione identico). **Verificato per calcolo, safe by construction**
+  (con `holdThresholdSamples=0` la nuova Passata 6 di
+  `sample_click_finder.cpp` riproduce ESATTAMENTE i numeri della Passata 5 —
+  nessuna regressione).
+- **La correzione NON e' risolutiva sul sintomo reale, scoperto misurando le
+  durate vere** — Passata 6 istrumentata per loggare anche la durata di ogni
+  attesa: sulla tabella sparsa (proxy, non il vero preset dell'utente in
+  questo primo giro) le uniche due attese misurate su Test 1 durano **2136ms
+  e 279ms** — ordini di grandezza sopra qualunque isteresi ragionevole (80ms
+  compreso): `holdThresholdSamples=0` e `=80ms` producono output IDENTICO.
+  Il "buco" residuo li' (6-8ms) e' compatibile con la normale rampa
+  anti-click di 8ms (`kDeclickMs`), non un difetto.
+- **L'utente ha fornito uno screenshot con tempi precisi** (traccia DAW,
+  voce 1 sola): sulla seconda nota il plugin comincia normale, si spegne
+  ~50ms dopo l'attacco, ~20ms di silenzio, riparte poco prima di 70ms; sulla
+  terza nota lo stesso schema a 70-90ms; sulla quarta DUE silenzi (65-85ms e
+  115-125ms). Per misurarlo con precisione (non a occhio su uno screenshot)
+  e' stato scritto un nuovo strumento permanente, **`tests/envelope_probe.cpp`**
+  (nuovo target CMake, non in ctest — dump dell'inviluppo RMS fine, hop in
+  ms, di un solo file WAV su una finestra di tempo). Misurato su
+  `SAMPLE TEST/DBG Timbro/Fix ribattuto V1.wav`: **silenzio digitale VERO
+  (~-98/-101dB) da t=2.0518s a t=2.0668s, ~15ms**, quasi esattamente lo
+  schema descritto. Confrontato con lo stesso intervallo sul DRY
+  (`Test 1 - Basic Silk Horns.wav`): mai sotto -32dB, **nessun corrispettivo
+  nella sorgente — il buco e' introdotto dal plugin**.
+- **Correlazione trovata**: `dumpPitchTrace` (gia' in `sample_click_finder.cpp`,
+  block=64) su Test 1 nello stesso intervallo mostra la confidenza di
+  `PitchDetector` crollare a **esattamente 0.000** (`hasStableSignal()=false`)
+  per ~32ms (t=2.036-2.068s), quasi esattamente sovrapposto al buco reale —
+  un crollo di confidenza genuino del rilevatore BACF durante il transiente
+  d'attacco (salto Do4->Re4), non un artefatto di misura.
+- **FR-17 ESCLUSO per QUESTO evento specifico, con dati dell'utente**: il
+  preset reale usato per l'export ha SOLO R/2/3 compilati (-7/-8/-10
+  semitoni), tutto il resto vuoto — e la melodia (Do4->Re4->Mi4->Do4) tocca
+  SOLO gradi 0/2/4, tutti compilati. Nessuna cella vuota attraversata: il
+  meccanismo di questa sessione (isteresi FR-17) non puo' c'entrare con
+  QUESTO buco specifico.
+- **Riproduzione offline fallita (quattro tentativi, tutti col codice VERO,
+  nessuno smentito)**: **Passata 3** esistente (voce singola continua,
+  `PitchDetector`/`OnsetDetector`/`Voice` reali, `kMajV1Table`) sullo stesso
+  file — nessun buco, mai sotto -47dB nello stesso istante. **Nuova Passata 7**
+  (stessa identica catena, ma con la tabella VERA dell'utente, shift fino a
+  -10 semitoni per verificare se la PROFONDITA' dello shift fosse la
+  variabile mancante) — ancora nessun buco, minimo -58dB per un solo
+  campione, mai una finestra di silenzio vero. **La stessa identica catena
+  DSP, eseguita deterministicamente offline sullo stesso audio con le
+  stesse impostazioni (root, profondita', melodia, block size), non riproduce
+  il buco.** Nessun percorso di codice individuato in
+  `PhraseScheduler`/`Voice`/`PsolaShifter` che spieghi un silenzio digitale
+  vero di ~15ms qui.
+- **Conclusione, non certa ma la piu' sostenuta dai dati**: non un bug
+  deterministico del DSP (la riproduzione offline, senza alcuna pressione
+  real-time, esclude che l'algoritmo stesso — a parita' di audio e
+  impostazioni — produca il buco). Il candidato piu' plausibile e' un
+  **underrun audio reale** (CPU/buffer) durante la registrazione/export nel
+  DAW, esattamente nei momenti di lavoro extra del rilevatore di pitch
+  durante un attacco — non verificabile da qui (nessun accesso al sistema
+  real-time dell'utente). **Non confermato**: serve un riscontro
+  dell'utente, non deducibile dal solo codice.
+- **Su richiesta esplicita dell'utente, la sessione si e' fermata qui**:
+  nessun benchmark CPU dedicato costruito, nessuna ulteriore indagine su
+  `PsolaShifter`. **PROSSIMO PASSO NATURALE, da proporre all'utente**:
+  riesportare lo stesso materiale con un bounce OFFLINE (non in tempo reale)
+  o dopo un freeze della traccia — se i buchi spariscono, conferma
+  l'underrun (non un bug, si chiude senza altro codice); se persistono
+  IDENTICI anche offline, esclude la causa real-time e riapre la ricerca di
+  un meccanismo deterministico non ancora trovato (il prossimo candidato
+  naturale sarebbe instrumentare `PsolaShifter::detectEpochs()`/`synthesise()`
+  direttamente sul file reale, non piu' su una riproduzione offline
+  approssimata).
+- **Verificato per calcolo** (il codice scritto, non la diagnosi del
+  sintomo): tutte e 7 le suite `ctest` verdi su Debug e Release (le 6
+  preesistenti + la nuova `empty_cell_hold`). Build Debug e Release riuscite
+  per VST3 e Standalone (solo il consueto fallimento di copia post-build per
+  permessi, atteso — artefatti ricompilati e verificati per timestamp).
+  **`pluginval` NON eseguito in questa sessione**: non trovato sul sistema
+  con una ricerca sul filesystem — da segnalare, non da dare per scontato
+  eseguito.
+- **Strumenti diagnostici nuovi, permanenti, per la prossima sessione**:
+  `tests/envelope_probe.cpp` (dump RMS fine di un WAV, nuovo target CMake
+  `envelope_probe`); `sample_click_finder.cpp` — `runFaseZeroTrace`
+  (transizioni gate + binding trace col codice vero), Passata 6 (isteresi
+  FR-17 con logging della durata delle attese), Passata 7 (voce singola con
+  la tabella REALE dell'utente, shift profondo) — `runLiveHarmony` ora
+  accetta una tabella custom invece di essere legata a `kMajV1Table`.
+- **NON fatto**: nessun commit (CLAUDE.md regola 12 — la causa reale non e'
+  confermata, e comunque non e' stata isolata una correzione che la
+  indirizzi). L'isteresi FR-17 resta nel codice perche' sicura e testata,
+  ma va presentata all'utente come "miglioramento indipendente non ancora
+  confermato necessario", non come "il fix del ribattuto".
 
 **Sessione 27 — il "nuovo problema aperto" lasciato da sessione 26 (buchi e**
 **click all'inizio di ogni nota su un preset personalizzato a offset fissi,**

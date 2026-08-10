@@ -1,5 +1,5 @@
 // Strumento di misura del "click a inizio nota" (sessione 14 SMENTITA
-// all'ascolto, sessione 16 ripartenza da zero — vedi handsoff.md §6).
+// all'ascolto, sessione 16 ripartenza da zero — vedi LOG/archivio-s01-s28.md §6).
 //
 // CLAUDE.md regola 12/13: prima di scrivere un altro fix "plausibile" come
 // quello di sessione 14 (che l'utente ha poi smentito all'ascolto), questo
@@ -448,7 +448,7 @@ int main()
     // H5 (sessione 27 — feedback utente: "buchi e click a inizio nota" su un
     // preset a offset FISSI con celle vuote su alcuni gradi; preset "Maj",
     // tutti i 12 gradi compilati, non li mostra mai). Diagnosi completa in
-    // handsoff.md, confermata su due fronti indipendenti: misura
+    // LOG/archivio-s01-s28.md, confermata su due fronti indipendenti: misura
     // dell'inviluppo sui file dell'utente (SAMPLE TEST/DBG Timbro/) e un
     // esperimento dell'utente stesso (ricompilare tutti i 12 gradi con lo
     // stesso valore fa sparire il difetto).
@@ -478,7 +478,7 @@ int main()
     // comportamento SENZA il fix) oppure il suo slot fisico viene
     // esplicitamente ritirato con goCold() quando la frase muore per
     // davvero (il comportamento ACCETTATO che resta anche dopo il fix,
-    // vedi "residuo noto" in handsoff.md sessione 27). "Affamato + reset"
+    // vedi "residuo noto" in LOG/archivio-s01-s28.md sessione 27). "Affamato + reset"
     // e "affamato + goCold esplicito" sono lo stesso identico meccanismo:
     // qui si misura una volta sola, con goCold() esplicito, e la si legge
     // in entrambi i sensi.

@@ -6,7 +6,7 @@
 // dipendenze JUCE: si compila ed esegue in un secondo, senza aprire una DAW
 // (CLAUDE.md regola 11 — lo stesso principio del target standalone).
 //
-// Portato da un'implementazione esterna verificata (vedi handsoff.md,
+// Portato da un'implementazione esterna verificata (vedi LOG/archivio-s01-s28.md,
 // sessioni 8/9) e adattato alla nostra interfaccia PitchShifter (namespace
 // globale, setPitchShiftSemitones in semitoni invece di setPitchRatio in
 // alpha, setInputF0Hz invece di setF0, prepare con stabilityLevel invece di
@@ -269,7 +269,7 @@ int main()
     // Fast, 21.5ms a Balanced, 30ms ad Accurate: la pipeline non fa in tempo
     // a svuotarsi del tutto prima che la voce venga considerata silenziosa.
     // Se quello stesso slot fisico viene poi riassegnato a una nuova nota
-    // (routine, mai resettato fra una frase e l'altra — vedi handsoff.md),
+    // (routine, mai resettato fra una frase e l'altra — vedi LOG/archivio-s01-s28.md),
     // i primi campioni della nuova nota sono ancora, in parte, contenuto
     // residuo della nota PRECEDENTE che quello slot stava sintetizzando.
     std::printf ("\nTEST 9 - riattivazione di uno slot fisico dopo un periodo di inattivita'\n"
@@ -371,7 +371,7 @@ int main()
     // sono stati provati e poi RIMOSSI (tornati al codice del checkpoint
     // pre-sessione-19): nessuno dei due ha cambiato in modo misurabile il
     // sintomo osservato sul file audio reale (isolato con f0 fissa,
-    // bypassando PitchDetector — vedi handsoff.md sessione 19).
+    // bypassando PitchDetector — vedi LOG/archivio-s01-s28.md sessione 19).
 
     // -----------------------------------------------------------------------
     // TEST 10 (sessione 20 — ripresa dell'indagine wobbling). Sessione 19 ha
@@ -408,7 +408,7 @@ int main()
     // conferma). Per CLAUDE.md regola 13, il test resta come verifica di
     // trasparenza permanente (entrambi i casi devono restare stabili nel
     // tempo — vedi soglie sotto), ma la sua conclusione e' negativa su W-A:
-    // la Fase 2 del piano (handsoff.md sessione 20) passa a strumentare
+    // la Fase 2 del piano (LOG/archivio-s01-s28.md sessione 20) passa a strumentare
     // direttamente il file reale invece di forzare questa soglia a
     // "confermare" un'ipotesi che la misura non sostiene.
     std::printf ("\nTEST 10 - trasparenza in unisono nel tempo, periodo "
@@ -483,7 +483,7 @@ int main()
         // regressione.
         const bool fracStaysClean = outMinFrac > 0.95;
         if (! fracStaysClean) ++failures;
-        std::printf ("  esito: %s (W-A non confermata su questo segnale — vedi Fase 2 in handsoff.md)\n",
+        std::printf ("  esito: %s (W-A non confermata su questo segnale — vedi Fase 2 in LOG/archivio-s01-s28.md)\n",
                      fracStaysClean ? "OK" : "FALLITO");
     }
 
@@ -497,7 +497,7 @@ int main()
     // impulsivo, tipico di materiale reale) propagarsi per ~15 grani
     // (~30ms) prima di essere riassorbita — coincidente, a livello di
     // campione, con la finestra del glitch riportata da real_export_probe
-    // sull'export reale (vedi handsoff.md sessione 20 per la traccia
+    // sull'export reale (vedi LOG/archivio-s01-s28.md sessione 20 per la traccia
     // completa e il ragionamento).
     //
     // NE' questo test (vibrato sintetico ±15 cent/5Hz) NE' il Test 10 (tono
@@ -565,7 +565,7 @@ int main()
         // Ne' prima ne' dopo il fix questo segnale sintetico mostra una
         // degradazione misurabile (vedi nota sopra): resta come verifica di
         // trasparenza permanente, non come conferma del meccanismo (quella
-        // e' venuta dal file reale, Fase 2 in handsoff.md sessione 20).
+        // e' venuta dal file reale, Fase 2 in LOG/archivio-s01-s28.md sessione 20).
         const bool staysClean = inputPlausible && (outMin > 0.95);
         if (! staysClean) ++failures;
         std::printf ("  esito: %s\n", staysClean ? "OK" : "FALLITO");
@@ -574,7 +574,7 @@ int main()
     // NOTA (sessione 25/26 — timbro "granuloso"/"che respira" a shift
     // PROFONDO, riportato dall'utente su V3/V4 del preset Maj, offset fino
     // a -10 semitoni). Uno sweep offline sul file reale
-    // (sample_click_finder.cpp, modalita' --fixedF0, vedi handsoff.md) ha
+    // (sample_click_finder.cpp, modalita' --fixedF0, vedi LOG/archivio-s01-s28.md) ha
     // misurato una soglia netta: 0% di finestre instabili da -1 a -4
     // semitoni, poi una crescita monotona da -5 in giu' (fino al ~12% a
     // -10), praticamente INDIPENDENTE dalla correzione formantica (Fmt
@@ -637,7 +637,7 @@ int main()
     // timbro ("Test 2 - E-Piano.wav", mai usato per orientare il fix). La
     // deviazione standard del jitter degli epoch (stessa misura sopra,
     // stesso file, ripetuta dopo il fix) scende da 4.16 a 0.084 campioni.
-    // Vedi handsoff.md sessione 26 per tutti i numeri.
+    // Vedi LOG/archivio-s01-s28.md sessione 26 per tutti i numeri.
     //
     // Test 12 sotto NON e' riuscito a essere reso discriminante (fallisce
     // pre-fix, passa dopo — il criterio dichiarato per un test nuovo,

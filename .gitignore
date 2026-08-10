@@ -23,3 +23,6 @@ tools/*.zip
 
 # JUCE build artifacts inside submodule (safety net; submodule itself is tracked)
 libs/JUCE/build/
+
+# Materiale audio di test: pesante, fornito dall'utente, deliberatamente fuori da git
+SAMPLE TEST/

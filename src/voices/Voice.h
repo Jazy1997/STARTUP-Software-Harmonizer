@@ -50,7 +50,7 @@ public:
         if (! shouldBeMuted && isSilent())
         {
             // Sessione 16 (ripartenza da zero sul click dopo che il fix di
-            // sessione 14 e' stato smentito all'ascolto — vedi handsoff.md
+            // sessione 14 e' stato smentito all'ascolto — vedi LOG/archivio-s01-s28.md
             // §6): misurato con tests/voice_test.cpp che l'inviluppo di
             // ampiezza NON ha discontinuita' alla riattivazione — la causa
             // reale e' che offsetGlide non veniva mai "agganciato" al nuovo
@@ -143,7 +143,7 @@ public:
     // PitchShifter affamato (nessuna chiamata a process() per tutta la
     // durata del silenzio), quando torna attivo, produce silenzio per
     // l'intera sua latenza dichiarata prima che il segnale vero rientri —
-    // il buco misurato in handsoff.md sessione 27. RT-safe: stesso percorso
+    // il buco misurato in LOG/archivio-s01-s28.md sessione 27. RT-safe: stesso percorso
     // di process() dentro processAdd, nessuna allocazione, nessun lock.
     // Chiamare SOLO quando la voce e' effettivamente muta (isSilent()):
     // il chiamante (PhraseScheduler) lo sa gia', non e' verificato qui.

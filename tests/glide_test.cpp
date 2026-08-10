@@ -14,7 +14,7 @@
 // (es. MME/DirectX senza ASIO, 4096 campioni osservato dall'utente in
 // Ableton) una rampa di 8ms (353 campioni a 44.1kHz) diventa un salto in un
 // solo campione: esattamente il click che il fix di sessione 12 doveva
-// eliminare. Vedi handsoff.md sessione 13 per i numeri completi.
+// eliminare. Vedi LOG/archivio-s01-s28.md sessione 13 per i numeri completi.
 //
 // Compilazione: g++ -O2 -std=c++20 -Isrc tests/glide_test.cpp -o glide_test
 

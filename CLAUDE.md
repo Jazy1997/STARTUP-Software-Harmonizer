@@ -36,16 +36,32 @@ discostarsi da un requisito, **va segnalato e discusso, non deciso unilateralmen
     ciò che pensi. Vale anche il contrario: se una correzione fa fallire un test che prima
     passava, non è detto che sia il test ad essere sbagliato — verifica cosa è cambiato
     davvero nell'uscita prima di allentare una soglia.
+14. **A fine sessione, chiudi il ciclo dei documenti.** Ogni file ha un ciclo di vita
+    diverso e non vanno mescolati:
+    - il racconto per esteso della sessione va in `LOG/sessione-NN.md` — archivio, non si rilegge;
+    - `HANDOFF.md` si **riscrive** (non si accumula): stato di oggi, **un** prossimo passo,
+      cosa attende conferma all'ascolto, limiti noti, questioni aperte, puntatori. **Tetto ~150 righe**;
+    - `BUGS.md` si aggiorna **in loco**, sull'entry esistente: un sintomo = un ID stabile,
+      per sempre. Un sintomo che ritorna riapre la sua entry, non ne crea una nuova.
+      `CHIUSO` richiede la conferma all'ascolto dell'utente, non la verifica per calcolo;
+    - `DECISIONS.md` si estende in coda, mai a ritroso: una decisione superata si marca
+      `SUPERATA da D-NN`, non si cancella;
+    - `MAPPA.md` si tocca solo quando la struttura dei moduli cambia davvero.
+
+    Se una di queste informazioni non ha un posto ovvio, il posto giusto è `LOG/`.
 
 ---
 
 ## Note di stato (aggiornare ad ogni milestone)
 
-- Milestone corrente: **M1 — Detection e shifting** (M0 tecnicamente completo; PSOLA proprietario
-  integrato come motore di default dietro `PitchShifter`, verificato da `tests/psola_test.cpp`).
+- Milestone corrente: **M5 — UI**, circa 80%. M0→M4 costruiti e funzionanti; il plugin gira
+  in VST3 su Ableton ed è giudicato soddisfacente dall'utente (s.29). **M6 — Licensing non
+  esiste**: `src/licensing/` è una cartella vuota.
 - Formati target: VST3, AU (Music Effect), Standalone — tutti `[MUST]`.
 - `PLUGIN_MANUFACTURER_CODE` / `PLUGIN_CODE` in `CMakeLists.txt` sono **placeholder**
   (nome prodotto/azienda non ancora deciso, vedi PRD §16). Vanno confermati prima della
   beta pubblica: cambiarli dopo il rilascio rompe la compatibilità degli host con i
   progetti già salvati, esattamente come per il tipo AU.
-- Vedi `handsoff.md` per lo stato dettagliato sessione per sessione.
+- Lo stato dettagliato **non sta più in un file solo** (vedi regola 14): `HANDOFF.md` per
+  lo stato di oggi, `BUGS.md` per i sintomi aperti, `DECISIONS.md` per le decisioni durature,
+  `MAPPA.md` per i moduli, `LOG/` per il racconto sessione per sessione.

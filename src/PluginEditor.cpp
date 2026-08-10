@@ -686,7 +686,7 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     // Sessione 13 (indagine click/wobbling): la dimensione del blocco host
     // determina la granularita' di ogni controllo aggiornato "una volta per
     // blocco" (Glide, parametri del PitchShifter) — un buffer grande (host
-    // senza ASIO) puo' essere causa diretta di artefatti, vedi handsoff.md.
+    // senza ASIO) puo' essere causa diretta di artefatti, vedi LOG/archivio-s01-s28.md.
     detectedText += "  blk " + juce::String (processorRef.getLastBlockSize());
     detectedValueLabel.setText (detectedText, juce::dontSendNotification);
 }
@@ -791,7 +791,7 @@ void HarmonizerAudioProcessorEditor::syncRootNoteFromParameter()
     // parametro APVTS "rootNote" (risolta a valle in OverrideManager, vedi
     // PluginProcessor::processBlock) — la griglia non riflette un override
     // CC attivo, stessa limitazione gia' nota per la vecchia ComboBox
-    // (handsoff.md §6). Qui si riflette solo il parametro (automazione host,
+    // (LOG/archivio-s01-s28.md §6). Qui si riflette solo il parametro (automazione host,
     // caricamento stato, click).
     auto* choiceParam = dynamic_cast<juce::AudioParameterChoice*> (processorRef.apvts.getParameter ("rootNote"));
     if (choiceParam == nullptr)

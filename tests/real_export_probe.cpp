@@ -1,6 +1,6 @@
 // Strumento diagnostico OFFLINE: confronta DRY reale e WET reale (un export
 // vero dal plugin, non un'approssimazione offline) — sessione 18, "una prima
-// voce perfetta". Vedi handsoff.md per il contesto completo: l'utente ha
+// voce perfetta". Vedi LOG/archivio-s01-s28.md per il contesto completo: l'utente ha
 // isolato empiricamente in Ableton che il difetto (click + instabilita'
 // timbrica) c'e' gia' con Voices=1, e ha fornito
 // "SAMPLE TEST/Export V1.wav" (Voices=1, Dry=0, Wet=1) accanto al dry

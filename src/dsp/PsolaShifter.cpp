@@ -15,7 +15,7 @@ namespace
     // resta comunque coerente con lo spirito del requisito: 5 posizioni
     // discrete, Fast=piu' reattivo/meno accurato, Accurate=il contrario.
     // Il PRD non viene modificato; lo scostamento e' documentato qui e in
-    // handsoff.md. Valori di partenza, da tarare all'ascolto (una riga):
+    // LOG/archivio-s01-s28.md. Valori di partenza, da tarare all'ascolto (una riga):
     constexpr double minF0PerLevel[Stability::numLevels] = { 165.0, 130.0, 100.0, 85.0, 70.0 };
 
     // process() elabora internamente a fette di al piu' questa dimensione,
@@ -56,7 +56,7 @@ void PsolaShifter::prepare (double sampleRate, int /*maxBlockSize*/, int stabili
 
     // Vincolo di correttezza: perche' nessun grano possa scrivere in una
     // zona gia' letta, serve latency >= 2 * maxPeriod + maxBlock (dimostrato
-    // nella spec sorgente, riportata in handsoff.md sessione 8/9).
+    // nella spec sorgente, riportata in LOG/archivio-s01-s28.md sessione 8/9).
     latency   = 2 * maxPeriod + maxBlock;
 
     bufSize   = nextPow2 (4 * maxPeriod + 4 * maxBlock + 16);
@@ -159,7 +159,7 @@ void PsolaShifter::epochPopFront() noexcept
 
 // Sessione 26 — "timbro granuloso/che respira" a shift profondo (V3/V4 del
 // preset Maj, offset fino a -10 semitoni): diagnosi completa in
-// handsoff.md. Riassunto per chi legge questo codice senza il contesto
+// LOG/archivio-s01-s28.md. Riassunto per chi legge questo codice senza il contesto
 // completo:
 //
 // Il criterio precedente sceglieva, entro +-P/4 campioni dalla posizione
@@ -437,7 +437,7 @@ void PsolaShifter::synthesise()
     // lo scarto fra synthPos e l'epoch piu' vicino derivava nel tempo,
     // compoundando su MOLTI grani consecutivi, fino a uno scatto quando
     // nearestEpoch() saltava all'epoch adiacente — misurato direttamente
-    // sul file reale isolato con f0 fissa (vedi handsoff.md sessione 20):
+    // sul file reale isolato con f0 fissa (vedi LOG/archivio-s01-s28.md sessione 20):
     // una singola spaziatura anomala fra due epoch veri (dovuta a un
     // posizionamento sbagliato su un campione non impulsivo) si propagava
     // per ~15 grani (~30ms, coerente con la finestra del glitch riportata

@@ -8,7 +8,7 @@
 //
 // Algoritmo di dominio pubblico, portato da un'implementazione esterna
 // verificata numericamente (5 test su segnale sintetico, errore di
-// trasposizione < 0.01 cent — vedi handsoff.md sessione 8/9). Nessuna
+// trasposizione < 0.01 cent — vedi LOG/archivio-s01-s28.md sessione 8/9). Nessuna
 // dipendenza JUCE nell'algoritmo stesso: solo questa classe conosce il
 // dettaglio, come richiesto da CLAUDE.md regola 2 / FR-62.
 //
@@ -51,7 +51,7 @@ private:
     // Il piu' piccolo epoch vivo strettamente maggiore di e, o -1 se e' gia'
     // l'ultimo della finestra viva. Usato da synthesise() per misurare il
     // periodo di analisi LOCALE reale (epochAfter(e) - e) invece di
-    // affidarsi al periodo quantizzato globale — vedi handsoff.md sessione 20.
+    // affidarsi al periodo quantizzato globale — vedi LOG/archivio-s01-s28.md sessione 20.
     long long epochAfter (long long e) const;
     // Posizione dell'epoch successivo ad `anchor`, scelta per SIMILARITA'
     // DI FORMA D'ONDA (cross-correlazione normalizzata, stile WSOLA) entro
@@ -59,7 +59,7 @@ private:
     // precedente (campione di ampiezza assoluta massima), cieco alla forma
     // d'onda circostante. Vedi il commento esteso su detectEpochs() in
     // PsolaShifter.cpp per la diagnosi e la misura che hanno portato a
-    // questo cambiamento (handsoff.md sessione 26). Nessuna allocazione/
+    // questo cambiamento (LOG/archivio-s01-s28.md sessione 26). Nessuna allocazione/
     // lock/IO/eccezione: gira sull'audio thread via processChunk() ->
     // detectEpochs() (CLAUDE.md regola 1).
     long long findEpochByCorrelation (long long anchor, int P, int w) const noexcept;

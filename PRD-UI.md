@@ -4,7 +4,7 @@
 > **Data:** agosto 2026
 > **Destinatario:** sviluppo (umano + Claude Code)
 > **Origine:** elaborazione concreta del §8 di `PRD-Harmonizer-v1.md`, definita in una
-> sessione di discussione dedicata fra l'utente e Claude Code — vedi `handsoff.md`
+> sessione di discussione dedicata fra l'utente e Claude Code — vedi `LOG/archivio-s01-s28.md`
 > sessione 24 per il contesto della decisione.
 
 ---

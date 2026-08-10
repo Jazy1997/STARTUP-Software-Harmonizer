@@ -1,7 +1,7 @@
 #pragma once
 
 // Strumenti di analisi condivisi per la diagnosi su audio VERO (sessione 17-18
-// — "una prima voce perfetta", vedi handsoff.md). Header-only, nessuna
+// — "una prima voce perfetta", vedi LOG/archivio-s01-s28.md). Header-only, nessuna
 // dipendenza JUCE, stesso principio di TestSignals.h (che include, per
 // riusare rms/maxJump/centsError/allFinite invece di duplicarli — sessione
 // 16 ha gia' pagato il prezzo di NON farlo con psola_test/voice_test).

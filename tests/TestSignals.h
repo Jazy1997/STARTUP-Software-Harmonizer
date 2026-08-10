@@ -15,7 +15,7 @@
 // estratto — l'unica differenza e' che il sample rate diventa un parametro
 // esplicito invece di una costante globale, cosi' ogni suite puo' passare il
 // proprio SR senza dover condividerlo. psola_test.cpp e' stato aggiornato per
-// includere questo header al posto delle definizioni locali (vedi handsoff.md
+// includere questo header al posto delle definizioni locali (vedi LOG/archivio-s01-s28.md
 // sessione 16 per la verifica che l'uscita resti bit-per-bit identica).
 
 #include <vector>
@@ -151,7 +151,7 @@ static std::vector<float> makeVibratoVowel (double f0Center, double depthCents, 
 // gia' applicato in sessione 19 a makeCompetingPulsesVowel): il jitter
 // deterministico a passo aureo non riproduce fedelmente la statistica del
 // jitter reale, quindi un fix validato solo su questo generatore non e'
-// una prova sufficiente. Vedi handsoff.md sessione 25/26 per i numeri
+// una prova sufficiente. Vedi LOG/archivio-s01-s28.md sessione 25/26 per i numeri
 // completi — un tentativo futuro deve validarsi PRIMA sul file reale, non
 // solo su un segnale sintetico.
 //
@@ -190,7 +190,7 @@ static std::vector<float> makeVibratoVowel (double f0Center, double depthCents, 
 // verifica di TRASPARENZA PERMANENTE (come Test 10/11), NON una prova del
 // meccanismo — quella e' venuta, per intero, dallo sweep sul file reale
 // (sample_click_finder --fixedF0) e dalla misura diretta del jitter degli
-// epoch (PSOLA_DEBUG_EPOCHS), entrambe in handsoff.md sessione 26.
+// epoch (PSOLA_DEBUG_EPOCHS), entrambe in LOG/archivio-s01-s28.md sessione 26.
 static std::vector<float> makeRichNoisyVowel (int periodSamples, double seconds, double sr,
                                               int numHarmonics = 12, double noiseDb = -20.0)
 {

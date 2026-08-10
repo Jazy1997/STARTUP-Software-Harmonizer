@@ -14,7 +14,7 @@
 // presume il meccanismo, lo misura.
 //
 // NON in ctest: dipende da file WAV esterni forniti dall'utente
-// (SAMPLE TEST/DBG Timbro/, fuori da git per scelta, vedi handsoff.md).
+// (SAMPLE TEST/DBG Timbro/, fuori da git per scelta, vedi LOG/archivio-s01-s28.md).
 //
 // NOTA METODOLOGICA (CLAUDE.md regola 13, da non dimenticare in una sessione
 // futura): "Ideal Voice N.wav" NON e' un target bit-per-bit. E' il synth che

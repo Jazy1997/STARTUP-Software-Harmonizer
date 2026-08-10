@@ -8,7 +8,7 @@
 //
 // Default: PSOLA proprietario (rischio piu' alto del PRD §13, ora
 // integrato e verificato numericamente — vedi tests/psola_test.cpp e
-// handsoff.md). SpectralShifter (motore interinale STFT) resta compilato e
+// LOG/archivio-s01-s28.md). SpectralShifter (motore interinale STFT) resta compilato e
 // funzionante come fallback: per tornare ad esso basta definire
 // HARMONIZER_USE_SPECTRAL_SHIFTER, senza toccare nessun altro file.
 std::unique_ptr<PitchShifter> createDefaultPitchShifter()
