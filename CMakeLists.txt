@@ -137,9 +137,17 @@ add_executable(cell_input_parser_test
 target_include_directories(cell_input_parser_test PRIVATE src)
 target_compile_features(cell_input_parser_test PRIVATE cxx_std_20)
 
+# Verifica numerica dell'isteresi FR-17 (sessione 28, "ribattuto" — vedi
+# src/voices/EmptyCellHold.h): header-only, nessuna dipendenza JUCE.
+add_executable(empty_cell_hold_test
+    tests/empty_cell_hold_test.cpp
+)
+target_include_directories(empty_cell_hold_test PRIVATE src)
+target_compile_features(empty_cell_hold_test PRIVATE cxx_std_20)
+
 # Strumento di misura del click a inizio nota (sessione 16, ripartenza da
 # zero dopo che il fix di sessione 14 e' stato smentito all'ascolto — vedi
-# handsoff.md §6 e tests/voice_test.cpp per il ragionamento completo).
+# LOG/archivio-s01-s28.md §6 e tests/voice_test.cpp per il ragionamento completo).
 # Serve Voice + il motore PSOLA reale (non un doppio finto), ma resta
 # headless come le altre suite: nessuna dipendenza JUCE, si compila ed
 # esegue senza aprire una DAW.
@@ -208,6 +216,16 @@ add_executable(voice_reference_probe
 target_include_directories(voice_reference_probe PRIVATE src)
 target_compile_features(voice_reference_probe PRIVATE cxx_std_20)
 
+# Strumento diagnostico OFFLINE minimale — sessione 28 (piano "ribattuto"):
+# dump dell'inviluppo RMS fine di UN SOLO file WAV, per misurare con
+# precisione buchi gia' individuati a occhio in un DAW. Vedi
+# tests/envelope_probe.cpp. NON in ctest: dipende da file WAV esterni.
+add_executable(envelope_probe
+    tests/envelope_probe.cpp
+)
+target_include_directories(envelope_probe PRIVATE src)
+target_compile_features(envelope_probe PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
@@ -215,3 +233,4 @@ add_test(NAME pitch_latch COMMAND pitch_latch_test)
 add_test(NAME glide COMMAND glide_test)
 add_test(NAME cell_input_parser COMMAND cell_input_parser_test)
 add_test(NAME voice COMMAND voice_test)
+add_test(NAME empty_cell_hold COMMAND empty_cell_hold_test)

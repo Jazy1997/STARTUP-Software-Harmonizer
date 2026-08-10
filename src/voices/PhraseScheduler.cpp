@@ -1,5 +1,7 @@
 #include "PhraseScheduler.h"
+#include "EmptyCellHold.h"
 #include <algorithm>
+#include <cmath>
 
 void PhraseScheduler::prepare (int hardSlotCapacity, double sampleRate, int maxBlockSize, int stabilityLevel)
 {
@@ -8,6 +10,7 @@ void PhraseScheduler::prepare (int hardSlotCapacity, double sampleRate, int maxB
     currentVoiceCap = hardSlotCapacity;
     ageCounter = 0;
     numActiveSlotsLastBlock = 0;
+    emptyCellHoldSamples = (int) std::lround (kEmptyCellHoldMs * sampleRate / 1000.0);
 }
 
 void PhraseScheduler::reset()
@@ -191,6 +194,7 @@ void PhraseScheduler::triggerNewPhrase (const std::array<harmony::Cell, harmony:
     newPhrase->active = true;
     newPhrase->isLive = true;
     newPhrase->slotIndices.fill (-1);
+    newPhrase->emptyCellSamples.fill (0);
 
     for (int v = 0; v < harmony::numVoices; ++v)
     {
@@ -366,27 +370,53 @@ bool PhraseScheduler::process (const float* monoIn,
 
             if (! cell.has_value())
             {
-                // FR-17: la cella e' diventata vuota su una frase ancora
-                // viva (es. cambio accordo su nota tenuta). Stessa logica di
-                // rilascio delle voci sopra, ma per una singola colonna: la
-                // frase resta viva, questa voce sfuma senza tagliare di netto.
+                // FR-17 (sessione 28 — "ribattuto", vedi
+                // src/voices/EmptyCellHold.h): la cella e' vuota questo
+                // blocco, ma non si muta ISTANTANEAMENTE — Fase 0 (LOG/archivio-s01-s28.md
+                // sessione 28) ha misurato che un passaggio breve attraverso
+                // un grado non compilato, sulla STESSA frase viva (nessun
+                // ri-attacco, nessun cambio di slot), produce con un mute
+                // immediato un ciclo fade-out/fade-in udibile come "la
+                // stessa nota suona due volte" — non il buco di sessione 27
+                // (gia' risolto), un difetto diverso. Sotto soglia la voce
+                // resta com'era (ultimo target valido, nessun mute): quando
+                // la melodia arriva al prossimo grado compilato il target
+                // scatta direttamente su quello, mai "sporcato" da un
+                // target intermedio (esattamente la richiesta dell'utente).
+                auto& emptySamples = p.emptyCellSamples[(size_t) v];
+                const auto hold = stepEmptyCellHold (emptySamples, numSamples, false, emptyCellHoldSamples);
+                emptySamples = hold.emptySamplesAfter;
+
+                if (! hold.shouldMuteNow)
+                {
+                    // Ancora dentro la finestra di attesa: nessun mute,
+                    // nessun ri-target — stesso identico trattamento di una
+                    // voce con cella piena, solo senza toccare il target.
+                    voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+                    ++activeCount;
+                    continue;
+                }
+
+                // Soglia superata: stesso comportamento di sessione 27, solo
+                // spostato in avanti di emptyCellHoldSamples campioni.
                 voice.setMuted (true);
                 if (! voice.isSilent())
                     voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
                 else
-                    // Sessione 27: la frase e' ancora viva, quindi questo
-                    // stesso slot fisico puo' tornare a servire questa
-                    // colonna armonica al prossimo grado compilato — senza
-                    // questa chiamata il motore resterebbe AFFAMATO per
-                    // tutta la durata della cella vuota e produrrebbe un
-                    // buco pari alla sua latenza dichiarata alla
-                    // riattivazione (misurato su materiale reale, vedi
-                    // handsoff.md sessione 27 e Voice.h). Nessun contributo
-                    // al mix: l'uscita di processWarmOnly e' scartata.
+                    // La frase e' ancora viva, quindi questo stesso slot
+                    // fisico puo' tornare a servire questa colonna armonica
+                    // al prossimo grado compilato — senza questa chiamata il
+                    // motore resterebbe AFFAMATO per tutta la durata della
+                    // cella vuota e produrrebbe un buco pari alla sua
+                    // latenza dichiarata alla riattivazione (misurato su
+                    // materiale reale, vedi LOG/archivio-s01-s28.md sessione 27 e
+                    // Voice.h). Nessun contributo al mix: l'uscita di
+                    // processWarmOnly e' scartata.
                     voice.processWarmOnly (monoIn, numSamples, continuousInputMidiNote);
                 continue;
             }
 
+            p.emptyCellSamples[(size_t) v] = 0; // ritorno a un grado compilato: azzera subito l'attesa
             voice.setMuted (false);
             voice.setTargetOffsetSemitones ((float) *cell);
             voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);

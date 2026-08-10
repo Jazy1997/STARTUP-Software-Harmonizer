@@ -118,4 +118,14 @@ private:
     uint64_t ageCounter = 0;
     std::atomic<int> numActiveSlotsLastBlock { 0 };
     std::atomic<int> numLateBindingsTotal { 0 };
+
+    // FR-17 (sessione 28 — "ribattuto", vedi src/voices/EmptyCellHold.h):
+    // quanti campioni consecutivi di cella vuota tollerare su una colonna
+    // GIA' legata a uno slot fisico prima di mutarla per davvero. 80ms e'
+    // un punto di partenza (stesso ordine di grandezza discusso per il
+    // debounce del gate, mai scritto perche' Fase 0 lo ha escluso su questo
+    // materiale) — da tarare all'ascolto (CLAUDE.md regola 12), non un
+    // valore definitivo. Calcolato in prepare() perche' dipende dalla SR.
+    static constexpr float kEmptyCellHoldMs = 80.0f;
+    int emptyCellHoldSamples = 0;
 };

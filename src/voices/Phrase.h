@@ -50,6 +50,11 @@ struct Phrase
 {
     std::array<int, harmony::numVoices> slotIndices { -1, -1, -1, -1, -1, -1, -1, -1 };
     std::array<harmony::Cell, harmony::numVoices> frozenOffsets {};
+    // FR-17 (sessione 28 — "ribattuto", vedi src/voices/EmptyCellHold.h):
+    // quanti campioni consecutivi la cella di ogni colonna e' rimasta vuota
+    // su QUESTA frase, da quando l'ultima volta aveva un valore (o dal
+    // trigger, se non ne ha mai avuto uno). Azzerato a triggerNewPhrase.
+    std::array<int, harmony::numVoices> emptyCellSamples {};
     uint64_t age = 0;
     bool active = false;
     bool isLive = false;

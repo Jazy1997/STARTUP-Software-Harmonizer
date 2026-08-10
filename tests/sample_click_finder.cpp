@@ -1,6 +1,6 @@
 // Strumento diagnostico OFFLINE per il "click in mezzo alla nota"/instabilita'
 // timbrica segnalati dall'utente in sessione 17 dopo aver riascoltato il fix
-// di sessione 16 (che ha risolto solo in parte). Vedi handsoff.md sessione 18
+// di sessione 16 (che ha risolto solo in parte). Vedi LOG/archivio-s01-s28.md sessione 18
 // per il meccanismo poi confermato (quantizzazione del periodo intero in
 // PsolaShifter::currentPeriod) — questo file resta comunque utile come banco
 // di riproduzione OFFLINE (senza DAW) del percorso PitchDetector/
@@ -47,12 +47,14 @@
 //       src/dsp/OnsetDetector.cpp -o sample_click_finder
 
 #include "voices/Voice.h"
+#include "voices/EmptyCellHold.h"
 #include "dsp/PitchDetector.h"
 #include "dsp/OnsetDetector.h"
 #include "harmony/PitchLatch.h"
 #include "SampleAnalysis.h"
 
 #include <cstdio>
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <optional>
@@ -245,10 +247,12 @@ namespace
     // SampleAnalysis.h, condivisa con real_export_probe.cpp.
 
     // Passata 3: voce attivata una volta sola (come la 1), offset che segue
-    // DAL VIVO PitchLatch + la tabella V1 vera del preset Maj.
+    // DAL VIVO PitchLatch + una tabella V1 (di default quella vera del
+    // preset Maj — vedi sotto per Passata 7, che passa il preset custom
+    // REALE dell'utente, sessione 28).
     std::vector<float> runLiveHarmony (const std::vector<float>& mono, double sr,
                                        int stabilityLevel, float formantSpread, int rootPitchClass,
-                                       int block)
+                                       int block, const float* table = kMajV1Table)
     {
         PitchDetector pitchDetector;
         pitchDetector.prepare (sr);
@@ -295,14 +299,14 @@ namespace
                 }
 
                 voice.setMuted (false); // V1 non e' mai muta per Maj, vedi sopra
-                voice.setTargetOffsetSemitones (kMajV1Table[degree]);
+                voice.setTargetOffsetSemitones (table[degree]);
             }
 
             voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
             done += block;
         }
 
-        std::printf ("  (%d cambi di grado armonico rilevati durante il file, tabella V1/Maj vera, root pitch class %d)\n",
+        std::printf ("  (%d cambi di grado armonico rilevati durante il file, root pitch class %d)\n",
                      numDegreeChanges, rootPitchClass);
         return wet;
     }
@@ -391,7 +395,7 @@ namespace
 
     // Passata 5 (sessione 27 — feedback utente: "buchi e click a inizio
     // nota" su un preset personalizzato a offset FISSI con celle vuote su
-    // alcuni gradi; diagnosi completa in handsoff.md). A differenza delle
+    // alcuni gradi; diagnosi completa in LOG/archivio-s01-s28.md). A differenza delle
     // Passate 1-4 (che usano sempre kMajV1Table, MAI vuota per costruzione
     // — V1 non e' mai muta in un accordo a 4+ toni), qui la tabella e'
     // PARZIALMENTE compilata come il preset dell'utente: un offset fisso
@@ -538,6 +542,437 @@ namespace
             std::printf ("    t=%7.3fs  buco = %6.2f ms\n", (double) startSample / sr, holeMs);
         }
     }
+
+    // =========================================================================
+    // FASE 0 (piano "ribattuto", sessione 28 — vedi
+    // c:\Users\cazza\.claude\plans\ciao-claude-stiamo-facendo-crispy-hellman.md):
+    // PROVA, non fix. Prima di scrivere qualunque debounce del gate (L1), va
+    // costruita una prova che usa il codice VERO (OnsetDetector reale, non una
+    // ricostruzione a mano) sul materiale reale, e che logga anche gli eventi
+    // di allocazione/binding di un modello fedele a PhraseScheduler — non solo
+    // le transizioni del gate. Una ricostruzione a mano dell'autore di questo
+    // piano, fatta in sola lettura senza poter eseguire il codice vero, aveva
+    // trovato UNA sola transizione in 8s su "Test 1" (il gate non si richiude
+    // mai): questa passata rifà la stessa misura col codice vero per
+    // confermarla o smentirla, PIU' il meccanismo di binding che la
+    // ricostruzione a mano non copriva affatto.
+    //
+    // Due log distinti:
+    //   1. ogni transizione del gate (aperto<->chiuso), OnsetDetector VERO,
+    //      sample per sample sul segnale grezzo — decide se il Meccanismo A
+    //      (chiusura spuria durante una valle naturale dentro una nota tenuta)
+    //      e' anche solo POSSIBILE su questo materiale.
+    //   2. un modello a N slot fisici con Voice REALI (non finte: isSilent()/
+    //      ampGlide/goCold() sono gli stessi meccanismi della produzione),
+    //      che replica allocateFreeSlot/triggerNewPhrase/late-binding di
+    //      PhraseScheduler.cpp per la SOLA colonna sparsa (kSparseTable,
+    //      offset -7 sui gradi 0/4/7 — stessa tabella di Passata 5,
+    //      keepTails=false) — logga ogni volta che un fisico slot viene
+    //      legato per la PRIMA VOLTA IN ASSOLUTO a questa colonna, e se e'
+    //      successo AL TRIGGER (stesso blocco dell'onset — compatibile sia
+    //      con Meccanismo A che con un ri-attacco vero) o in LATE BINDING
+    //      (blocchi dopo, quando il pitch diventa confidente — la firma del
+    //      Meccanismo C).
+    //
+    // Duplica la logica di PhraseScheduler invece di linkarla (dipende da
+    // juce_core via VoicePool/HarmonyPreset.h, non linkabile in un target
+    // headless come questo) — stesso rischio noto di divergenza gia'
+    // documentato per Passata 4/5 sopra.
+    // =========================================================================
+    struct GateTransition { int sampleIndex; bool opened; };
+
+    struct SlotBindEvent
+    {
+        int sampleIndex;
+        int physicalSlot;
+        bool firstEverUseOfThisSlot;
+        bool isLateBinding; // legato blocchi dopo il trigger, non nello stesso blocco dell'onset
+    };
+
+    // Sotto-passata 1: transizioni del gate, OnsetDetector VERO.
+    std::vector<GateTransition> traceGateTransitions (const std::vector<float>& mono, double sr)
+    {
+        OnsetDetector onsetDetector;
+        onsetDetector.prepare (sr);
+
+        std::vector<GateTransition> transitions;
+        bool wasOpen = false;
+        for (size_t i = 0; i < mono.size(); ++i)
+        {
+            onsetDetector.pushSample (mono[i]);
+            const bool isOpen = onsetDetector.isGateOpen();
+            if (isOpen != wasOpen)
+            {
+                transitions.push_back ({ (int) i, isOpen });
+                wasOpen = isOpen;
+            }
+        }
+        return transitions;
+    }
+
+    // Sotto-passata 2: modello a N slot fisici (Voice reali), stessa
+    // scansione di allocateFreeSlot, keepTails=false, colonna sparsa.
+    struct MiniPhrase
+    {
+        int slot = -1;
+        bool active = false;
+        bool isLive = false;
+        bool releasing = false;
+        uint64_t age = 0;
+    };
+
+    std::vector<SlotBindEvent> traceSchedulerBindings (const std::vector<float>& mono, double sr,
+                                                        int stabilityLevel, float formantSpread,
+                                                        int rootPitchClass, int block, int numPhysicalSlots,
+                                                        std::vector<bool>& everUsedOut)
+    {
+        static constexpr float kOffset = -7.0f;
+        static const std::optional<float> kSparseTable[12] =
+        {
+            kOffset, std::nullopt, std::nullopt, std::nullopt, kOffset, std::nullopt,
+            std::nullopt, kOffset, std::nullopt, std::nullopt, std::nullopt, std::nullopt
+        };
+
+        PitchDetector pitchDetector;
+        pitchDetector.prepare (sr);
+        OnsetDetector onsetDetector;
+        onsetDetector.prepare (sr);
+        harmony::PitchLatch pitchLatch;
+
+        std::vector<Voice> slots ((size_t) numPhysicalSlots);
+        for (auto& s : slots)
+        {
+            s.prepare (sr, block, stabilityLevel);
+            s.setFormantSpread (formantSpread);
+        }
+        everUsedOut.assign ((size_t) numPhysicalSlots, false);
+
+        // Capacita' pari al numero di slot fisici, come phrases.size() ==
+        // hardSlotCapacity nel codice reale (PhraseScheduler::prepare).
+        std::vector<MiniPhrase> phrases ((size_t) numPhysicalSlots);
+        uint64_t ageCounter = 0;
+
+        auto isSlotInUse = [&] (int slotIndex)
+        {
+            for (auto& p : phrases)
+                if (p.active && p.slot == slotIndex)
+                    return true;
+            return false;
+        };
+        auto allocateFreeSlot = [&] () -> int
+        {
+            for (int i = 0; i < numPhysicalSlots; ++i)
+                if (! isSlotInUse (i))
+                    return i;
+
+            MiniPhrase* victim = nullptr;
+            for (auto& p : phrases)
+                if (p.active && p.releasing && (victim == nullptr || p.age < victim->age))
+                    victim = &p;
+            if (victim == nullptr)
+                for (auto& p : phrases)
+                    if (p.active && (victim == nullptr || p.age < victim->age))
+                        victim = &p;
+            if (victim == nullptr)
+                return -1;
+
+            victim->active = false;
+            victim->releasing = false;
+            victim->slot = -1;
+
+            for (int i = 0; i < numPhysicalSlots; ++i)
+                if (! isSlotInUse (i))
+                    return i;
+            return -1;
+        };
+
+        auto bindSlot = [&] (MiniPhrase& p, int slot, int sampleIndex, bool lateBinding, float offsetSemitones,
+                             std::vector<SlotBindEvent>& events)
+        {
+            p.slot = slot;
+            const bool firstUse = ! everUsedOut[(size_t) slot];
+            everUsedOut[(size_t) slot] = true;
+            events.push_back ({ sampleIndex, slot, firstUse, lateBinding });
+            slots[(size_t) slot].setMuted (false);
+            slots[(size_t) slot].setTargetOffsetSemitones (offsetSemitones);
+        };
+
+        std::vector<SlotBindEvent> bindEvents;
+        std::vector<float> scratchL ((size_t) block, 0.0f), scratchR ((size_t) block, 0.0f);
+
+        int done = 0;
+        while (done + block <= (int) mono.size())
+        {
+            bool onsetThisBlock = false;
+            for (int i = 0; i < block; ++i)
+            {
+                pitchDetector.pushSample (mono[(size_t) (done + i)]);
+                if (onsetDetector.pushSample (mono[(size_t) (done + i)]))
+                    onsetThisBlock = true;
+            }
+            const float continuousMidi = pitchDetector.getMidiNote();
+            const bool signalPresent = onsetDetector.isGateOpen();
+            const bool inputIsStable = pitchDetector.hasStableSignal();
+
+            if (! signalPresent)
+            {
+                pitchLatch.reset();
+                for (auto& p : phrases)
+                    if (p.active) { p.isLive = false; p.releasing = true; }
+            }
+            else if (onsetThisBlock)
+            {
+                // keepTails=false: tutte le fasi attive iniziano il rilascio.
+                for (auto& p : phrases)
+                    if (p.active) { p.isLive = false; p.releasing = true; }
+
+                MiniPhrase* np = nullptr;
+                for (auto& p : phrases)
+                    if (! p.active) { np = &p; break; }
+
+                if (np != nullptr)
+                {
+                    np->active = true;
+                    np->isLive = true;
+                    np->releasing = false;
+                    np->slot = -1;
+                    np->age = ++ageCounter;
+
+                    const int quantizedNote = pitchLatch.update (continuousMidi, true);
+                    const int degree = degreeOf (quantizedNote, rootPitchClass);
+                    const auto& cell = kSparseTable[degree];
+                    if (cell.has_value())
+                    {
+                        const int slot = allocateFreeSlot();
+                        if (slot >= 0)
+                            bindSlot (*np, slot, done, false, *cell, bindEvents);
+                    }
+                }
+            }
+            else if (inputIsStable)
+            {
+                const int quantizedNote = pitchLatch.update (continuousMidi, false);
+                const int degree = degreeOf (quantizedNote, rootPitchClass);
+                const auto& cell = kSparseTable[degree];
+
+                for (auto& p : phrases)
+                {
+                    if (! p.active || ! p.isLive)
+                        continue;
+
+                    if (p.slot < 0 && cell.has_value())
+                    {
+                        const int slot = allocateFreeSlot();
+                        if (slot >= 0)
+                            bindSlot (p, slot, done, true, *cell, bindEvents);
+                    }
+                    else if (p.slot >= 0)
+                    {
+                        if (! cell.has_value())
+                            slots[(size_t) p.slot].setMuted (true);
+                        else
+                        {
+                            slots[(size_t) p.slot].setMuted (false);
+                            slots[(size_t) p.slot].setTargetOffsetSemitones (*cell);
+                        }
+                    }
+                }
+            }
+
+            for (int s = 0; s < numPhysicalSlots; ++s)
+                if (! slots[(size_t) s].isSilent())
+                    slots[(size_t) s].processAdd (&mono[(size_t) done], scratchL.data(), scratchR.data(),
+                                                  block, 0, continuousMidi);
+
+            for (auto& p : phrases)
+            {
+                if (p.releasing && p.slot >= 0 && slots[(size_t) p.slot].isSilent())
+                {
+                    slots[(size_t) p.slot].goCold();
+                    p.active = false;
+                    p.releasing = false;
+                    p.slot = -1;
+                }
+            }
+
+            done += block;
+        }
+
+        return bindEvents;
+    }
+
+    void runFaseZeroTrace (const std::vector<float>& mono, double sr, int stabilityLevel,
+                          float formantSpread, int rootPitchClass, int block, int numPhysicalSlots)
+    {
+        std::printf ("\n=== FASE 0 (piano ribattuto) — transizioni del gate, OnsetDetector VERO, sample-per-sample ===\n");
+        const auto gateTransitions = traceGateTransitions (mono, sr);
+        std::printf ("  %zu transizioni in %.3fs di materiale\n", gateTransitions.size(), (double) mono.size() / sr);
+        for (size_t i = 0; i < gateTransitions.size(); ++i)
+        {
+            const auto& t = gateTransitions[i];
+            const double tSec = (double) t.sampleIndex / sr;
+            if (i == 0)
+                std::printf ("    t=%8.4fs  gate %s\n", tSec, t.opened ? "APRE" : "CHIUDE");
+            else
+            {
+                const double durationMs = 1000.0 * (double) (t.sampleIndex - gateTransitions[i - 1].sampleIndex) / sr;
+                std::printf ("    t=%8.4fs  gate %s  (stato precedente durato %8.2fms)\n",
+                             tSec, t.opened ? "APRE" : "CHIUDE", durationMs);
+            }
+        }
+        if (gateTransitions.empty())
+            std::printf ("    (il gate non ha mai cambiato stato sull'intero file)\n");
+
+        std::printf ("\n=== FASE 0 — modello a %d slot fisici (Voice reali), colonna sparsa {0,4,7}=-7st,\n"
+                     "    stessa scansione di allocateFreeSlot, keepTails=false, root pitch class %d ===\n",
+                     numPhysicalSlots, rootPitchClass);
+        std::vector<bool> everUsed;
+        const auto bindEvents = traceSchedulerBindings (mono, sr, stabilityLevel, formantSpread, rootPitchClass,
+                                                         block, numPhysicalSlots, everUsed);
+
+        int lateBindCount = 0, firstUseCount = 0, firstUseAtTrigger = 0;
+        for (auto& e : bindEvents)
+        {
+            if (e.isLateBinding) ++lateBindCount;
+            if (e.firstEverUseOfThisSlot)
+            {
+                ++firstUseCount;
+                if (! e.isLateBinding) ++firstUseAtTrigger;
+            }
+        }
+        std::printf ("  %zu eventi di binding totali (%d al trigger, %d in late-binding);\n"
+                     "  %d sono PRIMO USO ASSOLUTO del fisico slot (%d al trigger, %d in late-binding)\n",
+                     bindEvents.size(), (int) bindEvents.size() - lateBindCount, lateBindCount,
+                     firstUseCount, firstUseAtTrigger, firstUseCount - firstUseAtTrigger);
+        for (auto& e : bindEvents)
+            std::printf ("    t=%8.4fs  slot=%d  %s%s\n", (double) e.sampleIndex / sr, e.physicalSlot,
+                         e.firstEverUseOfThisSlot ? "PRIMO USO" : "riuso (slot gia' visto prima)",
+                         e.isLateBinding ? "  [LATE BINDING — Meccanismo C]" : "  [al trigger]");
+        if (bindEvents.empty())
+            std::printf ("    (nessun binding: la colonna sparsa non e' mai risultata su un grado compilato)\n");
+    }
+
+    // =========================================================================
+    // Passata 6 (sessione 28 — piano "ribattuto", fix scelto dall'utente:
+    // isteresi FR-17, vedi src/voices/EmptyCellHold.h). Stessa tabella sparsa
+    // di Passata 5, ma il mute su cella vuota passa dalla funzione pura
+    // condivisa con PhraseScheduler.cpp — nessuna duplicazione della
+    // decisione stessa, solo dell'orchestrazione attorno (stesso rischio
+    // noto di divergenza delle altre passate, che duplicano PhraseScheduler
+    // per intero perche' non linkabile qui).
+    //
+    // holdThresholdSamples=0 riproduce ESATTAMENTE Passata 5 (rete di
+    // sicurezza: i rientri/buchi misurati devono combaciare) — un valore
+    // maggiore e' il fix. refillStartsOut riceve SOLO i rientri da un mute
+    // REALMENTE scattato (soglia superata): un'attesa risolta senza mai
+    // mutare non e' un rientro, non c'e' stato alcun buco/re-attacco.
+    // =========================================================================
+    std::vector<float> runPartialTableWithHold (const std::vector<float>& mono, double sr,
+                                                int stabilityLevel, float formantSpread, int rootPitchClass,
+                                                int block, int holdThresholdSamples,
+                                                std::vector<int>& refillStartsOut, int& numSuppressedOut)
+    {
+        static constexpr float kOffset = -7.0f;
+        static const std::optional<float> kSparseTable[12] =
+        {
+            kOffset, std::nullopt, std::nullopt, std::nullopt, kOffset, std::nullopt,
+            std::nullopt, kOffset, std::nullopt, std::nullopt, std::nullopt, std::nullopt
+        };
+
+        PitchDetector pitchDetector;
+        pitchDetector.prepare (sr);
+        OnsetDetector onsetDetector;
+        onsetDetector.prepare (sr);
+        harmony::PitchLatch pitchLatch;
+
+        Voice voice;
+        voice.prepare (sr, block, stabilityLevel);
+        voice.setFormantSpread (formantSpread);
+
+        int emptySamples = 0;
+        int excursionStartSample = 0;
+        bool wasMuted = false; // vero solo se l'isteresi ha DAVVERO fatto scattare un mute
+        numSuppressedOut = 0;
+
+        std::vector<float> wet (mono.size(), 0.0f);
+        std::vector<float> wetR (mono.size(), 0.0f); // canale di scarto, vedi nota su runFixedF0
+        int done = 0;
+
+        while (done + block <= (int) mono.size())
+        {
+            bool onsetThisBlock = false;
+            for (int i = 0; i < block; ++i)
+            {
+                pitchDetector.pushSample (mono[(size_t) (done + i)]);
+                if (onsetDetector.pushSample (mono[(size_t) (done + i)]))
+                    onsetThisBlock = true;
+            }
+            const float continuousMidi = pitchDetector.getMidiNote();
+            const bool signalPresent = onsetDetector.isGateOpen();
+            const bool inputIsStable = pitchDetector.hasStableSignal();
+
+            if (! signalPresent)
+            {
+                pitchLatch.reset();
+                voice.setMuted (true);
+                emptySamples = 0;
+                wasMuted = false;
+            }
+            else if (inputIsStable)
+            {
+                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock);
+                const int degree = degreeOf (quantizedNote, rootPitchClass);
+                const auto& cell = kSparseTable[degree];
+
+                if (! cell.has_value())
+                {
+                    if (emptySamples == 0)
+                        excursionStartSample = done; // primo blocco vuoto di una nuova attesa
+                    const auto hold = stepEmptyCellHold (emptySamples, block, false, holdThresholdSamples);
+                    emptySamples = hold.emptySamplesAfter;
+                    if (hold.shouldMuteNow)
+                    {
+                        wasMuted = true;
+                        voice.setMuted (true);
+                    }
+                }
+                else
+                {
+                    const int excursionSamples = emptySamples > 0 ? (done - excursionStartSample) : 0;
+                    if (wasMuted)
+                    {
+                        refillStartsOut.push_back (done); // rientro da un mute VERO: qui si misura il buco
+                        std::printf ("    attesa a t=%7.3fs durata %6.1fms -> MUTATA (soglia superata)\n",
+                                     (double) excursionStartSample / sr, 1000.0 * excursionSamples / sr);
+                    }
+                    else if (emptySamples > 0)
+                    {
+                        ++numSuppressedOut; // attesa risolta SENZA mai mutare: il fix ha funzionato qui
+                        std::printf ("    attesa a t=%7.3fs durata %6.1fms -> SOPPRESSA (mai mutata)\n",
+                                     (double) excursionStartSample / sr, 1000.0 * excursionSamples / sr);
+                    }
+                    emptySamples = 0;
+                    wasMuted = false;
+                    voice.setMuted (false);
+                    voice.setTargetOffsetSemitones (*cell);
+                }
+            }
+            // else: segnale presente ma pitch non ancora confidente — si
+            // mantiene lo stato del blocco precedente, stessa logica delle
+            // altre passate/di PhraseScheduler::process().
+
+            if (! voice.isSilent())
+                voice.processAdd (&mono[(size_t) done], &wet[(size_t) done], &wetR[(size_t) done], block, 0, continuousMidi);
+            else if (wasMuted)
+                voice.processWarmOnly (&mono[(size_t) done], block, continuousMidi);
+
+            done += block;
+        }
+
+        std::printf ("  (holdThresholdSamples=%d [%.1fms]: %zu rientri da mute VERO, %d attese risolte SENZA mutare mai)\n",
+                     holdThresholdSamples, 1000.0 * holdThresholdSamples / sr, refillStartsOut.size(), numSuppressedOut);
+        return wet;
+    }
 }
 
 int main (int argc, char** argv)
@@ -675,6 +1110,8 @@ int main (int argc, char** argv)
         return 0;
     }
 
+    runFaseZeroTrace (mono, sr, stabilityLevel, formantSpread, rootPitchClass, block, /*numPhysicalSlots*/ 4);
+
     const auto dryEvents = findClicks (mono, sr);
 
     std::printf ("\nPASSATA 1 — voce singola attivata una volta sola, mai piu' riammutolita, offset\n"
@@ -727,6 +1164,41 @@ int main (int argc, char** argv)
                                                     block, true, refillsWithFix);
     measureHoles (partialWithFixWet, sr, refillsWithFix);
 
+    // Passata 6 (sessione 28): stessa tabella sparsa, ma con l'isteresi
+    // FR-17 (fix scelto dall'utente dopo Fase 0 — vedi LOG/archivio-s01-s28.md sessione
+    // 28) al posto del mute immediato su cella vuota. holdThresholdSamples=0
+    // e' una rete di sicurezza (deve riprodurre esattamente i rientri di
+    // Passata 5 sopra); 80ms e' il punto di partenza da tarare all'ascolto.
+    std::printf ("\nPASSATA 6 (sessione 28) — stessa tabella a gradi PARZIALI, isteresi FR-17 prima\n"
+                 "di mutare una colonna gia' legata su una frase viva (src/voices/EmptyCellHold.h):\n");
+    std::vector<int> refillsHold0, refillsHold80ms;
+    int suppressedHold0 = 0, suppressedHold80ms = 0;
+    std::printf (" -- holdThresholdSamples=0 (rete di sicurezza, deve combaciare con Passata 5 SENZA il fix) --\n");
+    const auto hold0Wet = runPartialTableWithHold (mono, sr, stabilityLevel, formantSpread, rootPitchClass,
+                                                   block, 0, refillsHold0, suppressedHold0);
+    measureHoles (hold0Wet, sr, refillsHold0);
+    const int holdThresholdSamples80ms = (int) std::lround (0.080 * sr);
+    std::printf (" -- holdThresholdSamples=80ms (il fix) --\n");
+    const auto hold80msWet = runPartialTableWithHold (mono, sr, stabilityLevel, formantSpread, rootPitchClass,
+                                                      block, holdThresholdSamples80ms, refillsHold80ms, suppressedHold80ms);
+    measureHoles (hold80msWet, sr, refillsHold80ms);
+
+    // Passata 7 (sessione 28): TABELLA REALE dell'utente (R=-7, 2=-8,
+    // 3(maggiore)=-10, il resto mai visitato da questa melodia C4-D4-E4-C4 —
+    // vedi LOG/archivio-s01-s28.md). A differenza di Passata 3 (kMajV1Table, shift
+    // massimo -3 semitoni) qui lo shift arriva a -10: verifica se la
+    // PROFONDITA' dello shift (non il contenuto armonico/FR-17, gia'
+    // escluso dai dati dell'utente) e' la variabile che riproduce il buco
+    // digitale vero misurato su "Fix ribattuto V1.wav" col codice reale.
+    static constexpr float kRealPresetV1Table[12] =
+    {
+        -7.0f, 0.0f, -8.0f, 0.0f, -10.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
+    };
+    std::printf ("\nPASSATA 7 (sessione 28) — tabella REALE dell'utente (R=-7,2=-8,3=-10), stesso\n"
+                 "modello di Passata 3 (voce continua, real-time PitchDetector/OnsetDetector):\n");
+    const auto realPresetWet = runLiveHarmony (mono, sr, stabilityLevel, formantSpread, rootPitchClass,
+                                               block, kRealPresetV1Table);
+
     if (! dumpPrefix.empty())
     {
         writeWavMono (dumpPrefix + ".passata1.wav", heldWet, sr);
@@ -735,8 +1207,12 @@ int main (int argc, char** argv)
         writeWavMono (dumpPrefix + ".passata4.wav", productionWet, sr);
         writeWavMono (dumpPrefix + ".passata5_noFix.wav", partialNoFixWet, sr);
         writeWavMono (dumpPrefix + ".passata5_withFix.wav", partialWithFixWet, sr);
-        std::printf ("\n(uscite salvate come %s.passata{1,2,3,4}.wav e %s.passata5_{noFix,withFix}.wav)\n",
-                     dumpPrefix.c_str(), dumpPrefix.c_str());
+        writeWavMono (dumpPrefix + ".passata6_hold0.wav", hold0Wet, sr);
+        writeWavMono (dumpPrefix + ".passata6_hold80ms.wav", hold80msWet, sr);
+        writeWavMono (dumpPrefix + ".passata7_realPreset.wav", realPresetWet, sr);
+        std::printf ("\n(uscite salvate come %s.passata{1,2,3,4}.wav, %s.passata5_{noFix,withFix}.wav,\n"
+                     " %s.passata6_{hold0,hold80ms}.wav e %s.passata7_realPreset.wav)\n",
+                     dumpPrefix.c_str(), dumpPrefix.c_str(), dumpPrefix.c_str(), dumpPrefix.c_str());
     }
 
     return 0;
