@@ -21,36 +21,31 @@ Plugin armonizzatore per strumenti monofonici (VST3 / AU / Standalone). Calcola
   dell'utente (s.31): i difetti si correggono a monte.
 - **M6 (licensing) non esiste**: `src/licensing/` è una cartella vuota.
 - **8** suite `ctest` verdi. `pluginval --strictness-level 10` SUCCESS su VST3 (Win).
-- **B-13 (attacchi sporchi) è CHIUSO**, confermato all'ascolto in s.32 (*"test#3 e test#2 ora
-  suonano uguali"*). Committato e pushato.
-- **B-14 aperto e già lavorato in s.32**: l'offset corretto arrivava **~85 ms dopo** l'attacco,
-  quindi la nota partiva con l'offset di quella precedente. Causa dominante fuori dal nostro
-  codice — Cycfi Q ricava la finestra d'analisi dalla frequenza minima, e i 60 Hz cablati fino
-  a s.31 danno 33.4 ms di finestra e una stima ogni 16.7 ms.
-  Ora la nota più grave è un **parametro utente** (scelta dello strumento, 10 voci ordinate dal
-  più acuto al più grave), l'attesa del latch si misura in **frame d'analisi**, e l'aggancio si
-  aggiorna **a ogni stima nuova** invece che una volta per blocco. Misurato a 1024 campioni:
-  **79.1 → 44.3 ms**, con **0 corse di passaggio** su 24 configurazioni. **Non ancora
-  ascoltato.**
-- **Trombone risolto per inciso**: Ab1 = 51.9 Hz stava *sotto* i 60 Hz, quindi le sue note
-  gravi non venivano rilevate affatto.
+- **Il motore di pitch shifting è CHIUSO** (D-19, s.32): *"il timbro è corretto e gli attacchi
+  pure"*. Si chiude la catena che ha occupato le sessioni 12→32 — B-02 (timbro), B-04 (buco),
+  **B-13** (attacco sporcato dai gradi intermedi, s.31) e **B-14** (offset in ritardo, s.32).
+  Non si tocca più senza un sintomo nuovo **riportato all'ascolto**.
+- Il lavoro di B-14: la nota più grave d'analisi è un **parametro utente** (scelta dello
+  strumento, 10 voci dal più acuto al più grave, default **Voice Male E2**), l'attesa del latch
+  si misura in **frame d'analisi**, e l'aggancio si aggiorna **a ogni stima nuova** invece che
+  una volta per blocco. Misurato a 1024 campioni: **79.1 → 44.3 ms**, con **0 corse di
+  passaggio** su 24 configurazioni.
+- **Trombone risolto per inciso**: Ab1 = 51.9 Hz stava *sotto* i 60 Hz cablati fino a s.31,
+  quindi le sue note gravi non venivano rilevate affatto.
 
 ---
 
 ## Prossimo passo
 
-**Uno solo: la conferma all'ascolto di B-14** (`CLAUDE.md` regola 12). Riesportare con gli
-stessi settings `exp#1` almeno `Test#1` e `Maj` come `_02`, col default **Voice Male (E2)**,
-dal build in `build/Harmonizer_artefacts/Release/VST3/Harmonizer.vst3`.
+**Uno solo: FR-59, la scala 70–200% + HiDPI.** Chiuso il fronte DSP (D-19), è l'ultima voce
+nominata nel contenuto di M5 in PRD §12 (*"Le tre schermate, drag and drop, editor tabella,
+**scaling**"*), è `[MUST]`, ed è più piccola di come sembra: la finestra è **già
+ridimensionabile**, manca la scala percentuale.
 
-Due cose da giudicare insieme, non una:
-- la **flem** deve accorciarsi in modo percepibile (misurata 79.1 → 44.3 ms);
-- Test#2 e Test#3 devono **restare uguali fra loro**: è la rete che dice se B-13 non è
-  rientrato dalla finestra.
-
-Se regge, il passo torna a essere **FR-59, la scala 70–200% + HiDPI**: ultima voce di M5 in
-PRD §12, `[MUST]`, e più piccola di come sembrava (la finestra è già ridimensionabile, manca
-la scala percentuale).
+Da decidere prima di scrivere: scala uniforme via `AffineTransform` su un layout logico fisso
+900×660 (lettura letterale di FR-59, HiDPI gratis, si perde il reflow libero) oppure tenere
+separati i due gradi di libertà. Porta con sé il difetto dell'altezza minima (Keep Tails,
+sotto).
 
 ---
 
@@ -58,9 +53,9 @@ la scala percentuale).
 
 | Cosa | Dove | Stato |
 |---|---|---|
-| **B-14, la flem all'attacco** | `PitchDetector` + `PitchLatch` + parametro `analysisLowestNote` | Fix scritto e misurato (79.1 → 44.3 ms a 1024), **mai ascoltato**. È il prossimo passo qui sopra. |
-| `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | L'attesa in frame d'analisi. A 60 Hz vale esattamente i 25 ms di s.31, quindi non cambia nulla su quella configurazione. **Misurato, non tarato all'ascolto**: se il cambio d'armonia sembrasse ancora in ritardo, è la prima manopola. |
-| Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: è l'impostazione più pronta che resta **pulita su tutte e quattro** le tabelle di prova. Ab2 sarebbe 12 ms più veloce ma riapre in piccolo B-13. |
+| **La conferma di B-14 è stata dal vivo, non su export** | — | Data in Ableton sulla build delle 12:40; in `SAMPLE TEST/` non esiste alcun `_02`. I numeri (79.1 → 44.3 ms) restano quindi **verificati per calcolo**, e con loro la rete anti-regressione di B-13 (Test#2 ≡ Test#3) sulla build nuova. Se la flem tornasse, il primo passo è quell'export mancante. |
+| `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | L'attesa in frame d'analisi. A 60 Hz vale esattamente i 25 ms di s.31. **Misurato, non tarato all'ascolto**: se il cambio d'armonia sembrasse in ritardo, è la prima manopola. |
+| Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: l'impostazione più pronta che resta **pulita su tutte e quattro** le tabelle. Ab2 sarebbe 12 ms più veloce ma riapre in piccolo B-13. |
 | **B-10 con Keep Tails ON** | `PhraseScheduler.cpp` | B-07, B-10 e B-12 confermati e chiusi (s.30), ma la conferma fu **generale**, non su questa configurazione, dove il ramo di B-10 si applica anche alle code (tensione con FR-46). |
 | Isteresi cella vuota, `kEmptyCellHoldMs = 80.0f` | `src/voices/EmptyCellHold.h` | Committata in `be9a40f`. Misurata **irrilevante** sul materiale reale. La soglia non è mai stata tarata né ascoltata. |
 

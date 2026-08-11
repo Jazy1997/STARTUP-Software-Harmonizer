@@ -3,7 +3,8 @@
 > B-13 confermato all'ascolto e chiuso. La stessa conferma apre B-14: l'offset giusto arriva
 > ~85 ms dopo l'attacco. Causa dominante trovata fuori dal nostro codice (la finestra
 > d'analisi di Cycfi Q), ridotta a 44 ms rendendola una scelta dell'utente.
-> **Manca la conferma all'ascolto di B-14.**
+> **Anche B-14 è poi confermato all'ascolto, e con esso l'utente chiude l'intero fronte del
+> motore di pitch shifting (D-19)** — vedi l'ultima sezione per la natura di quella conferma.
 
 ---
 
@@ -154,10 +155,32 @@ configurazioni, 0 corse di passaggio**.
 
 ## Cosa resta
 
-1. **La conferma all'ascolto di B-14** (regola 12). Riesportare `exp#1_Test#1_V1_02` e
-   `exp#1_Maj_V1_02` col default Voice Male. La flem deve accorciarsi, e Test#2/Test#3 devono
-   restare uguali fra loro.
+1. *(Risolto a fine sessione: la conferma all'ascolto è arrivata, vedi l'ultima sezione.)*
+   Resta non fatto l'export `exp#1_*_V1_02`, che avrebbe misurato il guadagno contro la REF
+   invece di giudicarlo dal vivo.
 2. **Le voci acute non sono verificate nel loro registro**: la tabella sopra viene da un file
    che suona C4-D4-E4. Serve un export di flauto o tromba nel proprio registro.
 3. Il ritardo non va a zero: restano convergenza del rilevatore e confine di blocco. Azzerarlo
    richiede il **lookahead**, rimandato per scelta dell'utente.
+
+---
+
+## Chiusura del fronte (aggiunto a fine sessione)
+
+L'utente conferma all'ascolto e **chiude il motore di pitch shifting** (D-19): *"il timbro è
+corretto e gli attacchi pure"*. Si chiude così la catena aperta in s.12: B-02 (timbro a nota
+tenuta), B-04 (buco su preset a gradi parziali), B-13 (attacco sporcato dai gradi intermedi),
+B-14 (offset in ritardo sull'attacco).
+
+**Come è stata data la conferma, perché conti davvero fra sei mesi**: dal vivo in Ableton
+sulla build delle 12:40, **non** su un export confrontato con la REF — in `SAMPLE TEST/` non
+è comparso alcun `_02`, e gli `_01` che l'utente aveva ascoltato sono delle 11:21, cioè della
+build **precedente** al lavoro di B-14. Chiesto e verificato esplicitamente prima di scrivere
+`CHIUSO`, perché una conferma "generale" scambiata per specifica è già costata una nota in
+B-10 (s.30).
+
+Resta quindi verificato **solo per calcolo**: i 79.1 → 44.3 ms, e che Test#2 e Test#3 restino
+uguali fra loro con la build nuova (la rete anti-regressione di B-13, misurata sulla matrice
+di 24 configurazioni).
+
+Il fronte si sposta su M5/UI: **FR-59**, la scala 70–200% + HiDPI.

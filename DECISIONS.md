@@ -422,7 +422,36 @@ in basso di quanto serva a voce/sax/tromba (FR-14), e più in basso del **Trombo
   azzererebbe il ritardo, ma contrasta con PRD §1.3 (≤ 15 ms nel modo più reattivo) e con
   *"progettato per il palco"*. Rimandato per scelta dell'utente, da aprire come decisione a sé.
 
-**Stato** — Attiva, in attesa della conferma all'ascolto di B-14.
+**Stato** — Attiva. B-14 **confermato all'ascolto** in s.32.
+
+---
+
+## D-19 — Il motore di pitch shifting è chiuso
+
+**Contesto** (s.32) — Con B-14 confermato all'ascolto si chiude la catena che ha occupato le
+sessioni 12→32: timbro a nota tenuta (B-02, s.26), buco a inizio nota su preset a gradi
+parziali (B-04, s.27), attacco sporcato dai gradi intermedi (B-13, s.31), offset in ritardo
+sull'attacco (B-14, s.32).
+
+**Decisione** — L'utente dichiara **chiuso il fronte del pitch shifting**: *"adesso possiamo
+definire chiuso il motore audio per il pitch shifting. Il timbro è corretto e gli attacchi
+pure"*.
+
+**Conseguenze**
+- `PsolaShifter`, `Voice` e la catena di sintesi non si toccano più senza un sintomo nuovo
+  **riportato all'ascolto**. Un'ottimizzazione o una rifinitura che non nasca da un difetto
+  udito non è motivo sufficiente: la stabilità raggiunta vale più del guadagno teorico.
+- Le suite `psola` e `voice` diventano la rete di regressione di questa chiusura: devono
+  restare verdi **identiche**, ed è il modo di dimostrare per calcolo che il timbro è intatto
+  quando si lavora a monte (come in s.31 e s.32).
+- **Non chiude i sintomi che restano aperti altrove**: B-03 (click residui occasionali, mai
+  riascoltato nella configurazione di s.12/13) e B-11 (tetto voci) non sono coperti da questa
+  decisione, e nemmeno B-05/B-06 che restano `SOSPESO` per D-15.
+- Le voci acute della lista strumenti (D-18) restano **non verificate nel loro registro**:
+  è l'unico lavoro di misura ancora dovuto su questo fronte, e serve materiale nuovo.
+- Il fronte si sposta su **M5/UI**: FR-59 è l'ultima voce in PRD §12.
+
+**Stato** — Attiva.
 
 ---
 

@@ -522,8 +522,14 @@ deliberatamente fuori scope.
 
 ## B-14 — L'offset corretto arriva dopo l'attacco: la nota parte con quello della precedente
 
-**Stato: APERTO (fix scritto, in attesa d'ascolto)** · Ultimo tocco: s.32 · Confermato
-all'ascolto: **no** — il sintomo sì, il fix no
+**Stato: CHIUSO** · Ultimo tocco: s.32 · Confermato all'ascolto: **sì** (s.32, *"il timbro è
+corretto e gli attacchi pure"*)
+
+> **Natura della conferma, da non confondere in futuro.** È stata data **dal vivo in Ableton**
+> sulla build delle 12:40, **non** su un export confrontato con la REF: in `SAMPLE TEST/`
+> non esiste alcun `_02`. Quindi i numeri di questa entry (79.1 → 44.3 ms) restano
+> **verificati per calcolo**, e ciò che l'utente ha confermato è che *all'ascolto la flem non
+> dà più fastidio*. Se il sintomo tornasse, il primo passo è l'export `_02` che qui manca.
 
 **Sintomo** (utente, s.32, confermando il fix di B-13) — *"per una frazione di secondo, quando
 comincia a suonare la nota, suona l'offset della nota precedente, poi salta a quello corretto.
@@ -597,9 +603,11 @@ suonano nel proprio registro la finestra corta potrebbe comportarsi benissimo. L
 restano quindi in lista, per decisione dell'utente, e **serve un export dedicato** (flauto o
 tromba nel loro registro) per misurarle davvero.
 
-**Prossima azione (utente)** — riesportare `exp#1_Test#1_V1_02` e `exp#1_Maj_V1_02` col
-default Voice Male (E2). La flem deve accorciarsi in modo percepibile, e Test#2/Test#3 devono
-**restare uguali fra loro** (nessuna regressione B-13).
+**Conferma (s.32)** — data dal vivo, insieme alla chiusura dell'intero fronte del motore di
+pitch shifting (D-19): *"il timbro è corretto e gli attacchi pure"*. **Non verificato
+singolarmente**: che Test#2 e Test#3 restino uguali fra loro con la build nuova (la rete
+anti-regressione di B-13) è stato controllato **solo per calcolo**, sulla matrice di 24
+configurazioni.
 
 **Cosa resta comunque** — il ritardo non va a zero. Restano la convergenza del rilevatore e il
 confine di blocco. Azzerarlo richiede il **lookahead** (ritardare l'audio e dichiarare la
