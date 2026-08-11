@@ -84,7 +84,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `OverrideManager.{h,cpp}` | Precedenza CC vs automazione (FR-36/37/38) |
 | `PlayModeInput.{h,cpp}` | Modalità Play. Gain/pan **e formanti** (FR-42, s.30) **per indice di slot**, non per colonna armonica |
 
-### `src/ui/` — 9 file
+### `src/ui/` — 10 file
 | File | Ruolo |
 |---|---|
 | `PresetListEditor.{h,cpp}` | Lista con drag&drop, badge sui primi 5, CC accanto al nome |
@@ -93,6 +93,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `CellInputParser.h` | Parsing di una cella: distingue `0` da vuoto, rifiuta il testo spazzatura (D-05) |
 | `DegreeNames.h` | Nomi leggibili dei gradi (R, b2, 2, b3, …) |
 | `InstrumentRanges.h` | **(s.32)** I 10 strumenti proposti e la nota più grave di ciascuno, **dal più acuto al più grave** — l'ordine è l'informazione. Solo dati, nessuna logica |
+| `UiScale.h` | **(s.33)** FR-59: dimensione logica 900×660, estremi 70–200%, conversioni percentuale ↔ pixel. JUCE-free, coperto da `ui_scale_test` |
 
 ### Cartelle vuote
 `src/state/` · `src/licensing/` · `resources/factory_presets/` (i preset di fabbrica sono

@@ -455,6 +455,70 @@ pure"*.
 
 ---
 
+## D-20 — La finestra si scala, non si ridispone: un layout logico fisso e un solo transform
+
+**Contesto** (s.33) — FR-59 `[MUST]` chiede *"ridimensionamento 70%–200% con resa corretta su
+display HiDPI e Retina"*. Il codice aveva il **reflow** (la finestra era ridimensionabile dalla
+s.25) ma non la **scala**: tutte le costanti di layout in pixel, nessun `AffineTransform`,
+dimensione mai serializzata.
+
+**Decisione** — La forma del layout non cambia mai. Le tre schermate vengono disposte sempre su
+uno spazio logico di **900×660**, e un solo `AffineTransform::scale` porta quello spazio alla
+dimensione fisica richiesta. Il rapporto d'aspetto della finestra è **bloccato**: trascinare
+l'angolo non fa reflow, cambia la scala.
+
+Scartata l'alternativa "due gradi di libertà separati" (scala da menu **più** reflow libero
+dentro la dimensione logica risultante): avrebbe richiesto, nello stesso lavoro, un viewport
+verticale o un'altezza logica minima per non riprodurre il difetto Keep Tails.
+
+**Il transform sta su un COMPONENTE FIGLIO, non sull'`AudioProcessorEditor`.** Non è una
+preferenza di stile, è l'unica via che JUCE consente —
+`juce_AudioProcessorEditor.cpp:193` contiene
+
+```
+jassert (getTransform() == hostScaleTransform);
+// "applying your own transform will obliterate it! ... consider putting the component
+//  you want to transform in a child of the editor and transform that instead"
+```
+
+e `setScaleFactor()` (`:227`) **sovrascrive** il transform dell'editor con quello dell'host. Un
+transform nostro sull'editor sarebbe un assert in Debug e verrebbe cancellato alla prima
+notifica di DPI. Tenuti separati, i due si **compongono**: l'host scala l'editor (HiDPI), noi
+scaliamo il contenuto. FR-59 chiede scala e HiDPI insieme, e così un solo meccanismo li dà
+entrambi.
+
+**La percentuale non è un valore memorizzato**: la fonte di verità è la larghezza attuale della
+finestra, e `resized()` la ricava da lì. Menu e trascinamento sono quindi lo stesso percorso e
+non possono divergere.
+
+**Si serializza nello stato del plugin, non nell'APVTS** — è una preferenza di visualizzazione,
+non un valore musicale: automatizzare "quanto è grande la finestra" non vorrebbe dire niente.
+Nodo `UiSettings` accanto a `MidiCcSettings`, che è il precedente esatto (configurazione da
+salvare ma non da automatizzare). Nessun ID di parametro nuovo, quindi la regola 6 non è in
+gioco.
+
+**Conseguenze**
+- Le costanti di layout in pixel (`rowHeight = 26`, `labelWidth = 60`, l'altezza della tabella
+  preset, i corpi dei font) **restano com'erano e vanno lasciate lì**: ora vivono in uno spazio
+  che non cambia mai dimensione. Chi in futuro fosse tentato di moltiplicarle per un fattore
+  sta rifacendo a mano ciò che il transform fa già.
+- **Il difetto Keep Tails sparisce come effetto collaterale.** Con l'altezza logica fissa a 660,
+  `layoutEdit()` dispone di 562 px e ne chiede 528: **34 px di margine** a qualunque scala.
+  Prima, all'altezza minima di 620 px, i disponibili erano 522 contro 528 richiesti — deficit di
+  6 px, ed è per questo che `keepTailsToggle` collassava (s.30). *Verificato per calcolo: la
+  stessa aritmetica riproduce esattamente i 522/528 documentati allora.*
+- Al 100% **nulla si muove di un pixel** rispetto a prima: 900×660 era già la dimensione
+  d'apertura.
+- Le sessioni salvate prima della s.33 non hanno il nodo `UiSettings` e aprono al 100%.
+
+**Non deciso qui** — a 200% la finestra è 1800×1320 fisici, che non entra in un display 1080p.
+È la lettura letterale di FR-59 ed è lasciata così; limitare il massimo allo schermo sarebbe una
+decisione a sé.
+
+**Stato** — Attiva.
+
+---
+
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |
