@@ -785,6 +785,122 @@ int main()
         if (! allFinite (outL) || ! allFinite (outR)) { ++failures; std::printf ("  FALLITO: uscita non finita\n"); }
     }
 
+    // =========================================================================
+    // FR-40/FR-41/FR-42 — i due CONTROLLI delle formanti (sessione 30, B-07).
+    //
+    // Perche' questi test esistono: B-07 diceva "FR-42 non arriva in Play
+    // mode", ma il perimetro era descritto male. La correzione AUTOMATICA
+    // (FR-39) in Play ha sempre funzionato — le Voice partono dal default
+    // formantSpread=1.0 e in fix semitonesToApply e' lo shift reale. Quello
+    // che non arrivava erano il knob globale Fmt Spread (FR-40) e gli 8 knob
+    // Fmt/Voice (FR-41): PluginProcessor li passava solo a phraseScheduler,
+    // mai a playModeInput. Il cablaggio vero (due righe in processBlock) non
+    // e' misurabile da qui — PlayModeInput dipende da juce::MidiBuffer e
+    // queste suite sono deliberatamente prive di JUCE (D-11). Quello che si
+    // puo' e si DEVE misurare e' l'anello successivo: che i due setter di
+    // Voice producano un effetto reale e QUANTITATIVAMENTE PREVISTO sulle
+    // formanti. Senza questo, "ho aggiunto due righe" non e' una verifica.
+    //
+    // Il percorso riprodotto qui e' esattamente quello di PlayModeInput:
+    // ShiftMode::fix, quantizedPlayedNote=0 e target = nota MIDI assoluta,
+    // quindi semitonesToApply = target - continuousMidi (Voice.cpp).
+    // =========================================================================
+    std::printf ("\n=== FR-40/FR-41 — i controlli delle formanti (B-07) ===\n");
+
+    // Riferimento: dove sta la formante nel segnale ASCIUTTO. Non si assume
+    // 1100 Hz (il valore nominale di makeVowel): si misura, con la stessa
+    // funzione e la stessa risoluzione usate poi sull'uscita, cosi' l'errore
+    // sistematico di formantPeak si cancella nel rapporto.
+    const int    fmtCaptureLen = 16384;
+    const size_t fmtSettleLen  = (size_t) (0.5 * SR); // >> qualunque glide (offset/amp)
+    const double dryPeak = formantPeak (carrier, (int) fmtSettleLen, fmtCaptureLen, SR);
+
+    // Shift di prova. -12 st (non -5): la correzione automatica vale
+    // -k*spread*shift, quindi uno shift piccolo produce uno spostamento
+    // formantico piccolo, dentro la tolleranza di misura — e il test
+    // passerebbe anche con il knob inerte, che e' esattamente il bug da
+    // scoprire. A -12 st l'effetto atteso e' +3.6 semitoni-equivalenti,
+    // ben separato dallo zero.
+    constexpr float kShiftSemitones  = -12.0f;
+    constexpr float kFormantSpreadK  = 0.3f; // deve restare uguale a Voice.cpp
+    const double autoSemitonesAtFull = -(double) kFormantSpreadK * (double) kShiftSemitones; // +3.6
+
+    auto measureFormantPeak = [&] (float spread, float formantOffsetSemitones) -> double
+    {
+        Voice voice;
+        voice.prepare (SR, maxBlockPrepare, Stability::defaultLevel);
+        voice.setMuted (false);
+        voice.setMode (ShiftMode::fix);
+        voice.setTargetOffsetSemitones (continuousMidi + kShiftSemitones);
+        voice.setFormantSpread (spread);
+        voice.setFormantOffsetSemitones (formantOffsetSemitones);
+
+        runSilently (voice, carrier, 0, 256, (int) fmtSettleLen, 0, continuousMidi);
+        const auto out = captureOutput (voice, carrier, fmtSettleLen, 256, fmtCaptureLen, 0, continuousMidi);
+
+        if (! allFinite (out)) { ++failures; std::printf ("  FALLITO: uscita non finita\n"); return 0.0; }
+        return formantPeak (out, 0, fmtCaptureLen, SR);
+    };
+
+    // Tolleranza: stessa di psola_test TEST 3 (beta sposta le formanti),
+    // dove il proxy formantPeak e' gia' stato tarato contro un beta noto.
+    constexpr double kFormantTolPct = 12.0;
+
+    auto checkPeak = [&] (const char* what, double measured, double expectedSemitones) -> bool
+    {
+        const double expected = dryPeak * std::pow (2.0, expectedSemitones / 12.0);
+        const double devPct   = 100.0 * (measured - expected) / expected;
+        const bool   ok       = std::fabs (devPct) < kFormantTolPct;
+        std::printf ("  %-46s picco %6.0f Hz | atteso %6.0f Hz (%+.2f st) | scarto %+6.1f%%  %s\n",
+                     what, measured, expected, expectedSemitones, devPct, ok ? "OK" : "FALLITO");
+        if (! ok) ++failures;
+        return ok;
+    };
+
+    std::printf ("\nT-6 — Fmt Spread (FR-40) governa davvero la correzione automatica\n");
+    std::printf ("  segnale asciutto: picco formantico misurato a %.0f Hz, shift di prova %.0f st\n",
+                 dryPeak, (double) kShiftSemitones);
+    {
+        // spread = 0: la correzione automatica e' spenta, beta = 1, e per
+        // TEST 2 di psola_test con beta = 1 le formanti NON si spostano —
+        // devono restare dove sono nel segnale asciutto, nonostante -12 st.
+        const double peakSpread0 = measureFormantPeak (0.0f, 0.0f);
+        checkPeak ("spread=0 (correzione spenta)", peakSpread0, 0.0);
+
+        // spread = 1: correzione a piena formula.
+        const double peakSpread1 = measureFormantPeak (1.0f, 0.0f);
+        checkPeak ("spread=1 (correzione piena)", peakSpread1, autoSemitonesAtFull);
+
+        // Il controllo DISCRIMINANTE: i due valori devono essere separati.
+        // Se il knob fosse inerte (il bug B-07 un anello piu' a valle) le due
+        // misure coinciderebbero e i due test qui sopra potrebbero comunque
+        // passare entrambi se la tolleranza fosse larga. Questo no.
+        const double ratioSemitones = 12.0 * std::log2 (peakSpread1 / peakSpread0);
+        const double devSt = ratioSemitones - autoSemitonesAtFull;
+        const bool   ok    = std::fabs (devSt) < 1.0; // 1 semitono su 3.6 attesi
+        std::printf ("  %-46s %+.2f st | atteso %+.2f st | scarto %+.2f st  %s\n",
+                     "separazione spread=0 -> spread=1", ratioSemitones, autoSemitonesAtFull, devSt,
+                     ok ? "OK" : "FALLITO (il knob non sposta nulla)");
+        if (! ok) ++failures;
+    }
+
+    std::printf ("\nT-7 — Fmt/Voice (FR-41) si SOMMA in semitoni alla correzione automatica\n");
+    {
+        // Offset manuale da solo, correzione automatica spenta: deve valere
+        // esattamente se stesso.
+        constexpr double kManualOnly = 5.0;
+        const double peakManual = measureFormantPeak (0.0f, (float) kManualOnly);
+        checkPeak ("spread=0, offset manuale +5 st", peakManual, kManualOnly);
+
+        // La verifica vera della SOMMA: un offset manuale pari all'opposto
+        // della correzione automatica deve annullarla esattamente. E' il caso
+        // piu' discriminante possibile — se le due grandezze si combinassero
+        // in qualunque altro modo (prodotto di rapporti gia' in semitoni,
+        // sostituzione, saturazione) il picco non tornerebbe sull'asciutto.
+        const double peakCancel = measureFormantPeak (1.0f, (float) -autoSemitonesAtFull);
+        checkPeak ("spread=1, offset manuale -3.6 st (annulla)", peakCancel, 0.0);
+    }
+
     std::printf ("\n===================================\n");
     std::printf ("%s  (%d verifiche fallite)\n",
                  failures == 0 ? "TUTTI I TEST SUPERATI" : "TEST FALLITI", failures);

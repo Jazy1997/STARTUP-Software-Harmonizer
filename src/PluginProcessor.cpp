@@ -384,7 +384,17 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     phraseScheduler.setGlideTimeMs (glideMs);
     phraseScheduler.setVoiceCap (voiceCap);
     phraseScheduler.setFormantSpread (formantSpread);
+    playModeInput.setFormantSpread (formantSpread); // FR-42 (B-07)
     phraseScheduler.setKeepTails (keepPhraseTails);
+
+    // Il loop qui sotto indicizza il pool di Play con lo stesso v che indicizza
+    // le colonne armoniche: sono due costanti INDIPENDENTI che oggi valgono
+    // entrambe 8. Se una delle due cambiasse, gain/pan/formanti scriverebbero
+    // fuori dal pool di Play senza che nulla lo segnali.
+    static_assert (PlayModeInput::maxNotes == harmony::numVoices,
+                   "Il pool di Play e le colonne armoniche devono avere la stessa cardinalita': "
+                   "il loop di processBlock usa un solo indice per entrambi.");
+
     for (int v = 0; v < harmony::numVoices; ++v)
     {
         const bool isFix = *apvts.getRawParameterValue (ParamIDs::voiceFix (v)) >= 0.5f;
@@ -392,6 +402,7 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
         const float formantOffset = *apvts.getRawParameterValue (ParamIDs::voiceFormantOffset (v));
         phraseScheduler.setVoiceFormantOffset (v, formantOffset);
+        playModeInput.setVoiceFormantOffset (v, formantOffset); // FR-42 (B-07)
 
         // FR-11/§8.1: conversione dB->lineare fatta QUI, non dentro Voice —
         // Voice/voice_test restano privi di dipendenze JUCE (vedi Voice.h).

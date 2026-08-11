@@ -43,6 +43,33 @@ public:
     void setVoiceGainLinear (int slotIndex, float gainLinear) { voicePool.getSlot (slotIndex).setGainLinear (gainLinear); }
     void setVoicePan (int slotIndex, float pan) { voicePool.getSlot (slotIndex).setPan (pan); }
 
+    // FR-42: la correzione delle formanti si applica anche in modalita' Play.
+    //
+    // ATTENZIONE a cosa era davvero rotto (B-07): la correzione AUTOMATICA
+    // (FR-39) qui ha sempre funzionato, perche' le Voice partono dal default
+    // membro formantSpread=1.0 e in ShiftMode::fix semitonesToApply e' lo
+    // shift reale (Voice.cpp: targetAbsoluteMidi - continuousInputMidiNote).
+    // Quello che mancava erano i due CONTROLLI: il knob globale Fmt Spread
+    // (FR-40) e gli 8 knob Fmt/Voice (FR-41) non arrivavano fin qui, quindi
+    // erano inerti in Play mentre gain e pan funzionavano.
+    //
+    // Spread e' globale -> tutti gli slot, come PhraseScheduler::setFormantSpread.
+    void setFormantSpread (float spread)
+    {
+        for (int i = 0; i < maxNotes; ++i)
+            voicePool.getSlot (i).setFormantSpread (spread);
+    }
+
+    // L'offset per voce si scrive direttamente sullo slot, e NON come fa
+    // PhraseScheduler::setVoiceFormantOffset (che itera le frasi attive per
+    // trovare lo slot fisico che interpreta quella colonna armonica): qui non
+    // esiste il concetto di frase ne' di colonna, gli 8 slot SONO le 8 voci.
+    // Vale quindi la stessa asimmetria gia' documentata sopra per gain e pan:
+    // "voce N" e' l'N-esimo slot allocato, non un ruolo musicale, quindi il
+    // knob agisce su qualunque nota sia finita in quello slot. E' la scelta
+    // coerente con FR-11, non una semantica nuova introdotta qui.
+    void setVoiceFormantOffset (int slotIndex, float semitones) { voicePool.getSlot (slotIndex).setFormantOffsetSemitones (semitones); }
+
     // Da chiamare ogni blocco, ANCHE quando la modalita' Play non e'
     // attiva (modeActive=false): il tracking delle note premute resta
     // aggiornato (riattivare Play non richiede un nuovo note-on) e il
