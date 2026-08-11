@@ -246,6 +246,25 @@ add_executable(envelope_probe
 target_include_directories(envelope_probe PRIVATE src)
 target_compile_features(envelope_probe PRIVATE cxx_std_20)
 
+# Strumento diagnostico OFFLINE — sessione 31 ("attacchi sporchi", B-13):
+# quale SEQUENZA di offset la catena di controllo chiede al motore mentre la
+# melodia cambia nota. Nessun Voice e nessun PsolaShifter dentro, di proposito:
+# serve a dire se il difetto nasce PRIMA della sintesi o dentro. Gira i moduli
+# veri (PitchDetector, OnsetDetector, PitchLatch, stepEmptyCellHold). Vedi
+# tests/degree_trace_probe.cpp. NON in ctest: dipende da WAV esterni.
+add_executable(degree_trace_probe
+    tests/degree_trace_probe.cpp
+    src/dsp/PitchDetector.cpp
+    src/dsp/OnsetDetector.cpp
+)
+target_include_directories(degree_trace_probe PRIVATE
+    src
+    tests
+    libs/q/q_lib/include
+    libs/q/infra/include
+)
+target_compile_features(degree_trace_probe PRIVATE cxx_std_20)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
