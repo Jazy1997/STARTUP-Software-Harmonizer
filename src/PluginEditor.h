@@ -33,6 +33,10 @@ private:
     void syncPresetSelectionFromParameter();
     void syncRootNoteFromParameter();
     void syncCcControlsFromRouter();
+    // B-14/D-18: il parametro serializza la nota, la ComboBox mostra uno
+    // strumento — la corrispondenza va rifatta a ogni giro del Timer, come per
+    // gli altri controlli senza Attachment.
+    void syncInstrumentBoxFromParameter();
     void commitRename();
     void selectPresetIndex (int index);
     void selectRootNote (int pitchClass);
@@ -151,6 +155,15 @@ private:
     // FR-51: tetto voci simultanee tra tutte le frasi — non fa parte del
     // gruppo di manopole FR-78, resta uno slider lineare.
     juce::Slider maxVoicesSlider;
+    // B-14/D-18: quale strumento si sta suonando, cioe' la nota piu' grave che
+    // il rilevatore deve agganciare. La lista e' ordinata dal piu' ACUTO al
+    // piu' GRAVE perche' l'ordine e' esso stesso l'informazione: piu' si
+    // scende, piu' tarda l'armonia a correggersi sull'attacco.
+    //
+    // Non ha un Attachment APVTS: l'itemId e' la posizione in lista, mentre il
+    // parametro serializza la NOTA (vedi createParameterLayout). Lega i due
+    // sensi a mano, esattamente come le caselle CC qui accanto.
+    juce::ComboBox instrumentBox;
     // FR-83: diagnostica completa (confidenza, stabile/instabile, gate,
     // late-bindings, block size) — esattamente il testo di prima, spostato
     // qui da Main.
@@ -174,6 +187,11 @@ private:
     juce::Label detectedLabel { {}, "Detected" };
     juce::Label detectedShortLabel { {}, "Nota" };
     juce::Label midiChannelLabel { {}, "MIDI Ch" };
+    juce::Label instrumentLabel  { {}, "Strumento" };
+    // Testo in solo ASCII, come tutto il resto dei sorgenti: senza /utf-8
+    // MSVC rilegge i byte UTF-8 col codepage di sistema e un trattino lungo
+    // finisce a schermo come "a" piu' due caratteri illeggibili (visto).
+    juce::Label instrumentHintLabel { {}, "dal piu' acuto al piu' grave: piu' in basso, piu' tarda l'armonia" };
     juce::Label rootCcLabel      { {}, "CC Root" };
     juce::Label presetCcLabel    { {}, "CC Chord" };
     juce::Label bypassCcLabel    { {}, "CC Bypass" };

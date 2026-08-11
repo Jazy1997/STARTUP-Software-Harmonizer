@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "harmony/CsvIo.h"
+#include "ui/InstrumentRanges.h"
 
 namespace
 {
@@ -330,6 +331,43 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
         processorRef.getCcRouter().setMidiChannel (itemId <= 1 ? 0 : itemId - 1);
     };
 
+    // B-14/D-18: lo strumento suonato, cioe' la nota piu' grave che il
+    // rilevatore deve agganciare. Lista dal piu' acuto al piu' grave (vedi
+    // ui/InstrumentRanges.h): scendendo, l'armonia tarda di piu' a correggersi
+    // sull'attacco, e l'ordine e' il modo di dirlo senza un numero da spiegare.
+    //
+    // Niente ComboBoxAttachment: l'itemId e' la posizione in lista, il
+    // parametro serializza la NOTA. Si legano i due sensi a mano, come per le
+    // caselle CC; la risincronizzazione arriva dal Timer gia' esistente.
+    for (size_t i = 0; i < ui::kInstrumentRanges.size(); ++i)
+    {
+        const auto& instrument = ui::kInstrumentRanges[i];
+        instrumentBox.addItem (juce::String (instrument.name) + "   -   " + instrument.noteName,
+                               (int) i + 1);
+    }
+    settingsPage.addAndMakeVisible (instrumentBox);
+    instrumentLabel.attachToComponent (&instrumentBox, true);
+    settingsPage.addAndMakeVisible (instrumentLabel);
+    instrumentHintLabel.setJustificationType (juce::Justification::centredLeft);
+    instrumentHintLabel.setFont (juce::FontOptions (11.0f));
+    settingsPage.addAndMakeVisible (instrumentHintLabel);
+    instrumentBox.onChange = [this]
+    {
+        const int index = instrumentBox.getSelectedId() - 1;
+        if (index < 0 || index >= (int) ui::kInstrumentRanges.size())
+            return;
+
+        if (auto* param = dynamic_cast<juce::AudioParameterInt*> (
+                processorRef.apvts.getParameter ("analysisLowestNote")))
+        {
+            const int note = ui::kInstrumentRanges[(size_t) index].lowestNoteMidi;
+            param->beginChangeGesture();
+            param->setValueNotifyingHost (param->convertTo0to1 (note));
+            param->endChangeGesture();
+        }
+    };
+    syncInstrumentBoxFromParameter();
+
     // FR-30/31/33/79: numero CC per funzione (casella di testo numerica, non
     // piu' slider trascinabile) + MIDI Learn. Non sono
     // AudioProcessorValueTreeState::SliderAttachment: i numeri CC non sono
@@ -624,6 +662,17 @@ void HarmonizerAudioProcessorEditor::layoutSettings (juce::Rectangle<int> area)
     layoutRow (midiChannelBox);
     layoutRow (maxVoicesSlider);
 
+    // B-14: lo strumento, con sotto la riga che spiega perche' l'ordine della
+    // lista conta. La nota di aiuto non ha etichetta a sinistra: occupa tutta
+    // la larghezza utile, altrimenti a finestra stretta viene tagliata.
+    layoutRow (instrumentBox);
+    {
+        auto hintRow = area.removeFromTop (rowHeight - 8);
+        hintRow.removeFromLeft (labelWidth);
+        instrumentHintLabel.setBounds (hintRow);
+        area.removeFromTop (gap);
+    }
+
     layoutRow (detectedValueLabel);
 }
 
@@ -649,6 +698,7 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     syncPresetSelectionFromParameter();
     syncRootNoteFromParameter();
     syncCcControlsFromRouter();
+    syncInstrumentBoxFromParameter();
 
     activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
 
@@ -783,6 +833,37 @@ void HarmonizerAudioProcessorEditor::selectPresetIndex (int index)
 
     lastSyncedSelectedIndex = -1; // forza il riallineamento immediato sotto
     syncPresetSelectionFromParameter();
+}
+
+void HarmonizerAudioProcessorEditor::syncInstrumentBoxFromParameter()
+{
+    auto* param = dynamic_cast<juce::AudioParameterInt*> (
+        processorRef.apvts.getParameter ("analysisLowestNote"));
+    if (param == nullptr)
+        return;
+
+    const int note = param->get();
+
+    // Prima voce che corrisponde alla nota. Due strumenti possono condividere
+    // la stessa nota (Voice Female e Bb Trumpet stanno entrambi su E3): il
+    // parametro non li distingue — di proposito, perche' cio' che conta per il
+    // suono e' la nota, non l'etichetta — quindi vince chi viene prima in
+    // lista. E' l'unica conseguenza visibile della scelta di serializzare la
+    // nota invece della posizione (D-18).
+    int itemId = 0;
+    for (size_t i = 0; i < ui::kInstrumentRanges.size(); ++i)
+        if (ui::kInstrumentRanges[i].lowestNoteMidi == note)
+        {
+            itemId = (int) i + 1;
+            break;
+        }
+
+    // Nessuna corrispondenza: il parametro e' su una nota che nessuno
+    // strumento in lista dichiara (automazione host, o una lista cambiata dopo
+    // che la sessione era stata salvata). Si lascia la casella vuota invece di
+    // mentire mostrando lo strumento sbagliato.
+    if (itemId != instrumentBox.getSelectedId())
+        instrumentBox.setSelectedId (itemId, juce::dontSendNotification);
 }
 
 void HarmonizerAudioProcessorEditor::syncRootNoteFromParameter()
