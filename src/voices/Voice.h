@@ -149,6 +149,38 @@ public:
     // il chiamante (PhraseScheduler) lo sa gia', non e' verificato qui.
     void processWarmOnly (const float* monoIn, int numSamples, float continuousInputMidiNote);
 
+    // Sessione 34 (B-15, percorso Play) — come processWarmOnly sopra, ma il
+    // motore riceve anche il RAPPORTO DI TRASPOSIZIONE e le formanti che
+    // questa voce avra' quando tornera' udibile, invece di continuare a
+    // girare con quelli della nota precedente.
+    //
+    // Serve perche' PsolaShifter::synthesise() riempie outBuf IN ANTICIPO
+    // (fino a absWrite - maxPeriod): con la sola processWarmOnly a 3
+    // argomenti, al momento in cui la dissolvenza parte ci sono gia' ~10 ms
+    // di uscita sintetizzata all'intonazione VECCHIA, e la giunzione con
+    // quella giusta cade a guadagno pieno — un salto di ampiezza misurato
+    // 2.3-5.1 volte quello del regime (PM-3, tests/play_mode_input_test.cpp).
+    // L'esperimento di controllo PM-7 (seconda nota alla STESSA altezza:
+    // PM-3 ~1.0, prima e dopo) isola il cambio di rapporto come causa unica.
+    //
+    // ATTENZIONE all'ordine di chiamata: questo metodo consuma
+    // justReactivated ed avanza offsetGlide, quindi il chiamante deve aver
+    // gia' chiamato setMuted(false) — altrimenti l'aggancio al bersaglio non
+    // e' armato e il riscaldamento gira su un'intonazione che SCIVOLA, che e'
+    // esattamente il difetto che questo metodo esiste per evitare. Vedi
+    // PlayModeInput::process. ampGlide non viene toccato (la sua rampa vive
+    // solo in processAdd), quindi la dissolvenza degli 8 ms comincia comunque
+    // dopo, sul segnale vero.
+    //
+    // NON e' usato dalla catena Harmonizer: PhraseScheduler continua a
+    // chiamare la versione a 3 argomenti, invariata (D-19 — le suite
+    // voice/psola/phrase_scheduler devono restare identiche). Lo stesso
+    // miglioramento e' probabilmente disponibile anche per i suoi rami di
+    // riscaldamento (celle vuote B-04, late-binding B-12): deliberatamente
+    // fuori scope, va misurato prima, vedi BUGS.md/B-15.
+    void processWarmOnly (const float* monoIn, int numSamples,
+                          int quantizedPlayedNote, float continuousInputMidiNote);
+
     // Lo slot fisico viene restituito al pool (fine naturale di una frase,
     // tutte le sue voci gia' isSilent(): vedi PhraseScheduler::process()) —
     // da qui in poi nessuno lo rifornisce piu', ne' con processAdd ne' con
@@ -165,6 +197,16 @@ public:
     void goCold() noexcept;
 
 private:
+    // Sessione 34 — ESTRAZIONE PURA dal corpo di processAdd: aggancio
+    // dell'offset al riattacco, avanzamento di offsetGlide, calcolo dello
+    // shift da applicare, correzione formantica, e la corsa del motore dentro
+    // `scratch`. Tutto cio' che processAdd faceva PRIMA di mischiare l'uscita
+    // nel mix, spostato qui senza cambiare una riga di matematica ne' l'ordine
+    // in cui i glide avanzano — cosi' processWarmOnly a 4 argomenti puo'
+    // riusarlo scartando `scratch` invece di duplicare la formula.
+    void runShifter (const float* monoIn, int numSamples,
+                     int quantizedPlayedNote, float continuousInputMidiNote);
+
     std::unique_ptr<PitchShifter> shifter;
     std::vector<float> scratch;
     Glide offsetGlide;

@@ -61,42 +61,48 @@ void Voice::swapShifterNoAlloc (std::unique_ptr<PitchShifter>& shifterInOut) noe
     shifter.swap (shifterInOut);
 }
 
-void Voice::processAdd (const float* monoIn, float* mixL, float* mixR, int numSamples,
-                         int quantizedPlayedNote, float continuousInputMidiNote)
+void Voice::processWarmOnly (const float* monoIn, int numSamples,
+                             int quantizedPlayedNote, float continuousInputMidiNote)
 {
-    // Sessione 12: NON si esce piu' subito perche' muted e' vero — si esce
-    // solo quando la dissolvenza ha davvero finito (isSilent()). Cosi' il
-    // chiamante puo' smettere di rifornire audio a una voce (fine frase,
-    // silenzio, cella tornata vuota su una frase ancora viva) senza tagliare
-    // di netto: le ultime chiamate a processAdd, con muted=true, producono
-    // ancora suono ma in dissolvenza verso zero.
-    if (shifter == nullptr || isSilent())
+    if (shifter == nullptr)
         return;
 
+    // Stesso percorso di processAdd fino all'uscita del motore, uscita
+    // scartata: vedi Voice.h per il perche' (il rapporto di trasposizione
+    // deve essere gia' quello nuovo mentre il motore si scalda, altrimenti
+    // sintetizza in anticipo l'intonazione vecchia). ampGlide non viene
+    // toccato: la voce resta a guadagno zero finche' processAdd non prende
+    // il posto di questa chiamata.
+    runShifter (monoIn, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+}
+
+void Voice::runShifter (const float* monoIn, int numSamples,
+                        int quantizedPlayedNote, float continuousInputMidiNote)
+{
     // Sessione 16 (fix dell'intonazione stantia al riattacco, vedi
     // Voice.h/setMuted per la diagnosi completa): consumato qui, non dentro
     // setTargetOffsetSemitones, perche' l'ordine con cui i due chiamanti
     // impostano target/mute e' diverso (PhraseScheduler.cpp: setMuted POI
     // setTarget; PlayModeInput.cpp: setTarget al note-on, POI setMuted
-    // quando il segnale torna stabile, anche blocchi dopo) — processAdd()
-    // e' l'unico punto che arriva sempre PER ULTIMO in entrambi i casi,
-    // quando il target giusto e' gia' stato impostato per certo.
-    // offsetGlide.reset(getTarget()) aggancia current al target CORRENTE,
-    // qualunque esso sia in questo momento: nessuna scivolata dalla nota
-    // precedente occupante lo stesso slot fisico.
+    // quando il segnale torna stabile, anche blocchi dopo) — questo punto
+    // arriva sempre PER ULTIMO in entrambi i casi, quando il target giusto
+    // e' gia' stato impostato per certo. offsetGlide.reset(getTarget())
+    // aggancia current al target CORRENTE, qualunque esso sia in questo
+    // momento: nessuna scivolata dalla nota precedente occupante lo stesso
+    // slot fisico.
+    //
+    // Sessione 34: "questo punto" era processAdd(), ed e' diventato
+    // runShifter() — che processAdd chiama subito e che ora chiama anche
+    // processWarmOnly a 4 argomenti. Il ragionamento non cambia, ma
+    // guadagna un caso: durante il riscaldamento di uno slot in Play
+    // l'aggancio scatta al PRIMO blocco riscaldato, cosi' il motore non
+    // sintetizza in anticipo un'intonazione che scivola (B-15).
     if (justReactivated)
     {
         offsetGlide.reset (offsetGlide.getTarget());
         justReactivated = false;
     }
 
-    // Sessione 13 (click residui): con un buffer host piu' lungo della
-    // rampa (8ms = 353 campioni a 44.1kHz; l'utente ha misurato 4096
-    // campioni con MME/DirectX in Ableton) ampGlide.process(numSamples)
-    // faceva scattare l'intera dissolvenza in un solo campione — il fix di
-    // sessione 12 era di fatto un no-op in quella configurazione. Vedi
-    // Glide::processRamp e tests/glide_test.cpp.
-    const auto ampRamp = ampGlide.processRamp (numSamples);
     const float smoothedOffset = offsetGlide.process (numSamples);
 
     float semitonesToApply;
@@ -141,6 +147,38 @@ void Voice::processAdd (const float* monoIn, float* mixL, float* mixR, int numSa
 
     shifter->setPitchShiftSemitones (semitonesToApply);
     shifter->process (monoIn, scratch.data(), numSamples);
+}
+
+void Voice::processAdd (const float* monoIn, float* mixL, float* mixR, int numSamples,
+                         int quantizedPlayedNote, float continuousInputMidiNote)
+{
+    // Sessione 12: NON si esce piu' subito perche' muted e' vero — si esce
+    // solo quando la dissolvenza ha davvero finito (isSilent()). Cosi' il
+    // chiamante puo' smettere di rifornire audio a una voce (fine frase,
+    // silenzio, cella tornata vuota su una frase ancora viva) senza tagliare
+    // di netto: le ultime chiamate a processAdd, con muted=true, producono
+    // ancora suono ma in dissolvenza verso zero.
+    if (shifter == nullptr || isSilent())
+        return;
+
+    // Sessione 13 (click residui): con un buffer host piu' lungo della
+    // rampa (8ms = 353 campioni a 44.1kHz; l'utente ha misurato 4096
+    // campioni con MME/DirectX in Ableton) ampGlide.process(numSamples)
+    // faceva scattare l'intera dissolvenza in un solo campione — il fix di
+    // sessione 12 era di fatto un no-op in quella configurazione. Vedi
+    // Glide::processRamp e tests/glide_test.cpp.
+    //
+    // Sessione 34: questa riga sta ora PRIMA dell'aggancio di justReactivated
+    // e dell'avanzamento di offsetGlide, che si sono spostati dentro
+    // runShifter — prima veniva in mezzo ai due. I due stati sono disgiunti
+    // (ampGlide da una parte, offsetGlide/justReactivated dall'altra: nessuno
+    // dei due legge l'altro), quindi l'ordine non cambia un solo campione.
+    // Verificato empiricamente, non solo per ragionamento: le uscite di
+    // voice_test, psola_test e phrase_scheduler_test sono bit-identiche a
+    // prima dell'estrazione (D-19: sono la rete di regressione del motore).
+    const auto ampRamp = ampGlide.processRamp (numSamples);
+
+    runShifter (monoIn, numSamples, quantizedPlayedNote, continuousInputMidiNote);
 
     // FR-11: gain e pan utente per voce, con lo stesso trattamento anti-click
     // campione-per-campione gia' usato per ampRamp (sessioni 12/13 — un
