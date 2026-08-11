@@ -194,6 +194,9 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
 
     pitchDetector.prepare (sampleRate);
     onsetDetector.prepare (sampleRate);
+    // Sessione 31 (B-13): l'attesa prima di adottare una nota nuova e' in
+    // millisecondi, quindi dipende dalla SR — vedi PitchLatch.h.
+    pitchLatch.prepare (sampleRate);
 
     // Sessione 12: rampa fissa anti-click, indipendente dal glideTimeMs
     // musicale — vedi il commento sul membro in PluginProcessor.h. Il
@@ -474,9 +477,13 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         // FR-16/17 (sessione 11): isteresi di +-25 cent invece di un
         // arrotondamento nudo — vedi PitchLatch.h. onsetDetectedThisBlock
         // forza l'aggancio immediato su un vero attacco; altrimenti (nota
-        // legata) la nota resta ferma entro la tolleranza e scatta di un
-        // semitono per volta quando la si supera davvero.
-        quantizedPlayedNote = pitchLatch.update (continuousInputMidiNote, onsetDetectedThisBlock);
+        // legata) la nota resta ferma entro la tolleranza e, quando la si
+        // supera davvero, scatta DIRETTAMENTE sulla nota d'arrivo dopo una
+        // breve conferma — mai per gradi intermedi (sessione 31, B-13:
+        // ognuno di quei gradi e' una colonna della tabella che il motore
+        // suonava sul serio). numSamples serve a misurare quella conferma in
+        // millisecondi invece che in blocchi.
+        quantizedPlayedNote = pitchLatch.update (continuousInputMidiNote, onsetDetectedThisBlock, numSamples);
         offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
     }
     else if (! signalPresent)

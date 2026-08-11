@@ -259,6 +259,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
+        pitchLatch.prepare (sr);
 
         Voice voice;
         voice.prepare (sr, block, stabilityLevel);
@@ -290,7 +291,7 @@ namespace
             }
             else if (inputIsStable)
             {
-                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock);
+                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock, block);
                 const int degree = degreeOf (quantizedNote, rootPitchClass);
                 if (degree != lastDegree)
                 {
@@ -328,6 +329,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
+        pitchLatch.prepare (sr);
 
         Voice slots[2];
         slots[0].prepare (sr, block, stabilityLevel);
@@ -374,7 +376,7 @@ namespace
 
             if (signalPresent && inputIsStable)
             {
-                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock);
+                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock, block);
                 const int degree = degreeOf (quantizedNote, rootPitchClass);
                 slots[activeSlot].setMuted (false);
                 slots[activeSlot].setTargetOffsetSemitones (kMajV1Table[degree]);
@@ -430,6 +432,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
+        pitchLatch.prepare (sr);
 
         Voice voice;
         voice.prepare (sr, block, stabilityLevel);
@@ -469,7 +472,7 @@ namespace
             }
             else if (inputIsStable)
             {
-                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock);
+                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock, block);
                 const int degree = degreeOf (quantizedNote, rootPitchClass);
                 const auto& cell = kSparseTable[degree];
 
@@ -638,6 +641,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
+        pitchLatch.prepare (sr);
 
         std::vector<Voice> slots ((size_t) numPhysicalSlots);
         for (auto& s : slots)
@@ -738,7 +742,7 @@ namespace
                     np->slot = -1;
                     np->age = ++ageCounter;
 
-                    const int quantizedNote = pitchLatch.update (continuousMidi, true);
+                    const int quantizedNote = pitchLatch.update (continuousMidi, true, block);
                     const int degree = degreeOf (quantizedNote, rootPitchClass);
                     const auto& cell = kSparseTable[degree];
                     if (cell.has_value())
@@ -751,7 +755,7 @@ namespace
             }
             else if (inputIsStable)
             {
-                const int quantizedNote = pitchLatch.update (continuousMidi, false);
+                const int quantizedNote = pitchLatch.update (continuousMidi, false, block);
                 const int degree = degreeOf (quantizedNote, rootPitchClass);
                 const auto& cell = kSparseTable[degree];
 
@@ -884,6 +888,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
+        pitchLatch.prepare (sr);
 
         Voice voice;
         voice.prepare (sr, block, stabilityLevel);
@@ -920,7 +925,7 @@ namespace
             }
             else if (inputIsStable)
             {
-                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock);
+                const int quantizedNote = pitchLatch.update (continuousMidi, onsetThisBlock, block);
                 const int degree = degreeOf (quantizedNote, rootPitchClass);
                 const auto& cell = kSparseTable[degree];
 
