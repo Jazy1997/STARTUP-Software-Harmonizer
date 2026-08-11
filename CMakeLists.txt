@@ -191,6 +191,25 @@ target_include_directories(phrase_scheduler_test PRIVATE src tests libs/signalsm
 target_compile_features(phrase_scheduler_test PRIVATE cxx_std_20)
 target_link_libraries(phrase_scheduler_test PRIVATE juce::juce_core)
 
+# Banco di misura dell'attacco di nota in modalita' Play (sessione 34, B-06
+# riaperto): pilota il VERO PlayModeInput con veri juce::MidiBuffer, l'unico
+# livello a cui esistono note-on/note-off e allocazione degli slot. Come
+# phrase_scheduler_test sta nel secondo livello di D-16 — linka JUCE
+# (juce_audio_basics per MidiBuffer), quindi gira in ctest ma NON nel gate a
+# g++ nudo della CI (A-06).
+add_executable(play_mode_input_test
+    tests/play_mode_input_test.cpp
+    src/midi/PlayModeInput.cpp
+    src/voices/VoicePool.cpp
+    src/voices/Voice.cpp
+    src/dsp/PsolaShifter.cpp
+    src/dsp/SpectralShifter.cpp
+    src/dsp/PitchShifterFactory.cpp
+)
+target_include_directories(play_mode_input_test PRIVATE src tests libs/signalsmith-stretch)
+target_compile_features(play_mode_input_test PRIVATE cxx_std_20)
+target_link_libraries(play_mode_input_test PRIVATE juce::juce_audio_basics)
+
 # Strumento diagnostico OFFLINE per il click "in mezzo alla nota" (sessione
 # 17, segnalato dopo aver riascoltato il fix di sessione 16): legge un file
 # WAV vero fornito dall'utente e cerca discontinuita' anomale con la stessa
@@ -284,4 +303,5 @@ add_test(NAME cell_input_parser COMMAND cell_input_parser_test)
 add_test(NAME voice COMMAND voice_test)
 add_test(NAME empty_cell_hold COMMAND empty_cell_hold_test)
 add_test(NAME phrase_scheduler COMMAND phrase_scheduler_test)
+add_test(NAME play_mode_input COMMAND play_mode_input_test)
 add_test(NAME ui_scale COMMAND ui_scale_test)
