@@ -214,6 +214,21 @@ di s.27.
    e 8 — è anche il vantaggio di CPU che il PRD §9.2 attribuisce a PSOLA e che oggi
    non viene sfruttato.
 
+**Aggiornamento s.34 — risolto sul percorso Play, resta sospeso sull'Harmonizer.** Indagando
+B-15 (click a ogni attacco in modalità Play) questo meccanismo è stato misurato lì e corretto,
+con una **terza strada** che in s.30 non era stata vista e che costa molto meno della strada 1:
+non si tengono caldi gli slot liberi, si riscalda **su richiesta** al note-on
+(`processWarmOnly` per la latenza dichiarata, a voce muta, prima di far partire la
+dissolvenza — lo schema di `Phrase::warmupSamples`/B-12). Il costo è quello di una voce per
+~20 ms dopo ogni note-on invece che permanente, e il rapporto 0.987 misurato qui sopra resta
+valido: è proprio perché è così alto che tenere caldi 8 slot liberi in permanenza non
+conviene. Misurato sul percorso Play: salto d'ampiezza alla prima nota da 2.07–2.12 a
+0.94–1.02 volte il regime.
+
+Sul percorso **Harmonizer** nulla è cambiato: `PhraseScheduler` scalda solo al late-binding
+(B-12) e sulle celle vuote (B-04), non alla prima nota dopo silenzio totale. Questa entry
+resta quindi `SOSPESO` per quella metà, e la strada 2 resta interessante a prescindere.
+
 ---
 
 ## B-07 — FR-42 non arriva in Play mode
@@ -613,3 +628,127 @@ configurazioni.
 confine di blocco. Azzerarlo richiede il **lookahead** (ritardare l'audio e dichiarare la
 latenza all'host), rimandato per scelta dell'utente in s.32: contrasta con PRD §1.3
 (≤ 15 ms nel modo più reattivo) e va aperto come decisione a sé.
+
+---
+
+## B-15 — Click a ogni attacco di nota in modalità Play
+
+**Stato: APERTO** (fix in codice, misurato) · Ultimo tocco: s.34 · Confermato
+all'ascolto: **non ancora** — serve la conferma dell'utente prima di `CHIUSO`
+(`CLAUDE.md` regola 12)
+
+**Sintomo** (utente, s.34) — *"Quando clicco una nota sulla tastiera midi il plug in la
+armonizza correttamente, ma sento un click all'inizio."* Precisato su domanda:
+**ogni volta che si preme un tasto**, non solo alla prima nota dopo un silenzio.
+
+**Perché è entry propria e non B-06** — B-06 descrive lo slot freddo alla *primissima*
+nota, sul percorso di allocazione dell'Harmonizer. Questo è un sintomo diverso (ogni
+note-on, in Play) e la sua causa dominante è risultata un'altra: il rapporto di
+trasposizione, non la temperatura del motore. B-06 resta aperto per la sua metà
+Harmonizer, vedi la nota aggiunta lì.
+
+**Banco di misura** — `tests/play_mode_input_test.cpp`, nuovo, in `ctest` (secondo livello
+D-16: linka `juce_audio_basics` per `juce::MidiBuffer`). Pilota il **vero** `PlayModeInput`
+con veri `MidiBuffer`: è l'unico livello a cui esistono i note-on e l'allocazione degli slot.
+Sorgente sintetica stazionaria a 220 Hz, `inputIsStable` sempre vero, così l'unica variabile
+è il tasto premuto. Metriche PM-1 (ritardo), PM-2 (salita 10→90%), PM-3 (salto di ampiezza
+all'attacco / salto a regime), PM-4 (intonazione nella dissolvenza), PM-5/PM-6/PM-7 (scenari).
+
+**PM-2 non è servita, ed è una lezione** — era la metrica ovvia (con quella fu chiuso B-12),
+ma su questo percorso misura male: l'inviluppo RMS dell'uscita PSOLA è grumoso alla cadenza
+dei grani, e la stessa "prima nota" dava 4.9–10.1 ms a MIDI 64 e 2.2 ms a MIDI 52 — cambiava
+con la profondità dello shift, non con la presenza del difetto. Il cancello è su **PM-3**, che
+è la definizione di click usata in questo progetto da s.12 (un salto di ampiezza discontinuo).
+
+**Due cause, trovate in quest'ordine**
+
+1. **Nessun riscaldamento del motore, e nessun `goCold()`.** Uno slot senza nota premuta non
+   riceve campioni (`PlayModeInput.cpp` saltava `processAdd`, e `Voice::processAdd` esce
+   comunque su `isSilent()`), quindi il `PitchShifter` restava **affamato**: `absWrite`/
+   `absRead`/`lastEpoch`/`synthPos` congelati e ring pieno dell'audio della nota precedente.
+   `goCold()` non era chiamato da nessuna parte in Play (grep su tutti i call site: zero).
+   Al note-on i primi `latency` campioni in uscita venivano da quel contenuto vecchio, e gli
+   8 ms di `ampGlide` si consumavano lì dentro. È B-12 alla lettera, mai portato su Play.
+   Misurato: la seconda nota diventava udibile **0.70 ms** dopo il note-on (a Balanced) —
+   cioè il motore sputava subito la coda della nota precedente.
+
+2. **Il riscaldamento da solo non bastava, ed è la causa vera del sintomo riportato.**
+   `processWarmOnly` alimentava il motore ma non gli passava il nuovo rapporto di
+   trasposizione, che arrivava solo al primo `processAdd`. `PsolaShifter::synthesise()`
+   riempie `outBuf` **in anticipo** (fino a `absWrite - maxPeriod`): al momento in cui la
+   dissolvenza partiva c'erano già ~10 ms sintetizzati all'intonazione della nota
+   **precedente**, e la giunzione con quella giusta cadeva a guadagno pieno.
+
+**L'esperimento che ha separato le due** (PM-7, scritto apposta prima di credere all'ipotesi —
+D-09, *"verificare col codice vero"*): ripetere lo scenario con la seconda nota **alla stessa
+altezza** della prima. Stesso rapporto, nessuna intonazione sbagliata da sintetizzare. PM-3
+risulta **0.98–1.03 prima di qualunque fix** e 0.96–1.00 dopo: non è un caso corretto dal fix,
+è il **controllo** che isola il cambio di rapporto come causa unica del residuo.
+
+**PM-3 — salto d'ampiezza all'attacco, rapportato al regime** (5 livelli di Stability)
+
+| scenario | prima | dopo il solo riscaldamento | dopo entrambi i fix |
+|---|---|---|---|
+| prima nota dopo il silenzio | 2.07–2.12 | 1.00–1.05 | **0.94–1.02** |
+| 2ª nota, altezza **diversa** | 3.30–5.08 | 2.32–5.11 | **0.99–1.03** |
+| 2ª nota, **stessa** altezza (controllo) | 0.98–1.03 | — | 0.96–1.00 |
+
+**Altre misure, prima → dopo**
+- **PM-2**, seconda nota: 2.15–5.24 ms → **7.71–8.59 ms**, cioè `kDeclickMs` (8 ms). La
+  dissolvenza cade ora su segnale vero invece di consumarsi nel silenzio del motore.
+- **PM-1**, seconda nota a Balanced: 0.70 ms → **24.4 ms**. Non è un peggioramento: prima
+  quel suono immediato *era* la coda della nota precedente. Ora l'attacco udibile arriva alla
+  latenza dichiarata del motore più la rampa, come per la prima nota.
+- **PM-4**: prima, ad Accurate, l'autocorrelazione nella finestra di dissolvenza leggeva
+  **164.7 Hz** — esattamente la nota precedente (164.81 Hz) invece dei 392.0 richiesti. Dopo,
+  l'energia armonica alla nota richiesta supera quella alla precedente di **+10.1…+10.6 dB**.
+  (La metrica è cambiata in corsa: l'autocorrelazione su una finestra a cavallo di una
+  transizione di intonazione sbaglia ottava e restituisce numeri che non corrispondono a
+  nessuna delle due note. Il confronto diretto di energia armonica non stima nulla.)
+- **PM-6**, nota ribattuta entro la dissolvenza: a +30 ms dal ri-attacco l'intonazione era a
+  **−1219.8 cent** dal bersaglio, ora **+2.3 cent**; a +10 ms è già in bersaglio (+0.2 cent).
+
+**Fix (s.34)** — tre pezzi, tutti citati nei commenti al codice:
+- `src/midi/PlayModeInput.cpp` — `warmupSamples` + `engineIsCold` per slot. Slot fermo e
+  silenzioso → `goCold()` **una volta sola** (`PitchShifter::reset()` azzera buffer interi,
+  non può girare a ogni blocco su 8 slot, PRD §9.4). Slot con nota premuta e motore freddo →
+  `processWarmOnly` per la latenza dichiarata, muto, prima di far partire la dissolvenza. Il
+  conto è **derivato** dallo stato del motore, non registrato al note-on: così vale anche
+  quando la nota resta premuta ma l'ingresso perde stabilità (FR-20). I tre rami "non deve
+  farsi sentire" (modalità spenta, nessuna nota, ingresso instabile), prima copiati identici,
+  sono ora uno solo.
+- `src/voices/Voice.{h,cpp}` — **estrazione pura** di `runShifter` dal corpo di `processAdd`
+  (aggancio di `justReactivated`, `offsetGlide`, shift, formanti, corsa del motore), più un
+  overload `processWarmOnly` a 4 argomenti che lo riusa scartando l'uscita. La versione a 3
+  argomenti **resta identica** e continua a servire `PhraseScheduler`.
+- `src/midi/PlayModeInput.cpp` — `setMuted(false)` va chiamato **all'inizio** del
+  riscaldamento, non alla fine: è lui ad armare `justReactivated`, ed è `justReactivated` ad
+  agganciare l'intonazione al bersaglio. `ampGlide` non avanza durante il riscaldamento
+  (`Glide::processRamp` vive solo in `processAdd`), quindi la rampa degli 8 ms comincia
+  comunque dopo, sul segnale vero.
+
+**Trovato e corretto per strada, sintomo diverso** — al note-off lo slot tornava libero subito
+ma la voce impiega 8 ms a spegnersi, e `std::find(..., -1)` restituiva **lo stesso** slot
+ancora in dissolvenza. Lì `justReactivated` non si arma (si arma solo su una voce
+`isSilent()`), quindi l'intonazione scivolava dalla nota vecchia alla nuova in `glideTimeMs`.
+Ora fra gli slot liberi si preferisce uno già `isSilent()`. Limite residuo: con 8 note
+rilasciate e ripremute entro 8 ms non ce ne sono, e si ricade sulla scivolata.
+
+**Non tocca** (verificato, non assunto) — `voice`, `psola` e `phrase_scheduler` restano
+**bit-identiche** all'uscita salvata prima di iniziare (D-19: sono la rete di regressione del
+motore). La catena Harmonizer non passa da nessuna delle righe nuove.
+
+**Post-fix** — `ctest` 10/10, `pluginval --strictness-level 10` SUCCESS su VST3/Win,
+Standalone costruito. AU non verificabile su questa macchina (limite già noto).
+
+**Prossima azione** — ascolto dell'utente in Ableton, modalità Play, sorgente audio sostenuta:
+nota singola dopo un silenzio lungo, note ripetute sulla stessa altezza, note a altezze
+diverse in sequenza, accordo di 4–8 note insieme. Finché non arriva, questa entry resta
+`APERTO`.
+
+**Limite noto che questo lavoro NON tocca** — lo stesso miglioramento del punto 2 è
+probabilmente disponibile anche per i rami di riscaldamento di `PhraseScheduler` (celle vuote
+B-04, late-binding B-12), che continuano a usare la `processWarmOnly` a 3 argomenti e quindi
+scaldano il motore col rapporto vecchio. Deliberatamente fuori scope: va **misurato** sul
+percorso Harmonizer prima di cambiare qualcosa lì, e la catena Harmonizer è oggi giudicata
+soddisfacente all'ascolto (D-19).

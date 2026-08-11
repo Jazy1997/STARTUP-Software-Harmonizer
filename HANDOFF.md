@@ -1,6 +1,6 @@
 # HANDOFF — HARMONIZER
 
-> Ultimo aggiornamento: **2026-08-11**, sessione 33.
+> Ultimo aggiornamento: **2026-08-11**, sessione 34.
 > Questo file descrive **solo lo stato di oggi**. La storia sta in `LOG/`, i sintomi
 > aperti in `BUGS.md`, le decisioni durature in `DECISIONS.md`, la mappa dei moduli
 > in `MAPPA.md`. Fonte di verità del prodotto: `PRD-Harmonizer-v1.md` + `PRD-UI.md`.
@@ -14,39 +14,49 @@ Plugin armonizzatore per strumenti monofonici (VST3 / AU / Standalone). Calcola
 `d = (notaMIDI − fondamentale) mod 12` e legge gli offset delle 8 voci da una tabella
 12×8 editabile dall'utente.
 
-- **M5 (UI): il contenuto elencato in PRD §12 è completo.** *"Le tre schermate, drag and
-  drop, editor tabella, scaling"* — con FR-59 chiuso oggi, non resta nulla di nominato lì.
-  Il **criterio d'uscita** (*"un tester esterno usa il plugin senza documentazione"*) è però
-  un'azione dell'utente, mai eseguita.
-- Il plugin **gira in VST3 su Ableton e l'utente lo giudica soddisfacente** (s.29).
-- Motore: PSOLA proprietario dietro `PitchShifter` astratto. **Il motore è CHIUSO** (D-19,
-  s.32): *"il timbro è corretto e gli attacchi pure"*. Non si tocca più senza un sintomo
-  nuovo **riportato all'ascolto**.
-- **M6 (licensing) non esiste**: `src/licensing/` è una cartella vuota.
-- **9** suite `ctest` verdi. `pluginval --strictness-level 10` SUCCESS su VST3 (Win).
+- **M5 (UI): il contenuto elencato in PRD §12 è completo** (FR-59 chiuso in s.33). Il
+  **criterio d'uscita** (*"un tester esterno usa il plugin senza documentazione"*) è
+  un'azione dell'utente, mai eseguita. **M6 (licensing) non esiste**: cartella vuota.
+- Il plugin **gira in VST3 su Ableton e l'utente lo giudica soddisfacente** (s.29), riferito
+  alla catena **Harmonizer**.
+- Motore: PSOLA proprietario dietro `PitchShifter` astratto. **Chiuso** da D-19 (s.32).
+  Riaperto in s.34 dall'unica condizione che D-19 prevede — un sintomo nuovo riportato
+  all'ascolto — e con la forma della modifica ora vincolata da **D-21**.
+- **10** suite `ctest` verdi. `pluginval --strictness-level 10` SUCCESS su VST3 (Win).
 
-**Il lavoro di oggi (FR-59, D-20)** — la finestra si **scala**, non si ridispone. Le tre
-schermate vengono disposte sempre su uno spazio logico di **900×660** e un solo
-`AffineTransform` lo porta alla dimensione fisica; il rapporto d'aspetto è bloccato. Il
-transform sta su un **componente figlio** dell'editor e non sull'editor: JUCE lo vieta
-(`juce_AudioProcessorEditor.cpp:193`, `jassert (getTransform() == hostScaleTransform)`) e
-`setScaleFactor()` lo sovrascriverebbe alla prima notifica di DPI. Tenuti separati i due si
-**compongono**, e HiDPI viene gratis. La percentuale non è un valore memorizzato: è la
-larghezza attuale della finestra, quindi menu e trascinamento sono lo stesso percorso.
+**Il lavoro di oggi (B-15)** — *"quando clicco una nota sulla tastiera midi ... sento un click
+all'inizio"*, in modalità **Play**, **a ogni tasto premuto**. Nuovo banco di misura
+(`tests/play_mode_input_test.cpp`, in `ctest`) che pilota il vero `PlayModeInput` con veri
+`MidiBuffer`. Due cause distinte, separate da un esperimento di controllo (PM-7, seconda nota
+alla stessa altezza — pulito già prima del fix, quindi il colpevole è il cambio di rapporto):
+
+1. Il motore di uno slot senza nota premuta restava **affamato**, e `goCold()` non era mai
+   chiamato in Play. Al note-on i primi ~20 ms uscivano dalla coda della nota precedente e gli
+   8 ms di `ampGlide` si consumavano lì dentro (è B-12, mai portato su Play).
+2. **La causa del sintomo riportato**: il riscaldamento alimentava il motore col rapporto di
+   trasposizione **vecchio**, e `synthesise()` riempie `outBuf` in anticipo — la dissolvenza
+   cadeva su ~10 ms già sintetizzati all'intonazione della nota precedente.
+
+Salto d'ampiezza all'attacco, rapportato al regime: **2.07–5.08 → 0.94–1.03**. Tempo di salita
+sulla seconda nota: 2.15–5.24 ms → **7.71–8.59 ms**, cioè `kDeclickMs`. Corretta per strada
+anche la scivolata d'intonazione sulla nota ribattuta (−1219.8 → +2.3 cent a +30 ms).
 
 ---
 
 ## Prossimo passo
 
-**Uno solo: A-06, la CI allineata a `ctest`.** Oggi il workflow compila **3 suite su 9** con
-`g++` nudo e **non invoca mai `ctest`**: tutto il lavoro delle sessioni 30→33 è nato fuori
-dalla CI. Il divario è cresciuto proprio oggi (`ui_scale` è la nona), ed è l'unica voce
-rimasta che sia **lavoro di ingegneria** e non una decisione dell'utente.
+**Uno solo: l'ascolto di B-15.** Tutto il resto è misurato, ma nessuna misura può chiudere un
+sintomo udito (regola 12) — e s.14 ha già insegnato quanto costi crederci prima. In Ableton,
+Play, con una sorgente audio sostenuta: nota singola dopo un silenzio lungo; **note a altezze
+diverse in sequenza** (il caso che era rotto, e quello che il solo riscaldamento non
+risolveva); note ripetute sulla stessa altezza e ribattute veloci; accordo di 4–8 note;
+passaggio Harmonizer↔Play con tasti premuti (FR-28, **mai verificato all'ascolto**). Se torna
+pulito, B-15 si chiude; se no, il banco di misura è in piedi e il prossimo giro parte da lì.
 
-Da sapere prima di cominciare: `phrase_scheduler` non è compilabile con quel `g++` perché
-linka `juce_core` (D-16), quindi la CI va portata su CMake+`ctest`, non estesa aggiungendo
-righe `g++`. `ui_scale`, `cell_input_parser`, `glide`, `pitch_latch`, `empty_cell_hold` sono
-invece header-only e passerebbero anche così.
+**Il prossimo passo di ingegneria, dopo**, resta **A-06: la CI allineata a `ctest`.** Il
+workflow compila 3 suite su 10 con `g++` nudo e non invoca mai `ctest`; il divario è cresciuto
+ancora oggi (`play_mode_input` linka JUCE, quindi come `phrase_scheduler` non è compilabile in
+quel modo — D-16).
 
 ---
 
@@ -54,15 +64,13 @@ invece header-only e passerebbero anche così.
 
 | Cosa | Dove | Stato |
 |---|---|---|
-| **FR-59: la conferma è stata GENERALE** | — | s.33, *"Ok, funziona"*. Basta a dire che la scala funziona a vista, **non** che i tre punti qui sotto siano stati guardati uno per uno. Stessa forma della conferma di B-10/B-12 in s.30: se uno di essi si rivelasse difettoso, non è una ricaduta ma una cosa mai verificata. |
-| ↳ **Resa su HiDPI** | FR-59 | La composizione dei due transform è corretta **per costruzione**, ma non è detto che il display usato per la prova avesse scala di sistema ≠ 100%. Da rifare esplicitamente lì, e su **Retina mai** (serve macOS). |
-| ↳ **Keep Tails al 70%** | `PluginEditor.cpp` | Il difetto di s.30 dovrebbe essere chiuso per inciso: `layoutEdit()` dispone di 562 px logici e ne chiede 528 — **34 px di margine a qualunque scala** (prima: 522 contro 528). **Calcolato**; che il toggle si veda davvero al 70% va guardato su Edit. |
-| ↳ **Persistenza fra sessioni** | `UiSettings` nello stato | Da provare chiudendo e riaprendo un **progetto salvato**: non è la stessa cosa che cambiare scala a plugin aperto. |
-| **La conferma di B-14 fu dal vivo, non su export** | — | In `SAMPLE TEST/` non esiste alcun `_02`. I numeri (79.1 → 44.3 ms) restano **verificati per calcolo**, e con loro la rete anti-regressione di B-13. Se la flem tornasse, il primo passo è quell'export mancante. |
-| `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | L'attesa in frame d'analisi. **Misurata, non tarata all'ascolto**: se il cambio d'armonia sembrasse in ritardo, è la prima manopola. |
-| Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: l'impostazione più pronta che resta **pulita su tutte e quattro** le tabelle. Ab2 sarebbe 12 ms più veloce ma riapre in piccolo B-13. |
-| **B-10 con Keep Tails ON** | `PhraseScheduler.cpp` | B-07, B-10 e B-12 confermati e chiusi (s.30), ma la conferma fu **generale**, non su questa configurazione, dove il ramo di B-10 si applica anche alle code (tensione con FR-46). |
-| Isteresi cella vuota, `kEmptyCellHoldMs = 80.0f` | `src/voices/EmptyCellHold.h` | Misurata **irrilevante** sul materiale reale. La soglia non è mai stata tarata né ascoltata. |
+| **B-15 — il click in Play** | vedi § Prossimo passo | Fix in codice e misurato su 5 livelli di Stability, **mai ascoltato**. L'entry resta `APERTO`. |
+| **FR-59: la conferma è stata GENERALE** | s.33 | *"Ok, funziona"*: la scala funziona a vista, **non** che i tre punti seguenti siano stati guardati. **HiDPI**: corretto per costruzione, ma il display della prova poteva essere a 100%; su Retina mai (serve macOS). **Keep Tails al 70%**: 562 px logici contro 528 richiesti, 34 px di margine — **calcolato**, da guardare su Edit. **Persistenza**: da provare riaprendo un progetto salvato, non cambiando scala a plugin aperto. |
+| **La conferma di B-14 fu dal vivo, non su export** | — | In `SAMPLE TEST/` non esiste alcun `_02`. I numeri (79.1 → 44.3 ms) restano verificati per calcolo. |
+| `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | Attesa in frame d'analisi. **Misurata, non tarata all'ascolto**: prima manopola se l'armonia sembrasse in ritardo. |
+| Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: l'impostazione più pronta che resta pulita su tutte e quattro le tabelle. |
+| **B-10 con Keep Tails ON** | `PhraseScheduler.cpp` | Confermato in s.30 ma **in generale**, non su questa configurazione (tensione con FR-46). |
+| Isteresi cella vuota, `kEmptyCellHoldMs = 80.0f` | `src/voices/EmptyCellHold.h` | Misurata irrilevante sul materiale reale. Mai tarata né ascoltata. |
 
 ---
 
@@ -70,39 +78,37 @@ invece header-only e passerebbero anche così.
 
 Da non scambiare per requisiti soddisfatti.
 
-- **AU e Retina non sono mai stati verificati.** Richiedono macOS, che non è mai entrato nel
-  ciclo di verifica: `pluginval` è sempre girato solo su VST3/Windows. Vale per FR-59 come per
-  tutto il resto, ed è un buco che cresce ad ogni milestone.
-- **A 200% la finestra è 1800×1320 fisici**, che non entra in un display 1080p. È la lettura
-  letterale di FR-59; limitare il massimo allo schermo sarebbe una decisione a sé (D-20).
+- **AU e Retina non sono mai stati verificati.** Richiedono macOS: `pluginval` è sempre girato
+  solo su VST3/Windows. Buco che cresce a ogni milestone.
+- **I rami warm di `PhraseScheduler` scaldano col rapporto vecchio** — la causa 2 di B-15 vale
+  probabilmente anche per celle vuote (B-04) e late-binding (B-12), che usano ancora
+  `processWarmOnly` a 3 argomenti. **Deliberatamente non toccato**: va misurato sul percorso
+  Harmonizer per conto proprio (D-21), e quella catena è oggi giudicata soddisfacente.
+- **In Play, 8 note rilasciate e ripremute entro 8 ms** non trovano nessuno slot `isSilent()`
+  e ricadono sulla scivolata d'intonazione. Limite dell'allocazione, non del motore.
+- **Nessun `ScopedNoDenormals`** in tutto `src/`. Trovato in s.34 esplorando, non corretto: non
+  è il sintomo riportato.
 - **Le voci acute della lista strumenti non sono verificate nel loro registro.** Sopra Eb Alto
-  Sax si misurano 1-3 offset di passaggio e **nessuna taratura dell'attesa li elimina** — ma il
-  file di prova suona C4-D4-E4, il registro **grave** per un flauto. **Serve un export dedicato.**
+  Sax si misurano 1-3 offset di passaggio e nessuna taratura li elimina — ma il file di prova
+  suona C4-D4-E4. **Serve un export dedicato.**
 - **Il ritardo del cambio d'offset non va a zero.** Restano la convergenza del rilevatore e il
-  confine di blocco. Azzerarlo richiede il **lookahead**, rimandato per scelta dell'utente in
-  s.32: contrasta con PRD §1.3 (≤ 15 ms nel modo più reattivo) e va aperto come decisione a sé.
-- **La quantizzazione al blocco resta** (A-05): l'istante in cui l'unico cambio atterra cade su
-  un confine di blocco (fino a 23 ms a 1024). I sotto-blocchi in `processBlock` sono
-  deliberatamente fuori scope: sono il cuore del motore.
+  confine di blocco. Azzerarlo richiede il **lookahead**, rimandato in s.32.
+- **La quantizzazione al blocco resta** (A-05), e in Play si somma al fatto che
+  `metadata.samplePosition` non viene letto: il note-on vale dal campione 0 del blocco, fino a
+  ~85 ms di anticipo a 4096. Non produce click, sposta l'attacco.
 - **La regola utente di D-15 non va scritta com'è.** *"Compilare tutte le celle"* è
-  **controproducente** sugli attacchi (D-17): con B-13 chiuso va deciso se serva ancora.
-- **Preset di fabbrica non verificati**: dei 7, **solo "Min"** è confrontato col prototipo
-  Max4Live. Gli altri 6 sono voicing jazz generici scritti algoritmicamente (A-07).
-- **CI copre 3 delle 9 suite** e non invoca mai `ctest` (A-06, vedi § Prossimo passo).
-- **Il tetto voci simultanee ha lo stesso difetto di B-10** (B-11): abbassare
-  `maxSimultaneousVoices` non spegne gli slot già assegnati. Oggi non morde (default 32 su
-  32). Serve una politica su quale frase perde slot.
-- **La UI non riflette un override CC attivo** (FR-36/37): il CC non scrive nel parametro
-  APVTS (`PluginEditor.cpp`, gestore del CC).
-- **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto (T-6/T-7 verificano che i
-  knob *arrivino*), e i due setter scrivono il float grezzo senza `Glide` — se si sentisse un
-  click girandoli, è un'entry propria.
-- **CC e Play mode mai provati con hardware reale**: il parsing MIDI di `CcRouter` è scoperto.
-- **Nessuna `LookAndFeel` custom** (D-10) · **FR-61 (tema chiaro/scuro, `[SHOULD]`) non
-  esiste** · **CPU mai profilata** con 8 voci contro il budget ≤15% del PRD §1.3 ·
-  **Catch2 mai adottato**: i test sono `int main()` scritti a mano.
-- **Sporcizia nell'artefatto VST3**: nel bundle c'è `Contents/x86_64-win/Harmonizer (1).vst3`,
-  residuo di una copia vecchia. Probabilmente inerte. Trovato in s.31, non toccato.
+  controproducente sugli attacchi (D-17).
+- **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto, e i due setter scrivono
+  il float grezzo senza `Glide` — se si sentisse un click girandoli, è un'entry propria.
+- **CC mai provato con hardware reale**: il parsing MIDI di `CcRouter` è scoperto. Play sì, ora
+  (s.34), ma solo dalla tastiera dell'utente.
+- **A 200% la finestra è 1800×1320 fisici**, che non entra in un 1080p (lettura letterale di
+  FR-59, D-20) · **Preset di fabbrica**: dei 7 solo "Min" è confrontato col prototipo Max4Live
+  (A-07) · **CI copre 3 delle 10 suite** e non invoca mai `ctest` (A-06) · **B-11**: il tetto
+  voci ha lo stesso difetto di B-10, oggi non morde (32 su 32) · **la UI non riflette un
+  override CC attivo** (FR-36/37) · **nessuna `LookAndFeel`** (D-10) · **FR-61 non esiste** ·
+  **CPU mai profilata** contro il budget ≤15% del PRD §1.3 · **Catch2 mai adottato** ·
+  **`Harmonizer (1).vst3`** residuo nel bundle, probabilmente inerte (s.31).
 
 ---
 
@@ -111,21 +117,16 @@ Da non scambiare per requisiti soddisfatti.
 Nessuna di queste è tecnica; nessuna è chiusa.
 
 - **Il criterio d'uscita di M5 non è mai stato esercitato**: *"un tester esterno usa il plugin
-  senza documentazione"*. Con il contenuto di M5 completo, è ora la cosa che decide se la
-  milestone è davvero chiusa — e serve una persona, non del codice.
-- **La guida utente non esiste** — nessun README utente, nessuna `docs/`, nessun tooltip
-  in-app. Deve ospitare il modello CC posizionale (D-03) e la scelta dello strumento (D-18):
-  cosa succede se si suona sotto la nota dichiarata e perché scendere nella lista rallenta
-  l'armonia. In tensione col criterio d'uscita qui sopra, che chiede il contrario.
-- **`[DECISION]` Backend di licensing: la scadenza era M5, che ora è arrivata.** Vedi
-  `DECISIONS.md` § aperte. Blocca l'intera M6, che non esiste.
+  senza documentazione"*. Serve una persona, non del codice. In tensione con la voce sotto.
+- **La guida utente non esiste** — nessun README utente, nessuna `docs/`, nessun tooltip.
+  Deve ospitare il modello CC posizionale (D-03) e la scelta dello strumento (D-18).
+- **`[DECISION]` Backend di licensing: la scadenza era M5, che è arrivata.** Blocca M6.
 - Nome prodotto, marchio, dominio → bloccano `PLUGIN_MANUFACTURER_CODE` (`Hzso`),
-  `PLUGIN_CODE` (`Hmz1`), `COMPANY_NAME` (`"TBD"`), `BUNDLE_ID`. **Cambiarli dopo il
-  rilascio rompe i progetti salvati**, come il tipo AU.
-- **Certificati di firma e notarizzazione** (Apple Developer ID + code signing Windows):
-  il lead time più lungo del progetto, previsto in M0, **mai avviato**.
-- Tipo di licenza JUCE (Indie vs commerciale) in funzione del fatturato previsto.
-- Prezzi dei tre tier; canale di vendita; consegna licenza nel bundle hardware.
+  `PLUGIN_CODE` (`Hmz1`), `COMPANY_NAME` (`"TBD"`), `BUNDLE_ID`. **Cambiarli dopo il rilascio
+  rompe i progetti salvati**, come il tipo AU.
+- **Certificati di firma e notarizzazione**: il lead time più lungo del progetto, **mai
+  avviato** · tipo di licenza JUCE (Indie vs commerciale) · prezzi dei tre tier · canale di
+  vendita · consegna licenza nel bundle hardware.
 
 ---
 
@@ -151,5 +152,9 @@ voce isolata; `REF_<nome>` è il riferimento fatto con Autoshift. Buffer 1024, F
 **Comandi** · `cmake --build build --config Release` (il fallimento della copia in
 `Program Files` è atteso, D-12: filtrare `error C####`/`error LNK`) · **poi**
 `--target Harmonizer_Standalone`, che quel fallimento salta · `ctest --test-dir build -C Release`
-· `tools/pluginval.exe --strictness-level 10 --validate <path.vst3>`
+· `build/Release/play_mode_input_test.exe` stampa la tabella PM-1..PM-7 di B-15
 · `build/Release/degree_trace_probe.exe "<dry.wav>" "<12 celle>" <root> <block> <notaMin>`
+
+**`pluginval` non è nel repo** e non è più su disco: si scarica come fa la CI —
+`curl -sL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip`
+poi `unzip`, e `pluginval.exe --strictness-level 10 --validate <path.vst3>`.

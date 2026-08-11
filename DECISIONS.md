@@ -519,6 +519,48 @@ decisione a sé.
 
 ---
 
+
+## D-21 — Come si tocca il motore chiuso: overload nuovo, mai modifica al percorso esistente
+
+**Contesto** (s.34) — B-15: click a ogni attacco in modalità Play, riportato all'ascolto
+dall'utente. È esattamente la condizione che **D-19** pone per riaprire il motore (*"non si
+toccano più senza un sintomo nuovo riportato all'ascolto"*), quindi D-19 non è stata violata —
+ma la condizione, da sola, non dice **quanto** si può toccare, e la risposta sbagliata a
+quella domanda rimetterebbe in gioco tutto il lavoro delle sessioni 12→32.
+
+Il lavoro è stato pianificato con un **punto di arresto esplicito**: solo `PlayModeInput`, e se
+la misura avesse mostrato che serve `Voice`, fermarsi e riportare i numeri invece di decidere
+da soli. La misura lo ha mostrato (il riscaldamento senza il nuovo rapporto di trasposizione
+non toglieva il click), ci si è fermati, e l'utente ha autorizzato la modifica minima.
+
+**Decisione** — Quando un sintomo nuovo obbliga a toccare `Voice`, `PsolaShifter` o la catena
+di sintesi, la forma della modifica è vincolata:
+
+1. **Il percorso esistente non cambia.** Si aggiunge un metodo o un overload nuovo, usato solo
+   dal chiamante che ha il difetto. Qui: `processWarmOnly` a 4 argomenti per `PlayModeInput`;
+   la versione a 3 argomenti resta identica e continua a servire `PhraseScheduler`.
+2. **Il codice condiviso si ottiene per estrazione pura**, mai riscrivendolo. Qui: `runShifter`
+   estratto dal corpo di `processAdd`, stessa matematica, stesse righe.
+3. **L'identità si dimostra, non si argomenta.** Le uscite di `voice`, `psola` e
+   `phrase_scheduler` si salvano **prima** di cominciare e devono risultare **bit-identiche**
+   dopo. In s.34 lo sono state, e questo ha coperto anche un dettaglio che il ragionamento da
+   solo avrebbe lasciato in dubbio: l'estrazione ha spostato `ampGlide.processRamp` prima
+   dell'aggancio di `justReactivated`, che nell'originale veniva dopo.
+
+**Perché non basta "stare attenti"** — la lezione di s.14 (fix plausibile, meccanismo reale,
+smentito all'ascolto) e di D-09 (*"verificare col codice vero prima di fidarsi di una
+ricostruzione in sola lettura"*) valgono a maggior ragione su un motore che l'utente ha già
+approvato: qui l'errore non si paga con un fix inutile, si paga con una regressione su
+qualcosa che funzionava.
+
+**Non copre** — un cambiamento che debba per forza alterare il percorso condiviso (per esempio
+portare lo stesso miglioramento ai rami di riscaldamento di `PhraseScheduler`, vedi il limite
+noto in fondo a B-15). Quello non è una modifica minima: va misurato sul percorso Harmonizer
+per conto proprio e deciso con l'utente, non fatto di rimbalzo.
+
+**Stato** — Attiva. Emenda D-19 senza superarla: D-19 dice *quando*, questa dice *come*.
+
+---
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |

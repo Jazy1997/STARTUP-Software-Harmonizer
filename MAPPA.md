@@ -71,7 +71,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 ### `src/voices/` — 8 file
 | File | Ruolo |
 |---|---|
-| `Voice.{h,cpp}` | Una voce. `processAdd` **stereo**, `processWarmOnly` / `goCold` (B-04), `justReactivated` (B-01), glide di ampiezza/gain/pan/offset, `kDeclickMs = 8 ms` |
+| `Voice.{h,cpp}` | Una voce. `processAdd` **stereo**, `processWarmOnly` / `goCold` (B-04), `justReactivated` (B-01), glide di ampiezza/gain/pan/offset, `kDeclickMs = 8 ms`. `runShifter` privato (s.34, estrazione pura da `processAdd`) e un **secondo `processWarmOnly` a 4 argomenti** che riscalda applicando anche la trasposizione — usato **solo** da `PlayModeInput` (B-15/D-21); quello a 3 argomenti resta invariato per `PhraseScheduler` |
 | `Phrase.h` | Stato di una frase. `emptyCellSamples` per voce (s.28) |
 | `PhraseScheduler.{h,cpp}` | Frasi indipendenti, late-binding degli slot, furto della più vecchia (FR-52), loop di mixing. Il loop di mixing dà un **verdetto per voce ogni blocco**: oltre `numRequestedVoices` la voce sfuma e lo slot torna al pool (FR-19, s.30) |
 | `VoicePool.{h,cpp}` | Tetto di slot, `requestStabilityChange`, `swapShifterNoAlloc` |
@@ -82,7 +82,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 |---|---|
 | `CcRouter.{h,cpp}` | I 3 CC configurabili + MIDI Learn + canale. **I numeri di CC non sono parametri APVTS**: serializzati a parte |
 | `OverrideManager.{h,cpp}` | Precedenza CC vs automazione (FR-36/37/38) |
-| `PlayModeInput.{h,cpp}` | Modalità Play. Gain/pan **e formanti** (FR-42, s.30) **per indice di slot**, non per colonna armonica |
+| `PlayModeInput.{h,cpp}` | Modalità Play. Gain/pan **e formanti** (FR-42, s.30) **per indice di slot**, non per colonna armonica. `warmupSamples`/`engineIsCold` per slot (B-15, s.34): `goCold()` una volta sola quando lo slot si ferma, riscaldamento al note-on prima della dissolvenza. Fra gli slot liberi preferisce uno già `isSilent()` |
 
 ### `src/ui/` — 10 file
 | File | Ruolo |
@@ -129,10 +129,11 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 
 ---
 
-## `tests/` — 14 file
+## `tests/` — 15 file
 
-**In `ctest` (8)** — nessun Catch2 (D-11). Le prime 7 sono JUCE-free e compilabili con un
-`g++` nudo; `phrase_scheduler` linka `juce_core` e gira **solo** in `ctest` (D-16)
+**In `ctest` (10)** — nessun Catch2 (D-11). Sette sono JUCE-free e compilabili con un `g++`
+nudo; `phrase_scheduler` (`juce_core`) e `play_mode_input` (`juce_audio_basics`) girano
+**solo** in `ctest` (D-16). `ui_scale` è la nona, elencata con le altre header-only
 
 | Nome | Cosa verifica |
 |---|---|
@@ -144,6 +145,7 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 | `cell_input_parser` | 19 verifiche sulla distinzione `0` / vuoto / spazzatura |
 | `empty_cell_hold` | 12 verifiche |
 | `phrase_scheduler` | **Linka `juce_core`** (D-16). P-1..P-4 (s.30, FR-19/B-10): il conteggio voci scende col selettore, l'ampiezza scende al livello giusto, la risalita non regredisce, la voce si spegne sfumando e non tagliata. P-1/P-2 verificati falliti sul codice pre-fix. **P-5/P-6** (B-12): P-5 distingue per costruzione se un click in aggiunta è preesistente o introdotto da B-10; **P-6 isola la sola voce aggiunta per differenza fra due rig** e ne misura il tempo di salita — è la metrica che ha trovato B-12 dove `maxJump` sul mix non vedeva nulla |
+| `play_mode_input` | **Linka `juce_audio_basics`** (s.34, B-15). Pilota il vero `PlayModeInput` con veri `MidiBuffer`: l'unico livello a cui esistono note-on e allocazione degli slot. PM-1 ritardo, PM-2 salita, **PM-3 salto d'ampiezza all'attacco** (il cancello), PM-4 intonazione nella dissolvenza, PM-5 seconda nota, PM-6 ribattuto, **PM-7 controllo a parità di altezza** — è PM-7 a isolare il cambio di rapporto come causa. **PM-2 scartata come cancello**: misura la profondità dello shift, non il difetto |
 
 **Sonde diagnostiche, NON in ctest** — dipendono da `SAMPLE TEST/`, non versionato (5)
 
