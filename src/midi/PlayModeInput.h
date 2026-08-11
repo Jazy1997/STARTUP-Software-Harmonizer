@@ -100,4 +100,36 @@ private:
     VoicePool voicePool;
     // -1 = slot libero; altrimenti la nota MIDI (0-127) che occupa lo slot.
     std::array<int, maxNotes> slotNote { };
+
+    // B-15 (sessione 34) — riscaldamento del motore prima che la voce si
+    // faccia sentire. E' lo stesso meccanismo di Phrase::warmupSamples
+    // (B-12, sessione 30), portato qui perche' il percorso Play non l'aveva
+    // mai avuto: uno slot senza nota premuta non riceve campioni, quindi il
+    // suo PitchShifter resta AFFAMATO (absWrite/absRead/lastEpoch/synthPos
+    // congelati, ring pieno dell'audio della nota precedente). Al note-on i
+    // primi `latency` campioni in uscita vengono da quel contenuto vecchio, e
+    // gli 8 ms di ampGlide si consumano li' dentro: quando il segnale vero
+    // rientra la voce e' gia' a guadagno pieno ed entra di netto.
+    //
+    // Misurato prima del fix in tests/play_mode_input_test.cpp: sulla SECONDA
+    // nota il salto d'ampiezza all'attacco vale 3.3-5.1 volte quello del
+    // regime (PM-3) e ad Accurate l'intonazione nella finestra di dissolvenza
+    // e' ancora quella della nota PRECEDENTE (PM-4: 164.7 Hz contro i 392.0
+    // richiesti). E' il "click ogni volta che premo il tasto" riportato
+    // dall'utente.
+    //
+    // Campioni di riscaldamento ancora dovuti su questo slot: finche' sono
+    // > 0 la voce resta MUTA e si limita ad alimentare il motore con
+    // processWarmOnly, cosi' la dissolvenza inizia quando il motore ha
+    // davvero qualcosa da dire. Zero = slot operativo.
+    std::array<int, maxNotes> warmupSamples { };
+
+    // Vero quando il motore di questo slot e' stato azzerato (goCold) e da
+    // allora non ha piu' ricevuto campioni: al prossimo note-on va
+    // riscaldato. Serve anche a garantire che goCold() scatti UNA SOLA VOLTA
+    // per rilascio — PitchShifter::reset() azzera buffer interi, non puo'
+    // girare ad ogni blocco su 8 slot dentro processBlock (PRD §9.4).
+    // Inizializzato a true: dopo prepare() nessuno slot ha mai visto un
+    // campione.
+    std::array<bool, maxNotes> engineIsCold { };
 };
