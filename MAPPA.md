@@ -2,7 +2,7 @@
 
 > Mappa dei moduli **com'è adesso**, non com'era o come sarà. Si riscrive quando la
 > struttura cambia, non a ogni sessione. Sostituisce la vecchia §3 di `handsoff.md`.
-> Aggiornata: 2026-08-10 (s.29).
+> Aggiornata: 2026-08-10 (s.30).
 
 ---
 
@@ -72,17 +72,17 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | File | Ruolo |
 |---|---|
 | `Voice.{h,cpp}` | Una voce. `processAdd` **stereo**, `processWarmOnly` / `goCold` (B-04), `justReactivated` (B-01), glide di ampiezza/gain/pan/offset, `kDeclickMs = 8 ms` |
-| `Phrase.h` | Stato di una frase. `emptyCellSamples` per voce (s.28, non committato) |
-| `PhraseScheduler.{h,cpp}` | Frasi indipendenti, late-binding degli slot, furto della più vecchia (FR-52), loop di mixing |
+| `Phrase.h` | Stato di una frase. `emptyCellSamples` per voce (s.28) |
+| `PhraseScheduler.{h,cpp}` | Frasi indipendenti, late-binding degli slot, furto della più vecchia (FR-52), loop di mixing. Il loop di mixing dà un **verdetto per voce ogni blocco**: oltre `numRequestedVoices` la voce sfuma e lo slot torna al pool (FR-19, s.30) |
 | `VoicePool.{h,cpp}` | Tetto di slot, `requestStabilityChange`, `swapShifterNoAlloc` |
-| `EmptyCellHold.h` | **Non committato.** Funzione pura `stepEmptyCellHold`, zero dipendenze |
+| `EmptyCellHold.h` | Funzione pura `stepEmptyCellHold`, zero dipendenze |
 
 ### `src/midi/` — 6 file
 | File | Ruolo |
 |---|---|
 | `CcRouter.{h,cpp}` | I 3 CC configurabili + MIDI Learn + canale. **I numeri di CC non sono parametri APVTS**: serializzati a parte |
 | `OverrideManager.{h,cpp}` | Precedenza CC vs automazione (FR-36/37/38) |
-| `PlayModeInput.{h,cpp}` | Modalità Play. Gain/pan **per indice di slot**, non per colonna armonica |
+| `PlayModeInput.{h,cpp}` | Modalità Play. Gain/pan **e formanti** (FR-42, s.30) **per indice di slot**, non per colonna armonica |
 
 ### `src/ui/` — 8 file
 | File | Ruolo |
@@ -128,17 +128,19 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 
 ## `tests/` — 13 file
 
-**In `ctest` (7)** — nessuna dipendenza JUCE, nessun Catch2 (D-11)
+**In `ctest` (8)** — nessun Catch2 (D-11). Le prime 7 sono JUCE-free e compilabili con un
+`g++` nudo; `phrase_scheduler` linka `juce_core` e gira **solo** in `ctest` (D-16)
 
 | Nome | Cosa verifica |
 |---|---|
 | `psola` | 12 test: accuratezza di trasposizione, ortogonalità pitch/formanti, discontinuità, monotonia della latenza, inviluppo di sovrapposizione (con la `beta` reale di `Voice.cpp`), riattivazione di slot. **Test 10/11/12 sono verifiche di trasparenza, non riproducono i bug** — soglia onesta "non degrada" |
-| `voice` | Inviluppo alla riattivazione su 5 Stability × block 64/1024 con controllo negativo. H3 (riattivazione), **H5** (`processWarmOnly`: 23.95 ms → 0.00 ms). T-1..T-5: pan, potenza costante, **regressione bit-per-bit al default**, gain a zero, anti-click al confine di blocco |
+| `voice` | Inviluppo alla riattivazione su 5 Stability × block 64/1024 con controllo negativo. H3 (riattivazione), **H5** (`processWarmOnly`: 23.95 ms → 0.00 ms). T-1..T-5: pan, potenza costante, **regressione bit-per-bit al default**, gain a zero, anti-click al confine di blocco. **T-6/T-7** (s.30, FR-40/41): il picco formantico si sposta della quantità prevista con `spread` e con l'offset manuale, che si sommano in semitoni |
 | `glide` | 15 verifiche. TEST 1 riproduce il bug originale (salto 88% di fondoscala in un campione con blocco 4096) |
 | `pitch_latch` | 8 gruppi, incluso l'anti-rimbalzo che ha scoperto il bug prima dell'integrazione |
 | `override_manager` | 6 test sulla precedenza CC/automazione |
 | `cell_input_parser` | 19 verifiche sulla distinzione `0` / vuoto / spazzatura |
-| `empty_cell_hold` | 12 verifiche. **Target non committato** |
+| `empty_cell_hold` | 12 verifiche |
+| `phrase_scheduler` | **Linka `juce_core`** (D-16). P-1..P-4 (s.30, FR-19/B-10): il conteggio voci scende col selettore, l'ampiezza scende al livello giusto, la risalita non regredisce, la voce si spegne sfumando e non tagliata. P-1/P-2 verificati falliti sul codice pre-fix. **P-5/P-6** (B-12): P-5 distingue per costruzione se un click in aggiunta è preesistente o introdotto da B-10; **P-6 isola la sola voce aggiunta per differenza fra due rig** e ne misura il tempo di salita — è la metrica che ha trovato B-12 dove `maxJump` sul mix non vedeva nulla |
 
 **Sonde diagnostiche, NON in ctest** — dipendono da `SAMPLE TEST/`, non versionato
 
@@ -147,7 +149,7 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 | `sample_click_finder` | Il coltellino svizzero. `dumpPitchTrace`, `runFixedF0`, `runRetriggered`/`runProduction`, `runLiveHarmony` (tabella custom), `runFaseZeroTrace` (traccia il gate reale), Passate 1–7 |
 | `real_export_probe` | Confronto DRY vs WET reale, cadenza dei disturbi, `--trace <inizio> <fine>` |
 | `voice_reference_probe` | Confronto contro un riferimento esterno (AutoShift) |
-| `envelope_probe` | Dump dell'inviluppo RMS fine di un WAV su una finestra. **Non committato** |
+| `envelope_probe` | Dump dell'inviluppo RMS fine di un WAV su una finestra |
 
 **Header condivisi** — `SampleAnalysis.h` (readWav, measureFrame, envelopeRms, fitWindow,
 findClicks, HNR) · `TestSignals.h` (generatori, measureF0, formantPeak, goertzelMag)
@@ -162,7 +164,8 @@ findClicks, HNR) · `TestSignals.h` (generatori, measureF0, formantPeak, goertze
 - **CI** (`.github/workflows/build.yml`): job `dsp-tests` su ubuntu come gate rapido, poi
   build su windows-latest e macos-latest con `pluginval --strictness-level 10` su VST3
   (entrambe) e AU (solo macOS).
-  ⚠️ Il gate ricompila a mano **3 suite su 7** e non invoca mai `ctest` — vedi A-06.
+  ⚠️ Il gate ricompila a mano **3 suite su 8** e non invoca mai `ctest` — vedi A-06.
+  `phrase_scheduler` non è nemmeno compilabile con quei `g++` (linka `juce_core`, D-16).
 - **Locale**: `tools/pluginval.exe`. Il fallimento di copia post-build è atteso (D-12).
 
 ---

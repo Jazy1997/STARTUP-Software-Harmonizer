@@ -261,6 +261,71 @@ gitignored. Un futuro "alleggerimento" parta da lì, non da `tests/`.
 
 ---
 
+## D-15 — I buchi all'attacco si aggirano per documentazione, non si inseguono
+
+**Contesto** (s.30) — B-05 ("ribattuto", ~15 ms di silenzio digitale) è aperto da s.28 dopo
+quattro riproduzioni offline che **non lo riproducono**, e la sua prossima azione richiedeva
+un bounce offline che l'utente non ha fatto. B-06 (slot freddo alla primissima nota) è
+annotato da s.27 e mai affrontato. Entrambi bloccavano il fronte DSP.
+
+**Decisione** — L'utente sospende entrambi. La condizione d'uso diventa una **regola
+documentale**: *"perché il plugin funzioni bene vanno compilate tutte le celle delle voci
+che si vogliono attivare"*, da scrivere nella guida utente. Nessun ulteriore lavoro di
+indagine sul DSP finché il sintomo non si ripresenta.
+
+**Conseguenze**
+- B-05 e B-06 passano a `SOSPESO`, non a `CHIUSO`: non c'è un fix e non c'è una conferma
+  all'ascolto (`CLAUDE.md` regola 12). Le entry conservano tutte le misure.
+- **La mitigazione non combacia con le misure di B-05**, ed è annotato dentro l'entry:
+  nell'export su cui il sintomo è stato misurato nessuna cella vuota veniva attraversata.
+  "Compilare tutte le celle" è il rimedio di B-04 e della famiglia cella-vuota. Se il
+  ribattuto tornasse su un preset a celle tutte piene, l'aggiramento non regge.
+- **Genera un obbligo nuovo**: la guida utente **non esiste** (nessun README utente, nessuna
+  `docs/`, nessun tooltip in-app). Diventa un deliverable, ed è in tensione col criterio
+  d'uscita di M5 (PRD §12: *"un tester esterno usa il plugin senza documentazione"*) — se
+  la regola serve, andrebbe resa evidente anche dalla UI, non solo scritta.
+- L'ipotesi "underrun real-time del DAW" resta **non verificata**: il bounce offline che
+  l'avrebbe decisa in un colpo solo non è stato fatto, e resta la via più economica se il
+  sintomo torna.
+
+**Stato** — Attiva. Vedi `BUGS.md` § B-05 e § B-06.
+
+---
+
+## D-16 — Secondo livello di test, che può linkare JUCE (emenda D-11)
+
+**Contesto** (s.30) — B-10 ha reso evidente il costo di D-11. `PhraseScheduler` era l'**unico
+modulo del progetto senza alcun test**, non per svista ma per una barriera tecnica: dipende
+da `juce_core` (`juce::SpinLock` in `VoicePool.h`, `juce::jmin`, `juce::Uuid`/`String` via
+`HarmonyPreset.h`), quindi non entrava nel livello "nessuna dipendenza, runner minimo".
+La barriera era già registrata in `tests/empty_cell_hold_test.cpp:12-14`, che dichiara
+l'integrazione con `PhraseScheduler` "verificata a lettura" perché non linkabile.
+Il prezzo: B-10 è il **secondo** difetto della stessa famiglia arrivato fino all'ascolto
+dopo quello di s.12 documentato in `Phrase.h:37-45`.
+
+**Decisione** — Le suite di test si dividono in due livelli:
+1. **JUCE-free** (le 7 esistenti): compilabili con un `g++` nudo, sono il gate rapido della CI.
+2. **JUCE-linked** (`phrase_scheduler_test`, la prima): linkano `juce::juce_core` via CMake,
+   girano in `ctest` insieme alle altre, **non** nel gate a `g++`.
+
+Un modulo va nel livello 2 **solo** se la sua dipendenza da JUCE è reale e non rimovibile a
+costo ragionevole. L'alternativa scartata era togliere `juce_core` dal percorso
+(`SpinLock` → `std::atomic_flag`, `jmin` → `std::min`): rifiutata perché tocca lo schema di
+swap realtime-safe di Stability (FR-54/56), che oggi funziona ed è provato — modificare
+codice in `processBlock` per rendere testabile un altro modulo è il verso sbagliato.
+
+**Conseguenze**
+- `ctest` passa da 7 a **8** suite; il tempo totale resta sotto i 2 secondi.
+- **A-06 diventa più urgente**: le suite fuori dal gate della CI passano da 4 su 7 a **5 su
+  8**, e la nuova non sarebbe comunque compilabile con i tre `g++` a mano. Il passaggio a
+  `ctest` in CI (già la sostanza di A-06) è ora l'unico modo di coprirla.
+- D-11 **non è superata**: il livello 1 resta il default e resta il gate. Questa entry la
+  emenda, non la sostituisce.
+
+**Stato** — Attiva. Vedi `BUGS.md` § B-10 e A-06 fra le decisioni aperte.
+
+---
+
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |
@@ -270,6 +335,6 @@ gitignored. Un futuro "alleggerimento" parta da lì, non da `tests/`.
 | A-03 | **Tipo di licenza JUCE** | prima della beta | Indie vs commerciale, in funzione del fatturato previsto |
 | A-04 | **Certificati di firma e notarizzazione** | era M0 | Apple Developer ID + code signing Windows. Il lead time più lungo del progetto, mai avviato |
 | A-05 | **Sotto-blocchi in `processBlock`** | non pianificata | Diagnosi di s.13: la frequenza di controllo del motore è il reciproco del block size dell'host. Fix previsto (ciclo a sotto-blocchi 64–128 campioni) **mai scritto**. Intervento strutturale: da decidere **con l'utente** come trattare i messaggi MIDI, oggi consumati una volta per blocco. Misurare prima di implementare |
-| A-06 | **CI: `ctest` invece dei tre `g++` a mano** | non pianificata | Conseguenza di D-11: 4 suite su 7 sono fuori CI e ogni target nuovo resta fuori da solo |
+| A-06 | **CI: `ctest` invece dei tre `g++` a mano** | non pianificata | Conseguenza di D-11: **5 suite su 8** sono fuori CI e ogni target nuovo resta fuori da solo. Aggravata da D-16 (s.30): `phrase_scheduler_test` linka `juce_core` e **non è compilabile** con i tre `g++` a mano, quindi passare a `ctest` non è più solo più comodo — è l'unico modo di coprirla |
 | A-07 | **Preset di fabbrica** | — | Solo "Min" è verificato contro il prototipo M4L. Gli altri 6 sono voicing jazz generici. Contenuto oltre i 7 tipi base ancora da decidere |
 | A-08 | Prezzi dei tre tier · canale di vendita · consegna licenza nel bundle hardware | — | Non tecniche |

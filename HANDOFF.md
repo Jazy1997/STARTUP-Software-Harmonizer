@@ -1,6 +1,6 @@
 # HANDOFF — HARMONIZER
 
-> Ultimo aggiornamento: **2026-08-10**, sessione 29.
+> Ultimo aggiornamento: **2026-08-10**, sessione 30.
 > Questo file descrive **solo lo stato di oggi**. La storia sta in `LOG/`, i sintomi
 > aperti in `BUGS.md`, le decisioni durature in `DECISIONS.md`, la mappa dei moduli
 > in `MAPPA.md`. Fonte di verità del prodotto: `PRD-Harmonizer-v1.md` + `PRD-UI.md`.
@@ -20,21 +20,27 @@ Plugin armonizzatore per strumenti monofonici (VST3 / AU / Standalone). Calcola
   confermato stabile all'ascolto (s.26).
 - UI: tre schermate Main / Edit / Impostazioni con barra di navigazione sempre visibile.
 - **M6 (licensing) non esiste**: `src/licensing/` è una cartella vuota.
-- 7 suite `ctest` verdi. `pluginval --strictness-level 10` verde su VST3 (Win) e AU (CI macOS).
-- Working tree **sporco**: il lavoro di s.28 non è mai stato committato (vedi sotto).
+- **8** suite `ctest` verdi (s.30: nuova `phrase_scheduler`, prima copertura di quel modulo —
+  D-16). `pluginval --strictness-level 10` SUCCESS su VST3 (Win) e verde su AU (CI macOS).
+- **I sintomi dei buchi sono sospesi per decisione dell'utente** (s.30): B-05 e B-06 passano
+  a `SOSPESO`, la mitigazione è documentale — *"vanno compilate tutte le celle delle voci
+  che si vogliono attivare"*. La discrepanza fra questa regola e le misure di B-05 è
+  annotata dentro l'entry: leggerla prima di riaprire.
+- Working tree **pulito**, `main` allineato a `origin/main`. Il lavoro di s.30 è in
+  `ab79ae7` (FR-42), `5c985e3` (FR-19) e nel commit di documentazione che li segue.
 
 ---
 
 ## Prossimo passo
 
-**Uno solo: chiudere B-05 (il "ribattuto").** Serve un input che solo l'utente può dare —
-riesportare lo stesso materiale con un **bounce offline** o dopo freeze della traccia.
+**Uno solo: FR-59, la scala 70–200% + HiDPI.** È l'ultima voce nominata nel contenuto di M5
+in PRD §12 (*"Le tre schermate, drag and drop, editor tabella, **scaling**"*), è `[MUST]`, ed
+è più piccola di come questo file la descriveva fino a s.29 — vedi limiti noti: la finestra è
+**già ridimensionabile**, manca la scala percentuale.
 
-- Se il buco sparisce → era un underrun real-time del DAW, niente da correggere nel DSP.
-- Se resta identico → si instrumenta `PsolaShifter::detectEpochs()`/`synthesise()`
-  direttamente sull'attacco di nota.
-
-Dettagli e misure in `BUGS.md` § B-05.
+Da decidere prima di scrivere: scala uniforme via `AffineTransform` su un layout logico fisso
+900×660 (lettura letterale di FR-59, HiDPI gratis, si perde il reflow libero) oppure tenere
+separati i due gradi di libertà. Porta con sé il difetto dell'altezza minima qui sotto.
 
 ---
 
@@ -44,7 +50,8 @@ Regola 12 di `CLAUDE.md`: nulla che tocchi il suono si dichiara completo per cal
 
 | Cosa | Dove | Stato |
 |---|---|---|
-| Isteresi cella vuota, `kEmptyCellHoldMs = 80.0f` | `src/voices/EmptyCellHold.h` | **Scritta, testata (12 verifiche verdi), MAI committata.** Misurata **irrilevante** sul materiale reale: le attese vere durano 2136 ms e 279 ms, quindi soglia 0 e soglia 80 ms danno output identico. Da presentare come miglioramento indipendente, **non** come il fix di B-05. La soglia di 80 ms non è mai stata tarata. |
+| **B-10 con Keep Tails ON** | `PhraseScheduler.cpp`, loop di rendering | B-07, B-10 e B-12 sono confermati all'ascolto e **chiusi** (s.30). Ma la conferma è stata **generale**, non su questa configurazione, dove il ramo di B-10 si applica anche alle code: è la scelta di progetto più discutibile del fix (tensione con FR-46). |
+| Isteresi cella vuota, `kEmptyCellHoldMs = 80.0f` | `src/voices/EmptyCellHold.h` | **Committata** in `be9a40f`. Misurata **irrilevante** sul materiale reale (le attese vere durano 2136 ms e 279 ms, quindi soglia 0 e soglia 80 ms danno output identico). La soglia di 80 ms **non è mai stata tarata** e non è mai passata per l'ascolto. |
 
 ---
 
@@ -52,23 +59,45 @@ Regola 12 di `CLAUDE.md`: nulla che tocchi il suono si dichiara completo per cal
 
 Da non scambiare per requisiti soddisfatti.
 
-- **FR-42 non arriva in Play mode**: `PlayModeInput` non riceve `setFormantSpread` /
-  `setVoiceFormantOffset`. Buco reale su un `[MUST]`, aperto da s.23.
-- **FR-59 assente**: finestra a dimensione fissa `setSize(900, 660)`. Nessun
-  ridimensionamento 70–200%, nessuna verifica HiDPI/Retina.
+- **FR-59 — manca la SCALA, non il ridimensionamento.** La finestra è **già
+  ridimensionabile**: `PluginEditor.cpp:392` `setResizable(true,true)` + `:399`
+  `setResizeLimits(520,620,1200,900)`. Quello che non esiste è la scala percentuale
+  70–200%: zero occorrenze di `setScaleFactor`/`AffineTransform` in `src/`, tutte le
+  costanti di layout sono pixel hardcoded (quindi oggi è *reflow*, non *scaling*), e la
+  dimensione dell'editor non è serializzata. HiDPI/Retina mai verificato.
+  *(Corregge la voce "finestra a dimensione fissa, nessun ridimensionamento" che questo
+  file riportava fino a s.29: era falsa.)*
+- **Keep Tails irraggiungibile a finestra minima**: a 620 px di altezza `layoutEdit()`
+  chiede ~528 px di contenuto su 522 disponibili, e `keepTailsToggle`
+  (`PluginEditor.cpp:592`) collassa ad altezza ~0. Nessun viewport verticale sulle pagine,
+  quindi l'utente non lo recupera se non allargando. Trovato in s.30, mai corretto.
+- **Le colonne NON sono tagliate** — voce rimossa perché falsa su entrambi i componenti.
+  `RootNoteGrid` è 2×6 **per requisito** (FR-75, reshape in `39c3282`);
+  `PresetTableEditor.cpp:120,129` divide la larghezza disponibile per 12, quindi le 12
+  colonne ci sono sempre tutte e si **comprimono** (69 px a 900, 38 px a finestra minima).
+  Il limite reale è di leggibilità alle larghezze piccole, non di raggiungibilità.
 - **Preset di fabbrica non verificati**: dei 7, **solo "Min"** è confrontato col prototipo
   Max4Live. Gli altri 6 sono voicing jazz generici scritti algoritmicamente.
-- **CI copre 3 delle 7 suite**: `build.yml` ricompila a mano con `g++` e non invoca mai
-  `ctest`. Fuori CI: `glide`, `cell_input_parser`, `voice`, `empty_cell_hold`, e ogni
-  target futuro.
+- **CI copre 3 delle 8 suite**: `build.yml` ricompila a mano con `g++` e non invoca mai
+  `ctest`. Fuori CI: `glide`, `cell_input_parser`, `voice`, `empty_cell_hold`,
+  `phrase_scheduler`, e ogni target futuro — quindi **tutto il lavoro di s.30**. La nuova
+  `phrase_scheduler` non è nemmeno *compilabile* con quei `g++` (linka `juce_core`, D-16):
+  passare a `ctest` non è più solo più comodo, è l'unico modo di coprirla. Vedi A-06.
+- **Il tetto voci simultanee ha lo stesso difetto di B-10** (B-11): abbassare
+  `maxSimultaneousVoices` non spegne gli slot già assegnati. Oggi non morde (default 32 su
+  32). Non riparato con B-10 perché è un tetto globale fra frasi e serve una politica.
 - **La UI non riflette un override CC attivo** (FR-36/37): il CC non scrive nel parametro
-  APVTS, quindi la griglia fondamentale non si aggiorna.
-- **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto, nessun test numerico.
+  APVTS, quindi la griglia fondamentale non si aggiorna (`PluginEditor.cpp:790-795`).
+- **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto. T-6/T-7 verificano
+  che i knob *arrivino*, non che il valore *sia giusto*.
+- **Knob formanti senza rampa**: `Voice::setFormantSpread`/`setFormantOffsetSemitones`
+  scrivono il float grezzo, senza `Glide` (a differenza di gain e pan). Girare il knob è un
+  gradino nel rapporto formantico. Vale già in Harmonizer; se si sentisse un click, aprire
+  un'entry propria in `BUGS.md`.
 - **CC e Play mode mai provati con hardware reale**: `override_manager_test` copre la
   precedenza, il parsing MIDI di `CcRouter` no.
-- **Nessuna `LookAndFeel` custom**: forma dei knob, colori, font — lavoro mai iniziato.
-- **Colonne tagliate**: griglia fondamentale e tabella 12×8 non mostrano tutte e 12 le
-  colonne alla larghezza attuale. `Viewport` orizzontale rimandato da s.21.
+- **Nessuna `LookAndFeel` custom** (D-10, rimandata di proposito): forma dei knob, colori,
+  font — lavoro mai iniziato. `paint()` disegna ancora un titolo segnaposto.
 - **CPU mai profilata** con 8 voci contro il budget ≤15% del PRD §1.3.
 - **Catch2 mai adottato** (previsto da PRD §9.1): i test sono `int main()` scritti a mano.
 
@@ -78,6 +107,12 @@ Da non scambiare per requisiti soddisfatti.
 
 Nessuna di queste è tecnica; nessuna è chiusa.
 
+- **La guida utente non esiste** — nessun README utente, nessuna `docs/`, nessun tooltip
+  in-app: i 7 `.md` alla radice sono tutti documenti di processo. È ora il posto designato
+  per la regola *"compila tutte le celle delle voci che vuoi attivare"* (s.30) e per il
+  modello CC posizionale (D-03, che il PRD §13 segnala come rischio di confusione).
+  **In tensione col criterio d'uscita di M5** (PRD §12: *"un tester esterno usa il plugin
+  senza documentazione"*): se la regola serve, andrebbe resa evidente anche dalla UI.
 - Nome prodotto, marchio, dominio → bloccano `PLUGIN_MANUFACTURER_CODE` (`Hzso`),
   `PLUGIN_CODE` (`Hmz1`), `COMPANY_NAME` (`"TBD"`), `BUNDLE_ID`. **Cambiarli dopo il
   rilascio rompe i progetti salvati**, come il tipo AU.
