@@ -130,3 +130,18 @@ corretta per costruzione e verificabile leggendo il codice JUCE, ma **che a sche
 testi sfocati o bordi a mezzo pixel è una verifica visiva dell'utente** — l'analogo per gli
 occhi di ciò che la regola 12 dice per le orecchie. E **AU e Retina restano scoperti**:
 richiedono macOS, che non è mai entrato nel ciclo di verifica di questo progetto.
+
+## 8. Conferma dell'utente, e cosa esattamente copre
+
+A fine sessione: ***"Ok, funziona"***. La scala è quindi confermata **a vista**, ed è ciò che
+mancava.
+
+**Va però registrata per quello che è: una conferma generale.** Non dice che i tre punti del §7
+siano stati guardati uno per uno — se il display usato per la prova era a scala di sistema 100%,
+HiDPI non è stato esercitato affatto; Keep Tails al 70% e la persistenza fra sessioni salvate
+sono due gesti separati che nessuno ha dichiarato di aver fatto. È la stessa forma della
+conferma di B-10/B-12 in s.30, e lì l'annotazione è servita: il caso Keep Tails ON è rimasto
+scoperto e lo è ancora.
+
+Restano quindi in `HANDOFF.md` § "In attesa di conferma", rientrati sotto la conferma generale e
+non cancellati da essa.

@@ -54,9 +54,10 @@ invece header-only e passerebbero anche così.
 
 | Cosa | Dove | Stato |
 |---|---|---|
-| **La resa su HiDPI** | FR-59 | La composizione dei due transform è corretta **per costruzione** (verificabile nel codice JUCE), ma che a schermo non ci siano testi sfocati o bordi a mezzo pixel **si vede, non si calcola**. È l'analogo per gli occhi della regola 12. Prima verifica utile: aprire il plugin su un display con scala di sistema ≠ 100%. |
-| **Keep Tails al 70%** | `PluginEditor.cpp` | Il difetto di s.30 dovrebbe essere chiuso per inciso: altezza logica fissa a 660, `layoutEdit()` dispone di 562 px e ne chiede 528 — **34 px di margine a qualunque scala** (prima: 522 contro 528, deficit 6). **Calcolato, non visto**: la stessa aritmetica riproduce i 522/528 documentati in s.30, ma il toggle va guardato davvero. |
-| **La persistenza della scala** | `UiSettings` nello stato | Da provare chiudendo e riaprendo un progetto. Le sessioni salvate prima di oggi non hanno il nodo e aprono al 100%: è il comportamento voluto. |
+| **FR-59: la conferma è stata GENERALE** | — | s.33, *"Ok, funziona"*. Basta a dire che la scala funziona a vista, **non** che i tre punti qui sotto siano stati guardati uno per uno. Stessa forma della conferma di B-10/B-12 in s.30: se uno di essi si rivelasse difettoso, non è una ricaduta ma una cosa mai verificata. |
+| ↳ **Resa su HiDPI** | FR-59 | La composizione dei due transform è corretta **per costruzione**, ma non è detto che il display usato per la prova avesse scala di sistema ≠ 100%. Da rifare esplicitamente lì, e su **Retina mai** (serve macOS). |
+| ↳ **Keep Tails al 70%** | `PluginEditor.cpp` | Il difetto di s.30 dovrebbe essere chiuso per inciso: `layoutEdit()` dispone di 562 px logici e ne chiede 528 — **34 px di margine a qualunque scala** (prima: 522 contro 528). **Calcolato**; che il toggle si veda davvero al 70% va guardato su Edit. |
+| ↳ **Persistenza fra sessioni** | `UiSettings` nello stato | Da provare chiudendo e riaprendo un **progetto salvato**: non è la stessa cosa che cambiare scala a plugin aperto. |
 | **La conferma di B-14 fu dal vivo, non su export** | — | In `SAMPLE TEST/` non esiste alcun `_02`. I numeri (79.1 → 44.3 ms) restano **verificati per calcolo**, e con loro la rete anti-regressione di B-13. Se la flem tornasse, il primo passo è quell'export mancante. |
 | `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | L'attesa in frame d'analisi. **Misurata, non tarata all'ascolto**: se il cambio d'armonia sembrasse in ritardo, è la prima manopola. |
 | Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: l'impostazione più pronta che resta **pulita su tutte e quattro** le tabelle. Ab2 sarebbe 12 ms più veloce ma riapre in piccolo B-13. |
