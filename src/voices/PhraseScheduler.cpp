@@ -195,6 +195,7 @@ void PhraseScheduler::triggerNewPhrase (const std::array<harmony::Cell, harmony:
     newPhrase->isLive = true;
     newPhrase->slotIndices.fill (-1);
     newPhrase->emptyCellSamples.fill (0);
+    newPhrase->warmupSamples.fill (0); // attacco di nota: nessun riscaldamento, vedi B-12
 
     for (int v = 0; v < harmony::numVoices; ++v)
     {
@@ -293,6 +294,13 @@ bool PhraseScheduler::process (const float* monoIn,
                     continue; // pool esaurito anche dopo il furto: si riprova al blocco successivo
 
                 p.slotIndices[(size_t) v] = slot;
+                // B-12: voce AGGIUNTA a una frase gia' in suono. Il motore di
+                // questo slot e' freddo e restera' muto per la sua latenza
+                // dichiarata; senza questa attesa la dissolvenza d'ingresso si
+                // consumerebbe dentro quel silenzio e la voce entrerebbe di
+                // netto. Vedi Phrase.h. Il ramo del trigger (frase nuova) NON
+                // fa questo: li' e' l'attacco di nota, gia' validato.
+                p.warmupSamples[(size_t) v] = voicePool.getSlot (slot).getLatencySamples();
                 ++lateBindingsThisBlock;
             }
         }
@@ -365,8 +373,64 @@ bool PhraseScheduler::process (const float* monoIn,
             if (slotIndex < 0)
                 continue;
 
-            const auto& cell = p.frozenOffsets[(size_t) v];
             auto& voice = voicePool.getSlot (slotIndex);
+
+            // FR-19 (sessione 30, B-10): "le voci oltre il numero selezionato
+            // sono mute anche se il preset contiene offset per loro". Le due
+            // guardie `v >= numRequestedVoices` gia' presenti (triggerNewPhrase
+            // e il late-binding sopra) sono puramente ALLOCATIVE: sanno solo
+            // aggiungere slot. Senza questo ramo, abbassare il selettore su una
+            // frase gia' in suono non spegneva nulla — la riga setMuted(false)
+            // in fondo al loop continuava a tenere accese le colonne in
+            // eccesso, e tornavano a tacere solo alla morte della frase
+            // (freeAllPhrases, cioe' solo a segnale assente: "ferma l'audio,
+            // aspetta il silenzio, riparti"). Alzare funzionava invece subito,
+            // ed e' esattamente l'asimmetria riportata dall'utente.
+            // Letto con FR-17 (un cambio su nota tenuta si applica SUBITO,
+            // senza ribattere), il verdetto va dato ogni blocco, qui.
+            //
+            // Stessa forma del ramo `releasing` sopra, che e' il modo gia'
+            // provato di far uscire di scena una voce: dissolvenza di ampiezza
+            // (kDeclickMs, anti-click di sessione 12/13 — B-03), e solo a
+            // silenzio CONFERMATO il goCold() e la restituzione dello slot
+            // (sessione 27/B-04: il reset va fatto quando nessuno rifornira'
+            // piu' il motore, non prima). Liberare slotIndices[v] fa smettere
+            // isSlotInUse() di proteggere lo slot: torna davvero al pool, cosi'
+            // abbassare le voci abbassa davvero la CPU. Se il selettore risale,
+            // il late-binding sopra rilega lo slot al blocco successivo.
+            if (v >= numRequestedVoices)
+            {
+                voice.setMuted (true);
+
+                if (! voice.isSilent())
+                {
+                    voice.processAdd (monoIn, mixL, mixR, numSamples, quantizedPlayedNote, continuousInputMidiNote);
+                }
+                else
+                {
+                    voice.goCold();
+                    p.slotIndices[(size_t) v] = -1;
+                    p.emptyCellSamples[(size_t) v] = 0;
+                    p.warmupSamples[(size_t) v] = 0;
+                }
+
+                continue; // non conta come voce attiva (FR-53)
+            }
+
+            // B-12: riscaldamento di una voce appena AGGIUNTA a questa frase.
+            // Resta muta (ampGlide fermo a zero, nessuna dissolvenza sprecata)
+            // e si limita ad alimentare il motore, esattamente come fa il ramo
+            // della cella vuota qui sotto per non lasciarlo affamato. Quando
+            // il conto arriva a zero, il blocco successivo trova un motore gia'
+            // pronto e la dissolvenza degli 8 ms coincide con segnale vero.
+            if (p.warmupSamples[(size_t) v] > 0)
+            {
+                p.warmupSamples[(size_t) v] -= numSamples;
+                voice.processWarmOnly (monoIn, numSamples, continuousInputMidiNote);
+                continue; // non conta come voce attiva finche' non si sente
+            }
+
+            const auto& cell = p.frozenOffsets[(size_t) v];
 
             if (! cell.has_value())
             {

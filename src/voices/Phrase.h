@@ -55,6 +55,20 @@ struct Phrase
     // su QUESTA frase, da quando l'ultima volta aveva un valore (o dal
     // trigger, se non ne ha mai avuto uno). Azzerato a triggerNewPhrase.
     std::array<int, harmony::numVoices> emptyCellSamples {};
+    // B-12 (sessione 30): quando una voce viene AGGIUNTA a una frase gia' in
+    // suono (il selettore Voices sale, late-binding in PhraseScheduler), lo
+    // slot appena legato ha il motore freddo e resta muto per tutta la
+    // latenza dichiarata (~20ms). La dissolvenza anti-click di Voice dura
+    // 8ms: partendo subito si esaurisce DENTRO quel silenzio, e quando il
+    // segnale vero arriva la voce e' gia' a guadagno pieno — entra di netto.
+    // Misurato: ritardo 20.09ms, salita 10%->90% di 3.56ms invece di 8ms.
+    // Qui si contano i campioni di riscaldamento ancora dovuti: finche' sono
+    // > 0 la voce resta muta e viene alimentata con processWarmOnly (stesso
+    // meccanismo di sessione 27/B-04), cosi' la dissolvenza inizia quando il
+    // motore ha davvero qualcosa da dire. Zero = voce operativa.
+    // NON si applica alle voci nate col trigger di una frase nuova: quello e'
+    // l'attacco di nota, un evento diverso e gia' validato all'ascolto.
+    std::array<int, harmony::numVoices> warmupSamples {};
     uint64_t age = 0;
     bool active = false;
     bool isLive = false;

@@ -161,6 +161,26 @@ add_executable(voice_test
 target_include_directories(voice_test PRIVATE src libs/signalsmith-stretch)
 target_compile_features(voice_test PRIVATE cxx_std_20)
 
+# Verifica numerica di PhraseScheduler (sessione 30, B-10/FR-19). PRIMO test
+# su questo modulo, rimasto scoperto fino a oggi. A differenza delle 7 suite
+# sopra, questa NON e' JUCE-free: PhraseScheduler dipende da juce_core
+# (juce::SpinLock in VoicePool.h, juce::jmin, juce::Uuid/String via
+# HarmonyPreset.h), quindi il livello "nessuna dipendenza, runner minimo" di
+# D-11 non la puo' contenere. Gira in ctest ma NON nel gate a g++ nudo della
+# CI — vedi D-16 (che emenda D-11) e A-06.
+add_executable(phrase_scheduler_test
+    tests/phrase_scheduler_test.cpp
+    src/voices/PhraseScheduler.cpp
+    src/voices/VoicePool.cpp
+    src/voices/Voice.cpp
+    src/dsp/PsolaShifter.cpp
+    src/dsp/SpectralShifter.cpp
+    src/dsp/PitchShifterFactory.cpp
+)
+target_include_directories(phrase_scheduler_test PRIVATE src tests libs/signalsmith-stretch)
+target_compile_features(phrase_scheduler_test PRIVATE cxx_std_20)
+target_link_libraries(phrase_scheduler_test PRIVATE juce::juce_core)
+
 # Strumento diagnostico OFFLINE per il click "in mezzo alla nota" (sessione
 # 17, segnalato dopo aver riascoltato il fix di sessione 16): legge un file
 # WAV vero fornito dall'utente e cerca discontinuita' anomale con la stessa
@@ -234,3 +254,4 @@ add_test(NAME glide COMMAND glide_test)
 add_test(NAME cell_input_parser COMMAND cell_input_parser_test)
 add_test(NAME voice COMMAND voice_test)
 add_test(NAME empty_cell_hold COMMAND empty_cell_hold_test)
+add_test(NAME phrase_scheduler COMMAND phrase_scheduler_test)
