@@ -326,6 +326,51 @@ codice in `processBlock` per rendere testabile un altro modulo è il verso sbagl
 
 ---
 
+## D-17 — L'aggancio va al grado d'arrivo, mai per gradi intermedi; le soglie si contano in millisecondi
+
+**Contesto** (s.31) — La nota agganciata da `PitchLatch` **indicizza la tabella armonica**:
+ogni valore che quella classe restituisce è una colonna del preset che il motore suona
+davvero. Fino a s.30 l'aggancio si spostava di **un semitono per chiamata**, ed è chiamata una
+volta per blocco: un salto C→E veniva servito attraversando C#, D, D#, un blocco ciascuno, e
+ogni passo applicava sul serio l'offset di un grado che il performer non aveva eseguito.
+Misurato in s.31 sul materiale dell'utente: **10 corse di offset invece di 4**, 116 ms di
+offset spuri a 1024 campioni, e sull'export reale il wet a 262.8 Hz (la cella b2, −2) dove il
+riferimento stava a 196. Vedi `BUGS.md` § B-13.
+
+**Decisione** — Due regole, che valgono da qui in avanti per qualunque isteresi della catena
+di controllo:
+
+1. **L'aggancio non passa mai per un valore intermedio.** Va dove il pitch è realmente
+   arrivato, o resta dov'era. Un'isteresi che *attraversa* i valori intermedi non è
+   un'isteresi: è un generatore di eventi che nessuno ha chiesto. Il rimbalzo che il passo
+   incrementale evitava si evita meglio adottando **esattamente** l'arrotondamento della
+   stima, che per costruzione non produce overshoot.
+2. **Le soglie di attesa si esprimono in millisecondi, contati sui campioni del blocco, mai
+   in numero di chiamate.** Contarle in chiamate lega il comportamento al buffer size
+   dell'host: lo stesso difetto durava 20 ms a 128 campioni e 464 ms a 4096. Vale già per
+   `EmptyCellHold` (s.28) e ora per `PitchLatch`; vale per qualunque soglia futura.
+
+**Conseguenze**
+- `PitchLatch::update()` prende `numSamples` e la classe ha un `prepare(sampleRate)`.
+  `kNoteSettleMs = 25` è scelto più lungo dei **14.5 ms** di stima confidente ma sbagliata
+  misurati a un cambio di nota reale, con margine. **Non è tarato all'ascolto.**
+- `tests/pitch_latch_test.cpp` TEST 7 è stato **riscritto**: asseriva *"esattamente 5 passi da
+  60 a 65, un semitono a chiamata"*, cioè metteva per iscritto il difetto. Sostituzione
+  deliberata e motivata (`CLAUDE.md` regola 13), non un adeguamento silenzioso al nuovo codice.
+- **Qualifica la mitigazione di D-15.** La regola utente *"vanno compilate tutte le celle delle
+  voci che si vogliono attivare"* è **controproducente** su questo sintomo: una cella
+  intermedia compilata con un valore diverso dalla destinazione veniva suonata, mentre una
+  cella vuota era già protetta da `EmptyCellHold`. D-15 non è superata (riguarda i buchi di
+  ampiezza di B-05/B-06), ma la sua regola **non va scritta nella guida utente in quella
+  forma**: prima serve capire se, corretto B-13, serva ancora.
+- Ciò che questa decisione **non** tocca: la quantizzazione al blocco dell'istante in cui il
+  cambio atterra (A-05) e il motore PSOLA, escluso su richiesta esplicita dell'utente
+  (*"sono contento del timbro ora"*). `psola` e `voice` restano verdi identiche.
+
+**Stato** — Attiva, in attesa della conferma all'ascolto di B-13.
+
+---
+
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |

@@ -66,7 +66,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `PresetLibrary.{h,cpp}` | Lista ordinata, CC posizionale, `movePreset`, copy-on-write. `makeFactoryPresets()` genera i 7 tipi via `generateDropVoicingTable` |
 | `HarmonyEngine.{h,cpp}` | `degreeOf` / `getOffsets` |
 | `CsvIo.{h,cpp}` | Import/export CSV (FR-03) |
-| `PitchLatch.h` | Isteresi di intonazione, tolleranza ±25 cent (B-09) |
+| `PitchLatch.h` | Isteresi di intonazione, tolleranza ±25 cent (B-09). **Candidato + adozione diretta** (s.31, D-17): non passa mai per una nota intermedia, e l'attesa `kNoteSettleMs` è in ms contati sui campioni del blocco. `prepare(sampleRate)` + `update(nota, onAttack, numSamples)` |
 
 ### `src/voices/` — 8 file
 | File | Ruolo |
@@ -126,7 +126,7 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 
 ---
 
-## `tests/` — 13 file
+## `tests/` — 14 file
 
 **In `ctest` (8)** — nessun Catch2 (D-11). Le prime 7 sono JUCE-free e compilabili con un
 `g++` nudo; `phrase_scheduler` linka `juce_core` e gira **solo** in `ctest` (D-16)
@@ -136,13 +136,13 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 | `psola` | 12 test: accuratezza di trasposizione, ortogonalità pitch/formanti, discontinuità, monotonia della latenza, inviluppo di sovrapposizione (con la `beta` reale di `Voice.cpp`), riattivazione di slot. **Test 10/11/12 sono verifiche di trasparenza, non riproducono i bug** — soglia onesta "non degrada" |
 | `voice` | Inviluppo alla riattivazione su 5 Stability × block 64/1024 con controllo negativo. H3 (riattivazione), **H5** (`processWarmOnly`: 23.95 ms → 0.00 ms). T-1..T-5: pan, potenza costante, **regressione bit-per-bit al default**, gain a zero, anti-click al confine di blocco. **T-6/T-7** (s.30, FR-40/41): il picco formantico si sposta della quantità prevista con `spread` e con l'offset manuale, che si sommano in semitoni |
 | `glide` | 15 verifiche. TEST 1 riproduce il bug originale (salto 88% di fondoscala in un campione con blocco 4096) |
-| `pitch_latch` | 8 gruppi, incluso l'anti-rimbalzo che ha scoperto il bug prima dell'integrazione |
+| `pitch_latch` | 11 gruppi, incluso l'anti-rimbalzo che ha scoperto il bug prima dell'integrazione. **TEST 7 riscritto in s.31** (asseriva il passo di un semitono per chiamata, cioè il difetto B-13). **TEST 9/10/11** (s.31): nessuna nota intermedia su salti ±1..12; stessa sequenza a block 128/512/1024/4096; una stima confidente ma sbagliata di 14.5 ms non viene adottata |
 | `override_manager` | 6 test sulla precedenza CC/automazione |
 | `cell_input_parser` | 19 verifiche sulla distinzione `0` / vuoto / spazzatura |
 | `empty_cell_hold` | 12 verifiche |
 | `phrase_scheduler` | **Linka `juce_core`** (D-16). P-1..P-4 (s.30, FR-19/B-10): il conteggio voci scende col selettore, l'ampiezza scende al livello giusto, la risalita non regredisce, la voce si spegne sfumando e non tagliata. P-1/P-2 verificati falliti sul codice pre-fix. **P-5/P-6** (B-12): P-5 distingue per costruzione se un click in aggiunta è preesistente o introdotto da B-10; **P-6 isola la sola voce aggiunta per differenza fra due rig** e ne misura il tempo di salita — è la metrica che ha trovato B-12 dove `maxJump` sul mix non vedeva nulla |
 
-**Sonde diagnostiche, NON in ctest** — dipendono da `SAMPLE TEST/`, non versionato
+**Sonde diagnostiche, NON in ctest** — dipendono da `SAMPLE TEST/`, non versionato (5)
 
 | Nome | Cosa fa |
 |---|---|
@@ -150,6 +150,7 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 | `real_export_probe` | Confronto DRY vs WET reale, cadenza dei disturbi, `--trace <inizio> <fine>` |
 | `voice_reference_probe` | Confronto contro un riferimento esterno (AutoShift) |
 | `envelope_probe` | Dump dell'inviluppo RMS fine di un WAV su una finestra |
+| `degree_trace_probe` | **(s.31)** Quale sequenza di offset la catena di controllo chiede al motore. `PitchDetector`/`OnsetDetector`/`PitchLatch`/`stepEmptyCellHold` veri, **nessun `Voice` né PSOLA**: dice se un difetto nasce prima della sintesi o dentro. Conta le "corse di offset applicato" e quelle di passaggio |
 
 **Header condivisi** — `SampleAnalysis.h` (readWav, measureFrame, envelopeRms, fitWindow,
 findClicks, HNR) · `TestSignals.h` (generatori, measureF0, formantPeak, goertzelMag)

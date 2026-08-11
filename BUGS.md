@@ -45,7 +45,9 @@ non è mai stato toccato da nessuno di questi fix.
   `PsolaShifter::emitGrain`: bug reale, ma non risolutivo.
 - s.13 — Diagnosticato, non corretto: la frequenza di controllo dell'intero motore è
   il reciproco del block size dell'host (~10.8 Hz a 4096 campioni/44.1 kHz). Fix
-  previsto (sotto-blocchi in `processBlock`) **mai scritto** — vedi D-13.
+  previsto (sotto-blocchi in `processBlock`) **mai scritto** — vedi **A-05** fra le decisioni
+  aperte. *(Fino a s.30 questa riga rimandava a "D-13", che è tutt'altro: la numerazione delle
+  decisioni è cambiata quando i documenti sono stati divisi.)*
 - s.19 — Due tentativi su `detectEpochs` (peso sulla ricerca del picco, poi
   interpolazione sub-campione): misurati inefficaci sul file reale e **ritirati**
   (`git checkout b67a741`).
@@ -61,6 +63,10 @@ non è mai stato toccato da nessuno di questi fix.
   **Confermato all'ascolto**: "il timbro ora è stabile per tutta la nota".
 
 **Residuo accettato** — sporco all'attacco di nota, giudicato accettabile dall'utente.
+**Aggiornamento s.31**: una parte di quel residuo aveva una causa propria, misurata e
+corretta — vedi **B-13**. Non chiude questa entry (B-02 è il timbro a nota tenuta, chiuso in
+s.26) e non svuota i candidati qui sotto: dice solo che "sporco all'attacco" era un'etichetta
+per almeno due fenomeni diversi.
 
 **Candidati mai esplorati** (se il residuo dovesse riemergere)
 - Forma/ampiezza della finestra di Hann del grano (`emitGrain`, calcolo di `Lg`/`W`).
@@ -435,3 +441,79 @@ riportato. Se in futuro si volesse, la misura per deciderlo è già scritta (`P-
 **Residuo non verificato singolarmente** — il comportamento con **Keep Tails ON**, dove il
 ramo di B-10 si applica anche alle code (tensione con FR-46, vedi B-10). La conferma
 dell'utente è stata generale, non su quella configurazione specifica.
+
+---
+
+## B-13 — L'attacco viene sporcato dagli offset dei gradi intermedi
+
+**Stato: CHIUSO** · Ultimo tocco: s.32 · Confermato all'ascolto: **sì** (s.32, *"test#3 e
+test#2 ora suonano uguali; il problema delle celle vuote e delle voci intermedie è stato
+risolto"*)
+
+**Sintomo** (utente, s.31) — Attacchi di nota "sporchi" su tutti i preset **tranne** quelli in
+cui l'offset non cambia mai. Quattro export a voce singola con reference (Autoshift):
+`exp#1_Test#2_V1_00` (R/2/3 tutti −7, b2/b3 **vuote**) è *"l'unico praticamente perfetto"*;
+`exp#1_Test#3_V1_00` ha gli stessi offset sui gradi eseguiti ma le celle intermedie a −2, ed
+è sporco. Formulazione dell'utente, che era già la diagnosi: *"l'attacco è perfetto solo se
+non cambiano gli offset tra una nota e l'altra e anche in tutte quelle intermedie"*.
+
+**Meccanismo** — `PitchLatch::update()` si spostava di **un semitono per chiamata**, ed è
+chiamata **una volta per blocco**. Un salto C→E non arrivava in un colpo: l'aggancio passava
+per C#, D, D#, un blocco ciascuno, e ad ogni passo `HarmonyEngine::getOffsets` leggeva la
+colonna di quel grado, che `PhraseScheduler` applicava come target reale sulla frase viva.
+Con Glide 0 ms ogni gradino è un salto d'intonazione istantaneo. Test#2 era immune perché le
+celle vuote sono già protette da `stepEmptyCellHold` (s.28): quella protezione esisteva solo
+per la cella vuota, non per una cella piena con valore diverso.
+
+Il passo incrementale (s.11) nasceva da un problema reale — un passo *incondizionato* rimbalza
+durante uno scivolamento lento — e lo risolveva. Il prezzo non era stato visto.
+
+**Misure** (tre percorsi indipendenti, tutti in `LOG/sessione-31.md`)
+- **Sull'export reale** (`real_export_probe`, REF contro plugin): Test#3, transizione C4→D4,
+  il wet sta a **262.8 Hz per ~30 ms** dove il riferimento sta a 196 — cioè D4 trasposto di
+  **−2**, la cella b2 del preset — a RMS pieno e con periodicità che crolla a 0.48. Test#1,
+  discesa E4→C4: **248 Hz per ~50 ms** dove il target è 175, cioè **−1**, la cella del grado 2.
+  Test#2 (controllo): nessuna escursione.
+- **Nel codice** (`degree_trace_probe`, sonda nuova, moduli veri senza `Voice` né PSOLA):
+  tabella Test#3 a block 1024, **10 corse di offset applicato invece di 4**, di cui 5 di
+  passaggio per 116.1 ms, ciascuna lunga **esattamente un blocco**. Test#2: 2 corse, 0 di
+  passaggio.
+- **Dipendenza dal buffer**: il numero di corse spurie resta 5 a ogni block size, la durata
+  scala — 20.3 ms a 128, 58.0 a 512, 116.1 a 1024, **464.4 a 4096**.
+- **La stima del rilevatore NON attraversa**: a 128 campioni salta pulita da 59.969 a 62.233
+  (C→D) e da 61.978 a 64.232 (D→E). La spazzata era fabbricata dentro `PitchLatch`.
+- **Secondo fenomeno, solo sulla discesa E→C**: riacquistata confidenza dopo il transiente, il
+  rilevatore riporta **60.696** (70 cent crescente, arrotonda a 61 = b2) per **14.5 ms** prima
+  di assestarsi su 60.4. Il solo salto diretto adotterebbe quel 61.
+
+**Storia**
+- s.31 — Fix in `src/harmony/PitchLatch.h` (più la riga di chiamata e il `prepare()` in
+  `PluginProcessor.cpp`). Passo di un semitono → **candidato + adozione diretta**: oltre i
+  ±25 cent, e solo se l'arrotondamento è diverso dalla nota agganciata, quell'arrotondamento
+  diventa candidato e viene adottato **di colpo** dopo `kNoteSettleMs` = 25 ms di candidato
+  costante. Soglia in **millisecondi contati sui campioni del blocco**, non in numero di
+  chiamate. I 25 ms sono scelti più lunghi dei 14.5 ms di stima sbagliata misurati, con
+  margine — **non tarati all'ascolto**.
+  Il motore **non è stato toccato**: `PsolaShifter`, `Voice`, `PhraseScheduler` invariati, e
+  `psola`/`voice` restano verdi identiche.
+
+**Post-fix, misurato** — corse di passaggio **0** su tutte e quattro le tabelle (Test#1/#2/#3,
+Maj) e a tutti i block size 128→4096. A 1024 l'offset di destinazione è adottato allo stesso
+blocco di prima sulle salite, e **un blocco prima** sulla discesa. A 128 la discesa arriva
+~24 ms più tardi (è l'attesa), ma pulita. `ctest` 8/8, `pluginval --strictness-level 10`
+SUCCESS su VST3.
+
+**Conferma (s.32)** — la predizione scritta prima dell'ascolto (*"`Test#3_01` deve suonare
+come `Test#2_00`"*) ha retto: *"test#3 e test#2 ora suonano uguali"*. Entry chiusa.
+
+**La stessa conferma ha aperto B-14** — *"per una frazione di secondo la nota suona con
+l'offset di quella precedente, poi salta a quello corretto"*. È il residuo che questa entry
+dichiarava di non risolvere (l'istante in cui l'unico cambio atterra), non una ricaduta:
+sintomo diverso, entry propria.
+
+**Contraddice la mitigazione di D-15** — *"vanno compilate tutte le celle delle voci che si
+vogliono attivare"* è **controproducente** su questo sintomo: Test#3 ha le celle compilate ed
+è peggio di Test#2 che le ha vuote. Vedi D-17.
+
+**Non risolve** — la quantizzazione al blocco dell'istante in cui il cambio atterra (A-05),
+deliberatamente fuori scope.
