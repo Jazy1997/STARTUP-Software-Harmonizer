@@ -28,17 +28,26 @@ namespace
 
     constexpr double kSampleRate = 44100.0;
 
-    // Sessione 31: update() misura in CAMPIONI l'attesa prima di adottare una
-    // nota nuova (kNoteSettleMs = 25 ms). I test che vogliono osservare
-    // l'adozione in una sola chiamata passano un blocco piu' lungo della
-    // soglia; quelli che vogliono osservare l'attesa passano un blocco corto.
+    // Sessione 31/32: update() misura in CAMPIONI l'attesa prima di adottare
+    // una nota nuova, e l'attesa arriva dal chiamante — e' un multiplo del
+    // frame d'analisi del rilevatore (PitchLatch::settleSamplesForFrame), non
+    // piu' una costante in millisecondi. Qui si usa il frame a 60 Hz (736
+    // campioni = 16.7 ms), cioe' la configurazione fino a s.31: l'attesa che
+    // ne esce e' 1104 campioni = 25.0 ms, esattamente la vecchia soglia, e i
+    // test scritti allora restano confrontabili.
+    constexpr int kFrameSamplesAt60Hz = 736;
+    const int kSettleSamples = harmony::PitchLatch::settleSamplesForFrame (kFrameSamplesAt60Hz);
+
+    // I test che vogliono osservare l'adozione in una sola chiamata passano un
+    // blocco piu' lungo dell'attesa; quelli che vogliono osservare l'attesa
+    // passano un blocco corto.
     constexpr int kBlockOverSettle = 2048;  // 46.4 ms a 44.1 kHz
     constexpr int kBlockShort = 128;        //  2.9 ms a 44.1 kHz
 
     harmony::PitchLatch makeLatch()
     {
         harmony::PitchLatch latch;
-        latch.prepare (kSampleRate);
+        latch.prepare (kSettleSamples);
         return latch;
     }
 }
@@ -252,7 +261,7 @@ int main()
             // intero di blocchi, piu' un blocco per il disallineamento fra il
             // salto e la griglia. A 1024 campioni 25 ms non entrano in un
             // blocco da 23.2 e ne servono due — misurato, non stimato.
-            const double settleMs = 25.0;
+            const double settleMs = 1000.0 * kSettleSamples / kSampleRate;
             const double wholeBlocksOfSettle = std::ceil (settleMs * kSampleRate / 1000.0 / block) * blockMs;
             if (jumpAdoptedMs < settleMs - 1.0 || jumpAdoptedMs > wholeBlocksOfSettle + blockMs + 1.0)
                 latencyWithinBound = false;
@@ -287,6 +296,37 @@ int main()
             settled = latch.update (60.397f, false, kBlockShort);
 
         check (settled == 60, "appena la stima si assesta su 60.4, l'aggancio va a 60 (mai a 61)");
+    }
+
+    std::printf ("\nTEST 12 - l'attesa e' un multiplo del frame d'analisi, e a 60 Hz vale\n"
+                 "          esattamente i 25 ms cablati fino a s.31 (nessun cambio di suono)\n");
+    {
+        const double settleMsAt60 = 1000.0 * harmony::PitchLatch::settleSamplesForFrame (kFrameSamplesAt60Hz) / kSampleRate;
+        check (std::fabs (settleMsAt60 - 25.0) < 0.1, "frame 736 campioni (60 Hz) -> attesa 25.0 ms");
+
+        // Il punto del cambio di s.32: l'attesa segue la finestra invece di
+        // restare ferma. Con la nota piu' grave a Ab2 (Bb Tenor Sax, default)
+        // la finestra e' 896 campioni, quindi il frame e' 448.
+        const double settleMsAtAb2 = 1000.0 * harmony::PitchLatch::settleSamplesForFrame (448) / kSampleRate;
+        check (settleMsAtAb2 < settleMsAt60, "frame piu' corto -> attesa piu' corta, senza toccare altro");
+        std::printf ("    60 Hz: %.1f ms · Ab2: %.1f ms\n", settleMsAt60, settleMsAtAb2);
+
+        // Un'attesa piu' corta non deve riaprire B-13: nessuna nota intermedia,
+        // mai, a nessuna attesa — nemmeno a zero.
+        bool anyIntermediate = false;
+        for (int settle : { 0, 128, 448, 1104, 4096 })
+        {
+            harmony::PitchLatch latch;
+            latch.prepare (settle);
+            latch.update (60.0f, true, kBlockShort);
+            for (int i = 0; i < 40; ++i)
+            {
+                const int note = latch.update (67.0f, false, kBlockShort);
+                if (note != 60 && note != 67)
+                    anyIntermediate = true;
+            }
+        }
+        check (! anyIntermediate, "a qualunque attesa (0 inclusa) il salto 60->67 non passa per note intermedie");
     }
 
     std::printf ("\n===================================\n");

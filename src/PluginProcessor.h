@@ -54,6 +54,22 @@ public:
     // utilizzabili (1..hardVoiceSlotCapacity), senza mai riallocare.
     static constexpr int hardVoiceSlotCapacity = 32;
 
+    // B-14/D-18: gamma ammessa per la nota piu' grave d'analisi.
+    //
+    // Il default e' E2 = MIDI 40 (Voice Male), scelto MISURANDO in s.32, non
+    // per simmetria con la lista strumenti. Su materiale reale, a 1024
+    // campioni di buffer: 44.3 ms di ritardo contro i 79.1 della soglia fissa
+    // di 60 Hz usata fino a s.31, e ZERO offset di passaggio su tutte e
+    // quattro le tabelle di prova. Un gradino piu' su (Ab2, Bb Tenor Sax)
+    // scende a 32.7 ms ma su preset con TUTTI i gradi pieni lascia passare una
+    // sbandata del rilevatore — cioe' riapre in piccolo B-13. Non vale 12 ms.
+    //
+    // Gli estremi lasciano margine per strumenti non ancora in lista senza
+    // dover pubblicare un ID nuovo (regola 6).
+    static constexpr int minAnalysisLowestNote = 28;     // E1, 41.2 Hz
+    static constexpr int maxAnalysisLowestNote = 72;     // C5, 523.3 Hz
+    static constexpr int defaultAnalysisLowestNote = 40; // E2, 82.4 Hz
+
     juce::AudioProcessorValueTreeState apvts;
 
     // Snapshot immutabile, utilizzabile da qualunque thread (audio incluso):
@@ -113,6 +129,8 @@ private:
     void timerCallback() override;
     bool canApplyStabilityChangeNow() const;
     bool isTransportPlaying() const;
+    // B-14: valore corrente del parametro, gia' limitato alla gamma ammessa.
+    int currentAnalysisLowestNote() const;
 
     mutable juce::SpinLock presetLibraryLock;
     std::shared_ptr<const harmony::PresetLibrary> currentPresetLibrary;
@@ -128,6 +146,16 @@ private:
     // cosi' un onset successivo non trova una stima confidente ma stantia
     // dalla nota precedente). Solo audio thread.
     bool signalPresentLastBlock = false;
+    // B-14 (sessione 32): l'aggancio si aggiorna a ogni stima nuova del
+    // rilevatore, non una volta per blocco — quindi il suo stato deve
+    // sopravvivere al confine di blocco. samplesSinceLatchUpdate e' il tempo
+    // VERO fra due stime consecutive (a buffer piccoli un blocco puo' non
+    // contenerne nessuna); onsetPendingForLatch trasporta un onset rilevato
+    // fino alla prima stima utile; lastLatchedNote e' cio' che il blocco legge
+    // quando non e' arrivata alcuna stima nuova. Tutti e tre solo audio thread.
+    int samplesSinceLatchUpdate = 0;
+    bool onsetPendingForLatch = false;
+    int lastLatchedNote = 0;
     PhraseScheduler phraseScheduler;
 
     // Sessione 12 (fix scricchiolii/click): dryLevel/wetLevel (e bypass, che
@@ -140,6 +168,11 @@ private:
     // glideTimeMs musicale dell'utente.
     Glide dryGlide, wetGlide;
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
+    // B-14: come lastKnownStabilityLevel, per la nota piu' grave d'analisi.
+    // Inizializzato a un valore impossibile cosi' il primo giro del timer
+    // allinea comunque il rilevatore al parametro caricato dallo stato.
+    int lastKnownAnalysisLowestNote = -1; // solo message thread (timerCallback)
+    double preparedSampleRate = 44100.0;  // scritto in prepareToPlay, letto dal timer
 
     // FR-30/36/37/38: CcRouter interpreta i CC in ingresso, OverrideManager
     // decide se contano piu' di quello che dice l'automazione host. Entrambi

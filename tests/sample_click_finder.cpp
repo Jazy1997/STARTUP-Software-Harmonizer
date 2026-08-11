@@ -259,7 +259,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
-        pitchLatch.prepare (sr);
+        pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
 
         Voice voice;
         voice.prepare (sr, block, stabilityLevel);
@@ -329,7 +329,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
-        pitchLatch.prepare (sr);
+        pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
 
         Voice slots[2];
         slots[0].prepare (sr, block, stabilityLevel);
@@ -432,7 +432,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
-        pitchLatch.prepare (sr);
+        pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
 
         Voice voice;
         voice.prepare (sr, block, stabilityLevel);
@@ -641,7 +641,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
-        pitchLatch.prepare (sr);
+        pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
 
         std::vector<Voice> slots ((size_t) numPhysicalSlots);
         for (auto& s : slots)
@@ -888,7 +888,7 @@ namespace
         OnsetDetector onsetDetector;
         onsetDetector.prepare (sr);
         harmony::PitchLatch pitchLatch;
-        pitchLatch.prepare (sr);
+        pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
 
         Voice voice;
         voice.prepare (sr, block, stabilityLevel);

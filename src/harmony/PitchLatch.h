@@ -68,20 +68,28 @@ namespace harmony
     // comunque sempre il semitono adiacente, quindi l'aggancio segue la
     // melodia esattamente come prima, un grado alla volta.
     //
-    // PERCHE' SERVE ANCHE L'ATTESA, E PERCHE' DURA COSI'
+    // PERCHE' SERVE ANCHE L'ATTESA, E PERCHE' SI MISURA IN FRAME
     //
     // Il salto diretto da solo non basta. Sulla terza transizione dello stesso
     // file (E->C) il rilevatore, appena riacquistata confidenza dopo il
     // transiente, riporta 60.696 — 70 cent crescente — per 14.5 ms prima di
     // assestarsi su 60.4. Quell'arrotondamento vale 61, cioe' il grado b2:
     // adottarlo subito significherebbe leggere di nuovo una colonna sbagliata,
-    // solo per meno tempo. kNoteSettleMs deve percio' essere piu' lungo della
-    // piu' lunga stima sbagliata ma confidente osservata a un cambio di nota
-    // (14.5 ms misurati), con un margine — non e' un numero di comodo, ma non
-    // e' nemmeno passato per l'ascolto: vedi HANDOFF.md.
+    // solo per meno tempo. L'attesa deve percio' essere piu' lunga della piu'
+    // lunga stima sbagliata ma confidente che il rilevatore produce a un
+    // cambio di nota.
+    //
+    // SESSIONE 32 (B-14): quei 14.5 ms non sono un tempo assoluto, sono circa
+    // UN FRAME d'analisi di Cycfi Q a 60 Hz (16.7 ms). Il transiente del
+    // rilevatore vive sulla scala del rilevatore, quindi l'attesa va espressa
+    // nella stessa unita': settleSamplesForFrame() la ricava dal frame vero,
+    // e da sola segue la nota piu' grave che l'utente ha scelto (D-18). Una
+    // costante in millisecondi, com'era fino a s.31, era tarata su un solo
+    // punto di quella scala e diventava un dazio inutile appena la finestra
+    // si accorciava.
     //
     // Il costo e' che un cambio di nota genuino viene adottato fino a
-    // kNoteSettleMs piu' tardi. Non e' tempo aggiunto al silenzio: in quella
+    // un'attesa piu' tardi. Non e' tempo aggiunto al silenzio: in quella
     // finestra la voce continua a suonare l'ultimo offset valido, che e'
     // esattamente cio' che il ramo della cella vuota (src/voices/EmptyCellHold.h)
     // gia' faceva e che all'ascolto risultava pulito.
@@ -93,13 +101,30 @@ namespace harmony
     class PitchLatch
     {
     public:
-        // Converte kNoteSettleMs in campioni. Da chiamare in prepareToPlay.
-        // Se non viene chiamata, settleSamples resta 0 e l'adozione e'
-        // immediata: si perde solo l'attesa, non il salto diretto — un
-        // degrado sicuro, mai un ritorno alle note intermedie.
-        void prepare (double sampleRate) noexcept
+        // Quanti campioni un candidato deve reggere prima di essere adottato,
+        // dato il frame d'analisi del rilevatore (PitchDetector::
+        // getAnalysisFrameSamples). Un frame e mezzo: piu' lungo del transiente
+        // del rilevatore, che dura circa un frame, con margine.
+        //
+        // A 60 Hz (il valore cablato fino a s.31) vale 25.0 ms, cioe'
+        // ESATTAMENTE la vecchia kNoteSettleMs: il cambio di s.32 non altera
+        // il comportamento su quella configurazione, lo rende solo capace di
+        // seguire le altre.
+        static constexpr float kSettleFrames = 1.5f;
+
+        static constexpr int settleSamplesForFrame (int analysisFrameSamples,
+                                                    float frames = kSettleFrames) noexcept
         {
-            settleSamples = (int) std::lround ((double) kNoteSettleMs * sampleRate / 1000.0);
+            return (int) ((float) analysisFrameSamples * frames);
+        }
+
+        // Da chiamare in prepareToPlay. Se non viene chiamata, settleSamples
+        // resta 0 e l'adozione e' immediata: si perde solo l'attesa, non il
+        // salto diretto — un degrado sicuro, mai un ritorno alle note
+        // intermedie.
+        void prepare (int settleSamplesIn) noexcept
+        {
+            settleSamples = settleSamplesIn;
             reset();
         }
 
@@ -164,9 +189,6 @@ namespace harmony
 
     private:
         static constexpr float kHysteresisSemitones = 0.25f; // +-25 cent
-        // Vedi il commento in testa: piu' lungo dei 14.5 ms di stima
-        // sbagliata ma confidente misurati sul materiale reale, con margine.
-        static constexpr float kNoteSettleMs = 25.0f;
 
         int heldNote = 0;
         int candidateNote = 0;

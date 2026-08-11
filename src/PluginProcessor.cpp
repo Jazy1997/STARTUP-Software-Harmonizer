@@ -16,6 +16,9 @@ namespace ParamIDs
     static const juce::String stabilityLevel { "stabilityLevel" };
     static const juce::String glideTimeMs { "glideTimeMs" };
     static const juce::String maxSimultaneousVoices { "maxSimultaneousVoices" };
+    // B-14/D-18: nota MIDI piu' grave che il rilevatore deve agganciare, non
+    // la posizione dello strumento in lista — vedi createParameterLayout.
+    static const juce::String analysisLowestNote { "analysisLowestNote" };
 
     static const juce::String formantSpread { "formantSpread" };
     static const juce::String bypass { "bypass" };
@@ -167,6 +170,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonizerAudioProcessor::cr
         juce::ParameterID { ParamIDs::maxSimultaneousVoices, 1 }, "Max Simultaneous Voices",
         1, HarmonizerAudioProcessor::hardVoiceSlotCapacity, HarmonizerAudioProcessor::hardVoiceSlotCapacity));
 
+    // B-14 (sessione 32): la nota piu' grave che il rilevatore deve agganciare.
+    // Non e' una preferenza estetica — decide la finestra d'analisi di Cycfi Q
+    // e quindi quanto tardi l'offset giusto arriva al motore (vedi
+    // PitchDetector.h). La UI la presenta come scelta dello STRUMENTO.
+    //
+    // Si serializza la NOTA, non la posizione nella lista degli strumenti:
+    // l'elenco e' ordinato dal piu' acuto al piu' grave perche' l'ordine e'
+    // esso stesso l'informazione, quindi uno strumento aggiunto in futuro va
+    // INSERITO in mezzo. Con un Choice posizionale (come il CC dei preset,
+    // D-03) quell'ordine resterebbe congelato per sempre, perche' un ID
+    // pubblicato non cambia mai (regola 6). Vedi D-18.
+    params.push_back (std::make_unique<juce::AudioParameterInt> (
+        juce::ParameterID { ParamIDs::analysisLowestNote, 1 }, "Analysis Lowest Note",
+        HarmonizerAudioProcessor::minAnalysisLowestNote,
+        HarmonizerAudioProcessor::maxAnalysisLowestNote,
+        HarmonizerAudioProcessor::defaultAnalysisLowestNote));
+
     return { params.begin(), params.end() };
 }
 
@@ -192,11 +212,14 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     voicesMixScratch.setSize (2, scratchSize, false, false, true);
     playVoicesMixScratch.setSize (2, scratchSize, false, false, true);
 
-    pitchDetector.prepare (sampleRate);
+    preparedSampleRate = sampleRate;
+    lastKnownAnalysisLowestNote = currentAnalysisLowestNote();
+    pitchDetector.prepare (sampleRate, lastKnownAnalysisLowestNote);
     onsetDetector.prepare (sampleRate);
-    // Sessione 31 (B-13): l'attesa prima di adottare una nota nuova e' in
-    // millisecondi, quindi dipende dalla SR — vedi PitchLatch.h.
-    pitchLatch.prepare (sampleRate);
+    // Sessione 31/32 (B-13, B-14): l'attesa prima di adottare una nota nuova
+    // si misura in frame d'analisi del rilevatore, non in millisecondi fissi —
+    // cosi' segue da sola lo strumento scelto. Vedi PitchLatch.h.
+    pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
 
     // Sessione 12: rampa fissa anti-click, indipendente dal glideTimeMs
     // musicale — vedi il commento sul membro in PluginProcessor.h. Il
@@ -250,10 +273,33 @@ void HarmonizerAudioProcessor::timerCallback()
         }
     }
 
+    // B-14: la nota piu' grave d'analisi. Costruzione (con allocazione) del
+    // nuovo rilevatore qui, sul message thread; lo scambio avviene in
+    // processBlock ed e' un solo spostamento di puntatore. A differenza di
+    // Stability NON si aspetta lo stop del transport: questo cambio non tocca
+    // la latenza dichiarata, quindi FR-56 non c'entra.
+    const int lowestNote = currentAnalysisLowestNote();
+    if (lowestNote != lastKnownAnalysisLowestNote)
+    {
+        pitchDetector.requestLowestNoteChange (preparedSampleRate, lowestNote);
+        lastKnownAnalysisLowestNote = lowestNote;
+    }
+
     // Distrugge gli shifter ritirati dallo scambio precedente: mai sull'audio
     // thread (PRD §9.4).
     phraseScheduler.collectGarbage();
     playModeInput.collectGarbage();
+    pitchDetector.collectGarbage();
+}
+
+int HarmonizerAudioProcessor::currentAnalysisLowestNote() const
+{
+    const auto* raw = apvts.getRawParameterValue (ParamIDs::analysisLowestNote);
+    if (raw == nullptr)
+        return defaultAnalysisLowestNote;
+
+    return juce::jlimit (minAnalysisLowestNote, maxAnalysisLowestNote,
+                         (int) std::lround (raw->load()));
 }
 
 bool HarmonizerAudioProcessor::canApplyStabilityChangeNow() const
@@ -312,6 +358,19 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     if (numSamples == 0)
         return;
 
+    // B-14: la nota piu' grave d'analisi e' cambiata. Solo uno spostamento di
+    // puntatore (il rilevatore nuovo l'ha costruito il message thread, vedi
+    // timerCallback): nessuna allocazione qui. Va fatto PRIMA di alimentare il
+    // rilevatore, cosi' il blocco corrente finisce gia' in quello nuovo.
+    // Cambia anche il frame d'analisi, quindi l'attesa del latch va rifatta —
+    // e' aritmetica intera, e reset() azzera solo dei flag.
+    // Le frasi in corso NON si toccano: finche' il rilevatore nuovo non ha
+    // riempito la sua finestra, inputIsStable resta falso e PhraseScheduler
+    // tiene l'ultimo voicing valido — la voce continua a suonare invece di
+    // aprire un buco.
+    if (pitchDetector.applyPendingLowestNoteChange())
+        pitchLatch.prepare (harmony::PitchLatch::settleSamplesForFrame (pitchDetector.getAnalysisFrameSamples()));
+
     // 1. Downmix a mono: il prodotto assume una sorgente monofonica in ingresso
     // (PRD §3.1, "Audio in (mono)"). Anche il percorso dry usa questo segnale,
     // cosi' rimane allineato in fase con le voci (FR-58) senza bisogno di una
@@ -336,12 +395,57 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         std::fill (mono, mono + numSamples, 0.0f);
     }
 
+    // FR-24: quando Play e' attivo, la tabella armonica e' completamente
+    // disattivata. Non e' uno dei 3 CC di FR-30: solo APVTS/automazione.
+    // Letto qui e non piu' a meta' funzione perche' serve gia' al ciclo di
+    // campioni qui sotto, che aggiorna l'aggancio.
+    const bool playModeEnabled = *apvts.getRawParameterValue (ParamIDs::playModeEnabled) >= 0.5f;
+
+    // B-14 (sessione 32): l'aggancio si aggiorna a ogni STIMA NUOVA del
+    // rilevatore, non una volta per blocco dell'host.
+    //
+    // Fino a s.31 si leggeva `pitchDetector.getMidiNote()` alla fine del
+    // blocco e si dava a PitchLatch `numSamples` come tempo trascorso. Con un
+    // blocco piu' lungo dell'attesa quel conteggio e' una bugia: una stima
+    // vista UNA SOLA VOLTA si vedeva accreditare un blocco intero, e l'attesa
+    // diventava un no-op. Misurato: a nota piu' grave C4 e blocco 1024, un
+    // singolo frame sbagliato (61.771 dove il vero e' 63.984, 4.4 ms) veniva
+    // adottato e produceva un offset di passaggio lungo un blocco — la
+    // ricomparsa di B-13 al caso limite.
+    //
+    // Aggiornando a ogni `pushSample` che ritorna true, il tempo che si passa
+    // all'attesa e' quello VERO fra due stime consecutive, e il rifiuto di una
+    // stima spuria non dipende piu' dal buffer dell'host. E' anche il modo
+    // corretto di leggere Cycfi Q: getMidiNote()/getConfidence() valgono nel
+    // momento in cui l'analisi si e' appena conclusa (vedi PitchDetector.h),
+    // non a un istante qualsiasi del blocco.
+    const bool latchFollowsInput = ! playModeEnabled;
+
     bool onsetDetectedThisBlock = false;
     for (int i = 0; i < numSamples; ++i)
     {
-        pitchDetector.pushSample (mono[i]);
+        const bool estimateUpdated = pitchDetector.pushSample (mono[i]);
+
         if (onsetDetector.pushSample (mono[i]))
+        {
             onsetDetectedThisBlock = true;
+            onsetPendingForLatch = true;
+        }
+
+        ++samplesSinceLatchUpdate;
+
+        if (estimateUpdated && latchFollowsInput && pitchDetector.hasStableSignal())
+        {
+            // FR-16/17: isteresi di +-25 cent, e oltre la soglia il salto va
+            // DIRETTAMENTE sulla nota d'arrivo dopo una breve conferma — mai
+            // per gradi intermedi (B-13). onsetPendingForLatch forza
+            // l'aggancio immediato su un vero attacco.
+            lastLatchedNote = pitchLatch.update (pitchDetector.getMidiNote(),
+                                                 onsetPendingForLatch,
+                                                 samplesSinceLatchUpdate);
+            onsetPendingForLatch = false;
+            samplesSinceLatchUpdate = 0;
+        }
     }
 
     // FR-30/36/37/38: interpreta i CC di questo blocco e risolve la
@@ -377,10 +481,6 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const float glideMs = *apvts.getRawParameterValue (ParamIDs::glideTimeMs);
 
     const float formantSpread = *apvts.getRawParameterValue (ParamIDs::formantSpread);
-
-    // FR-24: quando Play e' attivo, la tabella armonica e' completamente
-    // disattivata. Non e' uno dei 3 CC di FR-30: solo APVTS/automazione.
-    const bool playModeEnabled = *apvts.getRawParameterValue (ParamIDs::playModeEnabled) >= 0.5f;
 
     const bool keepPhraseTails = *apvts.getRawParameterValue (ParamIDs::keepPhraseTails) >= 0.5f;
 
@@ -474,16 +574,12 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     if (! playModeEnabled && inputIsStable)
     {
-        // FR-16/17 (sessione 11): isteresi di +-25 cent invece di un
-        // arrotondamento nudo — vedi PitchLatch.h. onsetDetectedThisBlock
-        // forza l'aggancio immediato su un vero attacco; altrimenti (nota
-        // legata) la nota resta ferma entro la tolleranza e, quando la si
-        // supera davvero, scatta DIRETTAMENTE sulla nota d'arrivo dopo una
-        // breve conferma — mai per gradi intermedi (sessione 31, B-13:
-        // ognuno di quei gradi e' una colonna della tabella che il motore
-        // suonava sul serio). numSamples serve a misurare quella conferma in
-        // millisecondi invece che in blocchi.
-        quantizedPlayedNote = pitchLatch.update (continuousInputMidiNote, onsetDetectedThisBlock, numSamples);
+        // L'aggancio e' gia' stato aggiornato dal ciclo di campioni qui sopra,
+        // a ogni stima nuova del rilevatore (B-14). Qui si legge soltanto: se
+        // in questo blocco non e' arrivata alcuna stima nuova — normale a
+        // buffer piccoli, dove un blocco e' piu' corto di un frame d'analisi —
+        // si riusa l'ultimo aggancio invece di ricalcolarlo su un dato vecchio.
+        quantizedPlayedNote = lastLatchedNote;
         offsets = harmony::HarmonyEngine::getOffsets (presetLibrary->getPreset (presetIndex), quantizedPlayedNote, rootPitchClass);
     }
     else if (! signalPresent)
