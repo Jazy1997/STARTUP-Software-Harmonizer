@@ -760,6 +760,16 @@ void HarmonizerAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     ccSettings.setProperty ("midiChannel", ccRouter.getMidiChannel(), nullptr);
     root.appendChild (ccSettings, nullptr);
 
+    // FR-59/D-20: la scala della finestra segue la sessione, come i CC qui
+    // sopra e per la stessa ragione — l'utente non deve rimetterla ad ogni
+    // apertura del progetto. Nodo separato da MidiCcSettings perche' e' un'altra
+    // categoria di cosa (visualizzazione, non routing) e perche' cosi' una
+    // sessione salvata prima di oggi semplicemente non lo ha, senza che il
+    // resto della lettura ne risenta.
+    juce::ValueTree uiSettings ("UiSettings");
+    uiSettings.setProperty ("scalePercent", uiScalePercent.load (std::memory_order_relaxed), nullptr);
+    root.appendChild (uiSettings, nullptr);
+
     if (auto xml = root.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -787,6 +797,14 @@ void HarmonizerAudioProcessor::setStateInformation (const void* data, int sizeIn
         ccRouter.setBypassCc  ((int) ccTree.getProperty ("bypassCc",  ccRouter.getBypassCc()));
         ccRouter.setMidiChannel ((int) ccTree.getProperty ("midiChannel", ccRouter.getMidiChannel()));
     }
+
+    // FR-59/D-20. Il nodo manca in ogni sessione salvata prima della sessione
+    // 33: in quel caso non si tocca nulla e la finestra resta al valore
+    // corrente (il default, 100%). setUiScalePercent clampa, quindi anche un
+    // XML modificato a mano non puo' produrre una finestra di dimensione
+    // assurda — vedi tests/ui_scale_test.cpp, TEST 4.
+    if (auto uiTree = root.getChildWithName ("UiSettings"); uiTree.isValid())
+        setUiScalePercent ((int) uiTree.getProperty ("scalePercent", getUiScalePercent()));
 }
 
 std::shared_ptr<const harmony::PresetLibrary> HarmonizerAudioProcessor::getPresetLibrary() const noexcept

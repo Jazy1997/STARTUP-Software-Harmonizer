@@ -12,6 +12,7 @@
 #include "midi/CcRouter.h"
 #include "midi/OverrideManager.h"
 #include "midi/PlayModeInput.h"
+#include "ui/UiScale.h"
 
 #include <atomic>
 #include <functional>
@@ -123,6 +124,23 @@ public:
     // che il fix delle note saltate interviene davvero (CLAUDE.md regola 12).
     int   getNumLateBindings() const noexcept { return phraseScheduler.getNumLateBindings(); }
 
+    // FR-59 (sessione 33): la scala della finestra, in percento. NON e' un
+    // parametro APVTS, di proposito — e' una preferenza di visualizzazione, non
+    // un valore musicale, e automatizzare "quanto e' grande la finestra" non
+    // vorrebbe dire niente. Sta pero' nello stato del plugin (D-20), accanto ai
+    // numeri CC che sono l'altro caso identico: configurazione da salvare ma
+    // non da automatizzare.
+    //
+    // Non e' letta ne' scritta da processBlock: la regola 1 non la riguarda.
+    // E' atomica perche' getStateInformation puo' essere chiamata da un thread
+    // di salvataggio diverso dal message thread che la scrive in resized()
+    // (stessa cautela gia' annotata su editPresetLibrary).
+    int  getUiScalePercent() const noexcept { return uiScalePercent.load (std::memory_order_relaxed); }
+    void setUiScalePercent (int percent) noexcept
+    {
+        uiScalePercent.store (ui::clampScalePercent (percent), std::memory_order_relaxed);
+    }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -189,6 +207,12 @@ private:
     std::atomic<bool> lastInputStable { false };
     std::atomic<bool> lastGateOpen { false }; // sessione 12, vedi getter pubblico
     std::atomic<int> lastBlockSize { 0 }; // sessione 13, vedi getter pubblico
+
+    // FR-59, sessione 33 — vedi get/setUiScalePercent sopra. A differenza dei
+    // cinque atomici qui sopra questo NON e' uno snapshot scritto dall'audio
+    // thread: lo scrive l'editor (message thread) e lo legge il salvataggio
+    // dello stato.
+    std::atomic<int> uiScalePercent { ui::kDefaultScalePercent };
 
     // FR-24..28: modalita' Play, VoicePool dedicato separato (vedi
     // PlayModeInput.h per il perche' non condivide phraseScheduler).

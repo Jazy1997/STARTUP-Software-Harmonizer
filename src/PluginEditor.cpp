@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "harmony/CsvIo.h"
 #include "ui/InstrumentRanges.h"
+#include "ui/UiScale.h"
 
 namespace
 {
@@ -66,20 +67,25 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
 {
     auto& apvtsRef = processorRef.apvts;
 
-    // FR-73: barra di navigazione a 3 pulsanti — figli di *this, non di una
-    // pagina, cosi' restano visibili su tutte e tre le schermate (a
+    // FR-59 (sessione 33): l'unico figlio diretto dell'editor. Tutto il resto
+    // sta dentro di lui, perche' e' lui a portare il transform di scala — vedi
+    // il commento su ScaledContent in PluginEditor.h.
+    addAndMakeVisible (content);
+
+    // FR-73: barra di navigazione a 3 pulsanti — figli del contenitore, non di
+    // una pagina, cosi' restano visibili su tutte e tre le schermate (a
     // differenza della lettera originale di §8.1, che la rendeva
     // raggiungibile solo da Main).
-    addAndMakeVisible (navMainButton);
-    addAndMakeVisible (navEditButton);
-    addAndMakeVisible (navSettingsButton);
+    content.addAndMakeVisible (navMainButton);
+    content.addAndMakeVisible (navEditButton);
+    content.addAndMakeVisible (navSettingsButton);
     navMainButton.onClick     = [this] { showPage (Page::main); };
     navEditButton.onClick     = [this] { showPage (Page::edit); };
     navSettingsButton.onClick = [this] { showPage (Page::settings); };
 
-    addAndMakeVisible (mainPage);
-    addAndMakeVisible (editPage);
-    addAndMakeVisible (settingsPage);
+    content.addAndMakeVisible (mainPage);
+    content.addAndMakeVisible (editPage);
+    content.addAndMakeVisible (settingsPage);
 
     // =================== Main (FR-74) ===================
     mainPage.addAndMakeVisible (rootNoteGrid);
@@ -368,6 +374,33 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     };
     syncInstrumentBoxFromParameter();
 
+    // FR-59: la scala della finestra. Le voci sono tacche comode, non le uniche
+    // scale raggiungibili — trascinando l'angolo la scala e' continua (vedi
+    // syncScaleBoxFromState, che in quel caso deseleziona e mostra la
+    // percentuale reale invece di arrotondare alla tacca piu' vicina: la
+    // casella deve dire cosa E', non cosa le somiglia).
+    for (int i = 0; i < ui::kNumScalePresets; ++i)
+        scaleBox.addItem (juce::String (ui::kScalePresets[i]) + "%", i + 1);
+
+    settingsPage.addAndMakeVisible (scaleBox);
+    scaleLabel.attachToComponent (&scaleBox, true);
+    settingsPage.addAndMakeVisible (scaleLabel);
+    scaleBox.onChange = [this]
+    {
+        const int index = scaleBox.getSelectedId() - 1;
+        if (index < 0 || index >= ui::kNumScalePresets)
+            return; // deselezione da syncScaleBoxFromState, non una scelta dell'utente
+
+        // Non si scrive la percentuale da nessuna parte: si cambia la finestra,
+        // e resized() ricava la scala dalla larghezza come per qualunque altro
+        // ridimensionamento. Un solo percorso, quindi menu e trascinamento non
+        // possono divergere.
+        const int percent = ui::kScalePresets[index];
+        setSize (ui::physicalWidthForPercent (percent),
+                 ui::physicalHeightForPercent (percent));
+    };
+    syncScaleBoxFromState();
+
     // FR-30/31/33/79: numero CC per funzione (casella di testo numerica, non
     // piu' slider trascinabile) + MIDI Learn. Non sono
     // AudioProcessorValueTreeState::SliderAttachment: i numeri CC non sono
@@ -428,14 +461,36 @@ HarmonizerAudioProcessorEditor::HarmonizerAudioProcessorEditor (HarmonizerAudioP
     showPage (Page::main);
 
     setResizable (true, true);
-    // Sessione 25 (PRD-UI.md, "Passo 1"): il pannello piatto da 1428px al
-    // minimo (tutti i controlli impilati in un'unica colonna) diventa tre
-    // schermate, dimensionate sulla piu' alta delle tre (verosimilmente
-    // Edit: tabella 12x8 + due righe di bottoni + striscia voci a 4 righe).
-    // Beneficio collaterale atteso in PRD-UI §8 (stima 550-650px) — qui
-    // confermato per calcolo sulla somma delle righe di layoutEdit().
-    setResizeLimits (520, 620, 1200, 900);
-    setSize (900, 660);
+
+    // FR-59 (sessione 33). I limiti non sono piu' "quanto puo' star stretto il
+    // layout" ma "70% e 200% della dimensione logica", ed e' la differenza fra
+    // ridimensionare e scalare.
+    //
+    // Sessione 25 (PRD-UI.md, "Passo 1"), per memoria: il pannello piatto da
+    // 1428px al minimo (tutti i controlli impilati in un'unica colonna) diventa
+    // tre schermate, dimensionate sulla piu' alta delle tre (Edit: tabella 12x8
+    // + due righe di bottoni + striscia voci a 4 righe). I vecchi limiti erano
+    // (520, 620, 1200, 900), e i 620 px di altezza minima erano proprio il
+    // difetto: layoutEdit() ne chiedeva ~528 su 522 disponibili e il toggle
+    // Keep Tails collassava ad altezza ~0 (s.30). Ora l'altezza LOGICA e'
+    // sempre 660, quindi quel caso non puo' piu' presentarsi.
+    setResizeLimits (ui::physicalWidthForPercent  (ui::kMinScalePercent),   //  630
+                     ui::physicalHeightForPercent (ui::kMinScalePercent),   //  462
+                     ui::physicalWidthForPercent  (ui::kMaxScalePercent),   // 1800
+                     ui::physicalHeightForPercent (ui::kMaxScalePercent));  // 1320
+
+    // Il rapporto d'aspetto e' BLOCCATO: trascinare l'angolo non fa reflow,
+    // cambia la scala. I due limiti qui sopra hanno lo stesso rapporto del
+    // layout logico (630/462 = 1800/1320 = 900/660), altrimenti il constrainer
+    // non potrebbe soddisfarli entrambi — verificato in ui_scale_test, TEST 3.
+    if (auto* c = getConstrainer())
+        c->setFixedAspectRatio ((double) ui::kLogicalWidth / (double) ui::kLogicalHeight);
+
+    // La scala salvata nella sessione. Le sessioni precedenti la 33 non hanno
+    // il nodo e partono al 100%, cioe' esattamente al vecchio setSize(900, 660).
+    const int savedScale = processorRef.getUiScalePercent();
+    setSize (ui::physicalWidthForPercent (savedScale),
+             ui::physicalHeightForPercent (savedScale));
 
     startTimerHz (15);
 }
@@ -447,8 +502,15 @@ HarmonizerAudioProcessorEditor::~HarmonizerAudioProcessorEditor()
 
 void HarmonizerAudioProcessorEditor::paint (juce::Graphics& g)
 {
+    // Lo sfondo resta disegnato QUI, non nel contenitore, e copre l'intera
+    // finestra fisica: fra getHeight() e 660 * scala puo' restare qualche pixel
+    // di slack di arrotondamento, e senza questo riempimento si vedrebbe una
+    // striscia non disegnata al bordo.
     g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+}
 
+void HarmonizerAudioProcessorEditor::ScaledContent::paint (juce::Graphics& g)
+{
     g.setColour (juce::Colours::white);
     g.setFont (juce::FontOptions (14.0f));
     // Editor placeholder (le tre schermate definitive sono lavoro di M5):
@@ -456,30 +518,58 @@ void HarmonizerAudioProcessorEditor::paint (juce::Graphics& g)
     // milestone completate — evita di doverlo tenere sincronizzato a mano
     // (era rimasto "motore Signalsmith interinale" ben oltre il cambio a
     // PSOLA in sessione 9, scoperto solo al primo test reale in sessione 10).
+    //
+    // Sessione 33: disegnato dal contenitore e non piu' dall'editor, altrimenti
+    // sarebbe l'unica cosa a schermo a NON scalare insieme al resto.
     g.drawFittedText ("HARMONIZER - motore PSOLA",
                        getLocalBounds().removeFromTop (24), juce::Justification::centred, 1);
 }
 
 void HarmonizerAudioProcessorEditor::resized()
 {
+    // FR-59 — l'intero lavoro della scala sta in queste poche righe.
+    //
+    // Non c'e' un valore di scala "vero" tenuto da parte: la fonte di verita' e'
+    // la larghezza attuale della finestra. Vale sia quando la scala arriva dal
+    // menu su Impostazioni (che chiama setSize) sia quando arriva dall'utente
+    // che trascina l'angolo, e i due percorsi non possono divergere perche'
+    // sono lo stesso percorso.
+    const float scale = (float) getWidth() / (float) ui::kLogicalWidth;
+    content.setTransform (juce::AffineTransform::scale (scale));
+
+    // Bounds in coordinate LOGICHE, non fisiche: il transform li porta alla
+    // dimensione della finestra. E' il motivo per cui ne' ScaledContent::resized
+    // ne' le tre layout*() sanno che la scala esista.
+    content.setBounds (0, 0, ui::kLogicalWidth, ui::kLogicalHeight);
+
+    // La percentuale segue la finestra, cosi' un trascinamento dell'angolo si
+    // ritrova salvato nella sessione (e nel menu) senza un percorso separato.
+    processorRef.setUiScalePercent (ui::scalePercentFromWidth (getWidth()));
+}
+
+void HarmonizerAudioProcessorEditor::ScaledContent::resized()
+{
+    // Da qui in giu' e' il corpo che stava in HarmonizerAudioProcessorEditor::
+    // resized() fino alla sessione 32, invariato riga per riga — solo che ora
+    // gira sempre su 900x660, a qualunque scala.
     auto area = getLocalBounds().reduced (16);
     area.removeFromTop (28); // spazio per il titolo disegnato in paint()
 
     // FR-73: barra di navigazione a 3 pulsanti, sempre visibile.
     auto navBar = area.removeFromTop (28);
-    layoutRowOfButtons (navBar, { &navMainButton, &navEditButton, &navSettingsButton });
+    layoutRowOfButtons (navBar, { &owner.navMainButton, &owner.navEditButton, &owner.navSettingsButton });
     area.removeFromTop (10);
 
     // Le tre pagine condividono sempre gli stessi bounds (PRD-UI §2:
     // cambiare schermata non ridimensiona la finestra ne' fa scattare il
     // layout) — showPage() alterna solo la visibilita'.
-    mainPage.setBounds (area);
-    editPage.setBounds (area);
-    settingsPage.setBounds (area);
+    owner.mainPage.setBounds (area);
+    owner.editPage.setBounds (area);
+    owner.settingsPage.setBounds (area);
 
-    layoutMain (mainPage.getLocalBounds());
-    layoutEdit (editPage.getLocalBounds());
-    layoutSettings (settingsPage.getLocalBounds());
+    owner.layoutMain (owner.mainPage.getLocalBounds());
+    owner.layoutEdit (owner.editPage.getLocalBounds());
+    owner.layoutSettings (owner.settingsPage.getLocalBounds());
 }
 
 void HarmonizerAudioProcessorEditor::layoutMain (juce::Rectangle<int> area)
@@ -673,6 +763,11 @@ void HarmonizerAudioProcessorEditor::layoutSettings (juce::Rectangle<int> area)
         area.removeFromTop (gap);
     }
 
+    // FR-59/FR-82: la scala della finestra. Sta su Impostazioni e non su Main
+    // perche' non e' un controllo da live (FR-60 riguarda quelli, e questo si
+    // regola una volta e si dimentica).
+    layoutRow (scaleBox);
+
     layoutRow (detectedValueLabel);
 }
 
@@ -699,6 +794,7 @@ void HarmonizerAudioProcessorEditor::timerCallback()
     syncRootNoteFromParameter();
     syncCcControlsFromRouter();
     syncInstrumentBoxFromParameter();
+    syncScaleBoxFromState();
 
     activeVoicesValueLabel.setText (juce::String (processorRef.getNumActiveVoices()), juce::dontSendNotification);
 
@@ -864,6 +960,35 @@ void HarmonizerAudioProcessorEditor::syncInstrumentBoxFromParameter()
     // mentire mostrando lo strumento sbagliato.
     if (itemId != instrumentBox.getSelectedId())
         instrumentBox.setSelectedId (itemId, juce::dontSendNotification);
+}
+
+void HarmonizerAudioProcessorEditor::syncScaleBoxFromState()
+{
+    // La fonte di verita' e' la finestra, non un valore memorizzato: cosi' la
+    // casella resta giusta anche quando la scala e' cambiata per una via che
+    // non passa da qui (trascinamento dell'angolo, o l'host che impone una
+    // dimensione all'apertura).
+    const int percent = ui::scalePercentFromWidth (getWidth());
+
+    int itemId = 0;
+    for (int i = 0; i < ui::kNumScalePresets; ++i)
+        if (ui::kScalePresets[i] == percent)
+        {
+            itemId = i + 1;
+            break;
+        }
+
+    if (itemId != scaleBox.getSelectedId())
+        scaleBox.setSelectedId (itemId, juce::dontSendNotification);
+
+    // Scala continua (trascinamento): nessuna tacca corrisponde, e la casella
+    // dice la percentuale VERA invece di arrotondare a quella piu' vicina —
+    // mostrare "100%" a 103% sarebbe una piccola bugia proprio sul controllo
+    // che dovrebbe dire dove ci si trova. setTextWhenNothingSelected si
+    // ridisegna solo se il testo cambia davvero, quindi ripeterla a ogni giro
+    // di Timer non costa nulla.
+    if (itemId == 0)
+        scaleBox.setTextWhenNothingSelected (juce::String (percent) + "%");
 }
 
 void HarmonizerAudioProcessorEditor::syncRootNoteFromParameter()

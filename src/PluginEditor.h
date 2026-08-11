@@ -37,6 +37,10 @@ private:
     // strumento — la corrispondenza va rifatta a ogni giro del Timer, come per
     // gli altri controlli senza Attachment.
     void syncInstrumentBoxFromParameter();
+    // FR-59: la casella della scala segue la finestra, non viceversa — anche
+    // quando la finestra e' stata ridimensionata trascinando l'angolo o
+    // dall'host. Stesso giro di Timer degli altri controlli senza Attachment.
+    void syncScaleBoxFromState();
     void commitRename();
     void selectPresetIndex (int index);
     void selectRootNote (int pitchClass);
@@ -45,6 +49,37 @@ private:
     enum class Page { main, edit, settings };
     void showPage (Page page);
     Page currentPage = Page::main;
+
+    // FR-59/D-20 (sessione 33) — IL CONTENITORE CHE PORTA LA SCALA.
+    //
+    // Tutto quello che si vede sta qui dentro, e questo componente e' l'unica
+    // cosa che riceve un AffineTransform. Perche' un figlio e non l'editor
+    // stesso: JUCE lo vieta esplicitamente. In
+    // juce_AudioProcessorEditor.cpp:193 c'e'
+    //     jassert (getTransform() == hostScaleTransform);
+    // con il commento "applying your own transform will obliterate it! ...
+    // consider putting the component you want to transform in a child of the
+    // editor and transform that instead", e setScaleFactor() (:227) SOVRASCRIVE
+    // il transform dell'editor con quello dell'host. Un transform nostro
+    // sull'editor sarebbe quindi un assert in Debug e, peggio, verrebbe
+    // cancellato alla prima notifica di DPI.
+    //
+    // Tenendoli separati i due si COMPONGONO invece di sovrascriversi: l'host
+    // scala l'editor (HiDPI/Retina), noi scaliamo il contenuto. E' il motivo per
+    // cui FR-59 chiede le due cose insieme e qui vengono soddisfatte da un solo
+    // meccanismo.
+    //
+    // Dichiarato PRIMA della barra di navigazione e delle tre pagine: e' il loro
+    // padre, e i figli vanno distrutti per primi.
+    struct ScaledContent : juce::Component
+    {
+        explicit ScaledContent (HarmonizerAudioProcessorEditor& ownerIn) : owner (ownerIn) {}
+        void paint (juce::Graphics&) override;
+        void resized() override;
+        HarmonizerAudioProcessorEditor& owner;
+    };
+
+    ScaledContent content { *this };
 
     juce::TextButton navMainButton      { "Main" };
     juce::TextButton navEditButton      { "Edit" };
@@ -164,6 +199,14 @@ private:
     // parametro serializza la NOTA (vedi createParameterLayout). Lega i due
     // sensi a mano, esattamente come le caselle CC qui accanto.
     juce::ComboBox instrumentBox;
+    // FR-59: la scala della finestra. Come instrumentBox non ha un Attachment
+    // APVTS (non e' un parametro, vedi PluginProcessor::getUiScalePercent), ma
+    // per una ragione in piu': il valore mostrato qui non e' nemmeno un valore
+    // memorizzato: e' la dimensione attuale della finestra, riletta ad ogni
+    // giro del Timer. Le voci sono tacche comode, non le uniche scale possibili
+    // — trascinando l'angolo la scala e' continua e la casella allora
+    // deseleziona e mostra la percentuale reale.
+    juce::ComboBox scaleBox;
     // FR-83: diagnostica completa (confidenza, stabile/instabile, gate,
     // late-bindings, block size) — esattamente il testo di prima, spostato
     // qui da Main.
@@ -192,6 +235,7 @@ private:
     // MSVC rilegge i byte UTF-8 col codepage di sistema e un trattino lungo
     // finisce a schermo come "a" piu' due caratteri illeggibili (visto).
     juce::Label instrumentHintLabel { {}, "dal piu' acuto al piu' grave: piu' in basso, piu' tarda l'armonia" };
+    juce::Label scaleLabel       { {}, "Scala" };
     juce::Label rootCcLabel      { {}, "CC Root" };
     juce::Label presetCcLabel    { {}, "CC Chord" };
     juce::Label bypassCcLabel    { {}, "CC Bypass" };

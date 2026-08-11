@@ -137,6 +137,16 @@ add_executable(cell_input_parser_test
 target_include_directories(cell_input_parser_test PRIVATE src)
 target_compile_features(cell_input_parser_test PRIVATE cxx_std_20)
 
+# Verifica numerica della scala della finestra (sessione 33, FR-59 — vedi
+# src/ui/UiScale.h): header-only, nessuna dipendenza JUCE. Copre l'aritmetica
+# della scala, NON la resa a schermo: che su un display HiDPI non ci siano
+# testi sfocati resta una verifica visiva dell'utente.
+add_executable(ui_scale_test
+    tests/ui_scale_test.cpp
+)
+target_include_directories(ui_scale_test PRIVATE src)
+target_compile_features(ui_scale_test PRIVATE cxx_std_20)
+
 # Verifica numerica dell'isteresi FR-17 (sessione 28, "ribattuto" — vedi
 # src/voices/EmptyCellHold.h): header-only, nessuna dipendenza JUCE.
 add_executable(empty_cell_hold_test
@@ -274,3 +284,4 @@ add_test(NAME cell_input_parser COMMAND cell_input_parser_test)
 add_test(NAME voice COMMAND voice_test)
 add_test(NAME empty_cell_hold COMMAND empty_cell_hold_test)
 add_test(NAME phrase_scheduler COMMAND phrase_scheduler_test)
+add_test(NAME ui_scale COMMAND ui_scale_test)
