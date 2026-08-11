@@ -2,7 +2,7 @@
 
 > Mappa dei moduli **com'è adesso**, non com'era o come sarà. Si riscrive quando la
 > struttura cambia, non a ogni sessione. Sostituisce la vecchia §3 di `handsoff.md`.
-> Aggiornata: 2026-08-10 (s.30).
+> Aggiornata: 2026-08-11 (s.32).
 
 ---
 
@@ -17,7 +17,7 @@ PitchDetector (Cycfi Q)  ──► notaMIDI + confidenza + f0          │
    │                                                             │
    ├──► OnsetDetector ──► trigger di frase                       │
    ▼                                                             │
-PitchLatch (isteresi ±25 cent)                                   │
+PitchLatch (isteresi ±25 cent, salto diretto al grado d.arrivo)                                   │
    │                                                             │
    ▼                                                             │
 HarmonyEngine   d = (notaMIDI − fondamentale) mod 12             │
@@ -37,12 +37,12 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 
 ---
 
-## `src/` — 45 file
+## `src/` — 46 file
 
 ### Radice
 | File | Ruolo |
 |---|---|
-| `PluginProcessor.{h,cpp}` | `processBlock`, **`ParamIDs` + `createParameterLayout()`** (45 parametri), serializzazione dello stato, `computeDryWetGains` |
+| `PluginProcessor.{h,cpp}` | `processBlock`, **`ParamIDs` + `createParameterLayout()`** (46 parametri), serializzazione dello stato, `computeDryWetGains` |
 | `PluginEditor.{h,cpp}` | Le tre schermate, navbar, tutti gli attachment, sync parametro→UI via `Timer` |
 
 > **Nota**: `src/state/ParameterLayout.*` e `StateSerializer.*` previsti dal PRD §9.3
@@ -55,7 +55,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `PitchShifterFactory.cpp` | L'unico punto che sceglie l'implementazione concreta, via `HARMONIZER_USE_SPECTRAL_SHIFTER` |
 | `PsolaShifter.{h,cpp}` | **Motore di default.** `detectEpochs()` con `findEpochByCorrelation()`, `synthesise()`, `emitGrain()`, ring di epoch, `processChunk` |
 | `SpectralShifter.{h,cpp}` | Signalsmith Stretch. Compilato, non usato — via di fuga (D-02) |
-| `PitchDetector.{h,cpp}` | Wrapper Cycfi Q, pimpl con `unique_ptr` (**non `optional`**: MSVC istanzia i type-trait su tipi incompleti) |
+| `PitchDetector.{h,cpp}` | Wrapper Cycfi Q, pimpl con `unique_ptr` (**non `optional`**: MSVC istanzia i type-trait su tipi incompleti). **La nota più grave è un argomento di `prepare`** (s.32, D-18): decide la finestra d'analisi, e quindi il ritardo dell'armonia. `getAnalysisFrameSamples()` espone la scala temporale del rilevatore; il cambio a plugin acceso passa da `requestLowestNoteChange`/`applyPendingLowestNoteChange`/`collectGarbage` (due flag atomici, nessun lock, nessuna dipendenza JUCE) |
 | `OnsetDetector.{h,cpp}` | `cycfi::q::onset_gate`. Soglie: onset −24 dB, slope −30 dB, **release −45 dB** (B-01) |
 | `Glide.{h,cpp}` | Rampe. `processRamp` è **campione-per-campione**: la versione per blocco era no-op a 4096 campioni (B-03) |
 
@@ -66,7 +66,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `PresetLibrary.{h,cpp}` | Lista ordinata, CC posizionale, `movePreset`, copy-on-write. `makeFactoryPresets()` genera i 7 tipi via `generateDropVoicingTable` |
 | `HarmonyEngine.{h,cpp}` | `degreeOf` / `getOffsets` |
 | `CsvIo.{h,cpp}` | Import/export CSV (FR-03) |
-| `PitchLatch.h` | Isteresi di intonazione, tolleranza ±25 cent (B-09). **Candidato + adozione diretta** (s.31, D-17): non passa mai per una nota intermedia, e l'attesa `kNoteSettleMs` è in ms contati sui campioni del blocco. `prepare(sampleRate)` + `update(nota, onAttack, numSamples)` |
+| `PitchLatch.h` | Isteresi di intonazione, tolleranza ±25 cent (B-09). **Candidato + adozione diretta** (s.31, D-17): non passa mai per una nota intermedia. L'attesa arriva dal chiamante ed è un multiplo del **frame d'analisi** del rilevatore (`settleSamplesForFrame`, 1.5 frame — s.32, D-18), così segue lo strumento scelto. `prepare(settleSamples)` + `update(nota, onAttack, numSamples)`, chiamata **a ogni stima nuova**, non una volta per blocco |
 
 ### `src/voices/` — 8 file
 | File | Ruolo |
@@ -84,7 +84,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `OverrideManager.{h,cpp}` | Precedenza CC vs automazione (FR-36/37/38) |
 | `PlayModeInput.{h,cpp}` | Modalità Play. Gain/pan **e formanti** (FR-42, s.30) **per indice di slot**, non per colonna armonica |
 
-### `src/ui/` — 8 file
+### `src/ui/` — 9 file
 | File | Ruolo |
 |---|---|
 | `PresetListEditor.{h,cpp}` | Lista con drag&drop, badge sui primi 5, CC accanto al nome |
@@ -92,6 +92,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `RootNoteGrid.{h,cpp}` | Griglia cromatica **2 colonne × 6 righe**, indice = `riga·2 + colonna` |
 | `CellInputParser.h` | Parsing di una cella: distingue `0` da vuoto, rifiuta il testo spazzatura (D-05) |
 | `DegreeNames.h` | Nomi leggibili dei gradi (R, b2, 2, b3, …) |
+| `InstrumentRanges.h` | **(s.32)** I 10 strumenti proposti e la nota più grave di ciascuno, **dal più acuto al più grave** — l'ordine è l'informazione. Solo dati, nessuna logica |
 
 ### Cartelle vuote
 `src/state/` · `src/licensing/` · `resources/factory_presets/` (i preset di fabbrica sono
@@ -99,11 +100,11 @@ generati in codice, non caricati da file)
 
 ---
 
-## Parametri APVTS — 45
+## Parametri APVTS — 46
 
 Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` regola 6).
 
-**Scalari (13)**
+**Scalari (14)**
 
 | ID | Tipo | Range / default |
 |---|---|---|
@@ -120,6 +121,7 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 | `playModeEnabled` | Bool | false |
 | `keepPhraseTails` | Bool | false |
 | `maxSimultaneousVoices` | Int | 1..32, def. 32 |
+| `analysisLowestNote` | Int | 28..72 (nota MIDI), def. **40 = E2**. La nota più grave che il rilevatore deve agganciare: decide la finestra d'analisi e quindi quanto tarda l'armonia (B-14/D-18). Si serializza la **nota**, non la posizione nella lista strumenti |
 
 **Per voce, 1-based, v = 1..8 (32)** — `voiceFix<v>` (Bool) · `voiceFormantOffset<v>`
 (Float −24..+24 st) · `voiceGain<v>` (Float −60..+6 dB) · `voicePan<v>` (Float −1..+1)
@@ -181,5 +183,13 @@ Da non ripagare una seconda volta.
 - **`| tail` maschera l'exit code** → `set -o pipefail`, e leggi comunque il log.
 - **`std::optional<T>` con tipo incompleto** → non compila su MSVC. Usa `unique_ptr`.
 - **`juce::ValueTree`** vive in `juce_data_structures`, non in `juce_core`.
-- **Screenshot della Standalone** → `SetProcessDPIAware()` prima di `GetWindowRect`.
+- **Screenshot della Standalone** → `SetProcessDPIAware()` prima di `GetWindowRect`. Se la
+  finestra è coperta da un'altra, `PrintWindow(h, hdc, 2)` cattura il contenuto lo stesso.
 - **`M_PI` su MSVC** → serve `_USE_MATH_DEFINES`, o una `constexpr double` locale.
+- **La build completa NON compila lo Standalone** (s.32) → si ferma al fallimento della copia
+  in `Program Files` (atteso, D-12) e i target successivi non vengono toccati. Prima di
+  verificare la UI, compila **esplicitamente** `--target Harmonizer_Standalone`, altrimenti
+  guardi un eseguibile vecchio e cerchi un bug che non esiste (successo davvero).
+- **Solo ASCII nelle stringhe visibili all'utente** (s.32) → senza `/utf-8` MSVC rilegge i byte
+  UTF-8 col codepage di sistema: un trattino lungo dentro una `Label` esce a schermo come
+  `â` più due caratteri illeggibili. Nei commenti non conta, nelle stringhe sì.

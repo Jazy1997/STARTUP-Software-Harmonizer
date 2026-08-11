@@ -1,6 +1,6 @@
 # HANDOFF — HARMONIZER
 
-> Ultimo aggiornamento: **2026-08-11**, sessione 31.
+> Ultimo aggiornamento: **2026-08-11**, sessione 32.
 > Questo file descrive **solo lo stato di oggi**. La storia sta in `LOG/`, i sintomi
 > aperti in `BUGS.md`, le decisioni durature in `DECISIONS.md`, la mappa dei moduli
 > in `MAPPA.md`. Fonte di verità del prodotto: `PRD-Harmonizer-v1.md` + `PRD-UI.md`.
@@ -21,32 +21,34 @@ Plugin armonizzatore per strumenti monofonici (VST3 / AU / Standalone). Calcola
   dell'utente (s.31): i difetti si correggono a monte.
 - **M6 (licensing) non esiste**: `src/licensing/` è una cartella vuota.
 - **8** suite `ctest` verdi. `pluginval --strictness-level 10` SUCCESS su VST3 (Win).
-- **s.31: gli attacchi sporchi avevano una causa trovata e corretta — B-13, ora CHIUSO.**
-  `PitchLatch` si spostava di un semitono per chiamata (una per blocco), quindi su ogni salto
-  di nota attraversava i gradi intermedi e ne **suonava davvero** gli offset. Ora 0 corse di
-  passaggio su tutte le tabelle e a tutti i block size, e **confermato all'ascolto** in s.32
-  (*"test#3 e test#2 ora suonano uguali"*).
-- **La stessa conferma ha aperto B-14**: l'offset corretto arriva **~85 ms dopo** l'attacco,
-  quindi la nota parte con l'offset di quella precedente. Misurato sull'export contro la REF.
-  Causa dominante: la finestra d'analisi di Cycfi Q, derivata dalla frequenza minima (60 Hz
-  oggi → finestra 33.4 ms, una stima ogni 16.7 ms).
+- **B-13 (attacchi sporchi) è CHIUSO**, confermato all'ascolto in s.32 (*"test#3 e test#2 ora
+  suonano uguali"*). Committato e pushato.
+- **B-14 aperto e già lavorato in s.32**: l'offset corretto arrivava **~85 ms dopo** l'attacco,
+  quindi la nota partiva con l'offset di quella precedente. Causa dominante fuori dal nostro
+  codice — Cycfi Q ricava la finestra d'analisi dalla frequenza minima, e i 60 Hz cablati fino
+  a s.31 danno 33.4 ms di finestra e una stima ogni 16.7 ms.
+  Ora la nota più grave è un **parametro utente** (scelta dello strumento, 10 voci ordinate dal
+  più acuto al più grave), l'attesa del latch si misura in **frame d'analisi**, e l'aggancio si
+  aggiorna **a ogni stima nuova** invece che una volta per blocco. Misurato a 1024 campioni:
+  **79.1 → 44.3 ms**, con **0 corse di passaggio** su 24 configurazioni. **Non ancora
+  ascoltato.**
+- **Trombone risolto per inciso**: Ab1 = 51.9 Hz stava *sotto* i 60 Hz, quindi le sue note
+  gravi non venivano rilevate affatto.
 
 ---
 
 ## Prossimo passo
 
-**Uno solo: B-14, accorciare il ritardo con cui l'offset corretto arriva.** La leva è la
-frequenza minima passata a Cycfi Q, oggi fissa a 60 Hz (= B1), molto più in basso di quanto
-serva a voce/sax/tromba — e **più in basso del Trombone (Ab1 = 51.9 Hz)**, che oggi quindi
-non viene nemmeno rilevato nelle note gravi.
+**Uno solo: la conferma all'ascolto di B-14** (`CLAUDE.md` regola 12). Riesportare con gli
+stessi settings `exp#1` almeno `Test#1` e `Maj` come `_02`, col default **Voice Male (E2)**,
+dal build in `build/Harmonizer_artefacts/Release/VST3/Harmonizer.vst3`.
 
-Deciso con l'utente (s.32): diventa un **parametro utente** con 10 strumenti in lista, dal
-più acuto al più grave (l'ordine *è* l'informazione: più si scende, più cresce il ritardo),
-default **Bb Tenor Sax = Ab2**. Il **lookahead** — ritardare l'audio e dichiarare la latenza,
-l'unica strada che azzererebbe il ritardo — è **rimandato di proposito**: prima si sente
-quanto si guadagna senza toccare la latenza.
+Due cose da giudicare insieme, non una:
+- la **flem** deve accorciarsi in modo percepibile (misurata 79.1 → 44.3 ms);
+- Test#2 e Test#3 devono **restare uguali fra loro**: è la rete che dice se B-13 non è
+  rientrato dalla finestra.
 
-Dopo B-14 il passo torna a essere **FR-59, la scala 70–200% + HiDPI**: ultima voce di M5 in
+Se regge, il passo torna a essere **FR-59, la scala 70–200% + HiDPI**: ultima voce di M5 in
 PRD §12, `[MUST]`, e più piccola di come sembrava (la finestra è già ridimensionabile, manca
 la scala percentuale).
 
@@ -56,7 +58,9 @@ la scala percentuale).
 
 | Cosa | Dove | Stato |
 |---|---|---|
-| `kNoteSettleMs = 25.0f` | `src/harmony/PitchLatch.h` | Scelto più lungo dei **14.5 ms** di stima confidente ma sbagliata misurati a un cambio di nota reale, con margine. **Misurato, non tarato all'ascolto.** Contribuisce a B-14: va riespresso in **frame d'analisi** del rilevatore, così scala con lo strumento scelto. |
+| **B-14, la flem all'attacco** | `PitchDetector` + `PitchLatch` + parametro `analysisLowestNote` | Fix scritto e misurato (79.1 → 44.3 ms a 1024), **mai ascoltato**. È il prossimo passo qui sopra. |
+| `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | L'attesa in frame d'analisi. A 60 Hz vale esattamente i 25 ms di s.31, quindi non cambia nulla su quella configurazione. **Misurato, non tarato all'ascolto**: se il cambio d'armonia sembrasse ancora in ritardo, è la prima manopola. |
+| Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: è l'impostazione più pronta che resta **pulita su tutte e quattro** le tabelle di prova. Ab2 sarebbe 12 ms più veloce ma riapre in piccolo B-13. |
 | **B-10 con Keep Tails ON** | `PhraseScheduler.cpp` | B-07, B-10 e B-12 confermati e chiusi (s.30), ma la conferma fu **generale**, non su questa configurazione, dove il ramo di B-10 si applica anche alle code (tensione con FR-46). |
 | Isteresi cella vuota, `kEmptyCellHoldMs = 80.0f` | `src/voices/EmptyCellHold.h` | Committata in `be9a40f`. Misurata **irrilevante** sul materiale reale. La soglia non è mai stata tarata né ascoltata. |
 
@@ -66,10 +70,19 @@ la scala percentuale).
 
 Da non scambiare per requisiti soddisfatti.
 
-- **La quantizzazione al blocco resta** (A-05). B-13 garantisce *quali* offset si applicano —
-  mai più gradi intermedi, a qualunque buffer — non l'istante esatto in cui l'unico cambio
-  atterra, che cade su un confine di blocco (fino a 23 ms a 1024, 3 ms a 128). I sotto-blocchi
-  in `processBlock` sono deliberatamente fuori scope: sono il cuore del motore.
+- **Le voci acute della lista strumenti non sono verificate nel loro registro.** Sopra Eb Alto
+  Sax la misura mostra 1-3 offset di passaggio, e **nessuna taratura dell'attesa li elimina**:
+  una finestra corta rende il rilevatore più rumoroso. Ma il file di prova suona C4-D4-E4,
+  cioè il registro **grave** per un flauto o un soprano sax — il dato potrebbe non valere
+  quando suonano davvero nel proprio. **Serve un export dedicato** (flauto o tromba nel loro
+  registro) per deciderlo. Le voci restano in lista per scelta dell'utente.
+- **Il ritardo non va a zero.** Restano la convergenza del rilevatore e il confine di blocco.
+  Azzerarlo richiede il **lookahead** — ritardare l'audio e dichiarare la latenza all'host —
+  rimandato per scelta dell'utente in s.32: contrasta con PRD §1.3 (≤ 15 ms nel modo più
+  reattivo) e va aperto come decisione a sé.
+- **La quantizzazione al blocco resta** (A-05): l'istante in cui l'unico cambio atterra cade su
+  un confine di blocco (fino a 23 ms a 1024). I sotto-blocchi in `processBlock` sono
+  deliberatamente fuori scope: sono il cuore del motore.
 - **FR-59 — manca la SCALA, non il ridimensionamento.** La finestra è **già
   ridimensionabile**: `PluginEditor.cpp:392` `setResizable(true,true)` + `:399`
   `setResizeLimits(520,620,1200,900)`. Non esiste la scala percentuale 70–200%: zero
@@ -80,26 +93,22 @@ Da non scambiare per requisiti soddisfatti.
   Nessun viewport verticale. Trovato in s.30, mai corretto.
 - **La regola utente di D-15 non va scritta com'è.** *"Compilare tutte le celle"* è
   **controproducente** sugli attacchi: Test#3 ha le celle piene ed era peggio di Test#2 che
-  le ha vuote (D-17). Dopo la conferma di B-13 va deciso se quella regola serva ancora.
+  le ha vuote (D-17). Con B-13 chiuso va deciso se quella regola serva ancora.
 - **Preset di fabbrica non verificati**: dei 7, **solo "Min"** è confrontato col prototipo
   Max4Live. Gli altri 6 sono voicing jazz generici scritti algoritmicamente.
-- **CI copre 3 delle 8 suite**: `build.yml` ricompila a mano con `g++` e non invoca mai
-  `ctest`. Fuori CI: `glide`, `cell_input_parser`, `voice`, `empty_cell_hold`,
-  `phrase_scheduler`, e ogni target futuro. `phrase_scheduler` non è nemmeno *compilabile*
-  con quei `g++` (linka `juce_core`, D-16). Vedi A-06.
+- **CI copre 3 delle 8 suite** e non invoca mai `ctest`; `phrase_scheduler` non è nemmeno
+  compilabile con quei `g++` (D-16). Vedi A-06.
 - **Il tetto voci simultanee ha lo stesso difetto di B-10** (B-11): abbassare
   `maxSimultaneousVoices` non spegne gli slot già assegnati. Oggi non morde (default 32 su
   32). Serve una politica su quale frase perde slot.
 - **La UI non riflette un override CC attivo** (FR-36/37): il CC non scrive nel parametro
   APVTS (`PluginEditor.cpp:790-795`).
-- **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto. T-6/T-7 verificano che
-  i knob *arrivino*, non che il valore *sia giusto*.
-- **Knob formanti senza rampa**: `Voice::setFormantSpread`/`setFormantOffsetSemitones`
-  scrivono il float grezzo, senza `Glide`. Se si sentisse un click, aprire un'entry propria.
+- **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto (T-6/T-7 verificano che i
+  knob *arrivino*), e i due setter scrivono il float grezzo senza `Glide` — se si sentisse un
+  click girandoli, è un'entry propria.
 - **CC e Play mode mai provati con hardware reale**: il parsing MIDI di `CcRouter` è scoperto.
-- **Nessuna `LookAndFeel` custom** (D-10, rimandata di proposito).
-- **CPU mai profilata** con 8 voci contro il budget ≤15% del PRD §1.3.
-- **Catch2 mai adottato** (previsto da PRD §9.1): i test sono `int main()` scritti a mano.
+- **Nessuna `LookAndFeel` custom** (D-10) · **CPU mai profilata** con 8 voci contro il budget
+  ≤15% del PRD §1.3 · **Catch2 mai adottato**: i test sono `int main()` scritti a mano.
 - **Sporcizia nell'artefatto VST3**: dentro il bundle c'è
   `Contents/x86_64-win/Harmonizer (1).vst3` del 30/07, residuo di una copia vecchia.
   Probabilmente inerte. Trovato in s.31, non toccato.
@@ -111,8 +120,9 @@ Da non scambiare per requisiti soddisfatti.
 Nessuna di queste è tecnica; nessuna è chiusa.
 
 - **La guida utente non esiste** — nessun README utente, nessuna `docs/`, nessun tooltip
-  in-app. Deve ospitare il modello CC posizionale (D-03) e, **solo se dopo B-13 serve
-  ancora**, la regola sulle celle da compilare. In tensione col criterio d'uscita di M5
+  in-app. Deve ospitare il modello CC posizionale (D-03) e, da s.32, **la scelta dello
+  strumento**: cosa succede se si suona sotto la nota dichiarata (il rilevatore non aggancia)
+  e perché scendere nella lista rallenta l'armonia. In tensione col criterio d'uscita di M5
   (PRD §12: *"un tester esterno usa il plugin senza documentazione"*).
 - Nome prodotto, marchio, dominio → bloccano `PLUGIN_MANUFACTURER_CODE` (`Hzso`),
   `PLUGIN_CODE` (`Hmz1`), `COMPANY_NAME` (`"TBD"`), `BUNDLE_ID`. **Cambiarli dopo il
@@ -145,6 +155,7 @@ Dry/Wet 1 (solo wet), Balanced, Fmt Spread 0, Glide 0 ms, Voices 4, Gain/Voice a
 voce isolata; `REF_<nome>` è il riferimento fatto con Autoshift. Buffer 1024, Focusrite ASIO.
 
 **Comandi** · `cmake --build build --config Release` (il fallimento della copia in
-`Program Files` è atteso, D-12: filtrare `error C####`/`error LNK`) · `ctest -C Release`
+`Program Files` è atteso, D-12: filtrare `error C####`/`error LNK`) · **poi**
+`--target Harmonizer_Standalone`, che quel fallimento salta · `ctest -C Release`
 · `tools/pluginval.exe --strictness-level 10 --validate <path.vst3>`
-· `build/Release/degree_trace_probe.exe "<dry.wav>" "-7,-2,-7,-2,-7,,,,,,," 0 1024`
+· `build/Release/degree_trace_probe.exe "<dry.wav>" "<12 celle>" <root> <block> <notaMin>`

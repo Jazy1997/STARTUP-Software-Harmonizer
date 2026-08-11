@@ -517,3 +517,91 @@ vogliono attivare"* è **controproducente** su questo sintomo: Test#3 ha le cell
 
 **Non risolve** — la quantizzazione al blocco dell'istante in cui il cambio atterra (A-05),
 deliberatamente fuori scope.
+
+---
+
+## B-14 — L'offset corretto arriva dopo l'attacco: la nota parte con quello della precedente
+
+**Stato: APERTO (fix scritto, in attesa d'ascolto)** · Ultimo tocco: s.32 · Confermato
+all'ascolto: **no** — il sintomo sì, il fix no
+
+**Sintomo** (utente, s.32, confermando il fix di B-13) — *"per una frazione di secondo, quando
+comincia a suonare la nota, suona l'offset della nota precedente, poi salta a quello corretto.
+In Test#1 la seconda nota parte a −7 e si corregge a −1, la terza parte a −1 e si corregge a
+−7"*. Domanda posta insieme al sintomo: è migliorabile o è fisiologico?
+
+**Non è un difetto nuovo**: è il residuo che B-13 dichiarava esplicitamente di non risolvere
+(l'istante in cui l'unico cambio atterra). Entry propria perché il meccanismo è un altro.
+
+**Misure**
+- **Sull'export reale** `exp#1_Test#1_V1_01` contro la sua REF, transizione C4→D4: la REF sale
+  a 283 Hz a t=2.000; il plugin resta a **192→198 Hz fino a 2.070** — cioè la nota nuova con
+  l'offset **vecchio** — e arriva a 279 Hz solo a 2.090. **Ritardo ≈ 85 ms.**
+- **Da dove vengono**: `cycfi::q` ricava la finestra d'analisi dalla frequenza minima
+  (`bacf_period_detector`: `_zc(hysteresis, lowest_freq.period() * 2 * sps)`) e produce una
+  stima ogni mezza finestra; sopra c'è un `median3` che su un cambio di nota chiede due frame
+  concordi. Con i **60 Hz** cablati fino a s.31: finestra **33.4 ms**, una stima ogni
+  **16.7 ms**, e il pitch nuovo compare **87 ms** dopo l'attacco. Il resto era la nostra
+  attesa fissa da 25 ms.
+- **60 Hz è B1**, molto sotto quanto serve a voce/sax/tromba (FR-14) — e sotto il **Trombone
+  (Ab1 = 51.9 Hz)**, che quindi nelle note gravi non veniva rilevato affatto.
+
+**Storia**
+- s.32 — Tre interventi, nessuno dei quali tocca il motore.
+  1. **La nota più grave d'analisi diventa un parametro utente** (`analysisLowestNote`, D-18),
+     presentato come scelta dello strumento fra 10 voci ordinate dal più acuto al più grave.
+  2. **L'attesa di `PitchLatch` si misura in frame d'analisi** invece che in millisecondi
+     fissi (`settleSamplesForFrame`, 1.5 frame): segue da sola la finestra scelta. A 60 Hz
+     vale esattamente i 25 ms di prima, quindi su quella configurazione non cambia nulla.
+  3. **L'aggancio si aggiorna a ogni stima nuova del rilevatore**, non una volta per blocco.
+     Era un difetto vero introdotto in s.31: con un blocco più lungo dell'attesa, una stima
+     vista **una sola volta** si vedeva accreditare un blocco intero e l'attesa diventava un
+     no-op. Misurato: a C4 e blocco 1024 un singolo frame sbagliato (61.771 dove il vero è
+     63.984) veniva adottato — **B-13 che rientrava dalla finestra**. Ora il tempo passato
+     all'attesa è quello vero fra due stime, e non dipende più dal buffer.
+
+**Post-fix, misurato** (ritardo medio del cambio d'offset rispetto all'attacco):
+
+| buffer | prima (B1) | dopo (E2, default) |
+|---|---|---|
+| 128 | 93.6 ms | **55.9 ms** |
+| 512 | 90.7 ms | **50.1 ms** |
+| 1024 | 79.1 ms | **44.3 ms** |
+
+Matrice di non-regressione B-13 al default: **24 configurazioni** (4 tabelle × 6 block size
+da 128 a 4096), **0 corse di passaggio**. `ctest` 8/8, `pluginval --strictness-level 10`
+SUCCESS su VST3.
+
+**Il compromesso ha due facce, ed è la scoperta importante** — una finestra corta è più pronta
+ma anche più **rumorosa**: il rilevatore sbanda più spesso, e su un preset con tutti i gradi
+compilati ogni sbandata è un offset sbagliato udibile. Misurato a blocco 1024:
+
+| nota minima | finestra | Test#1 | Test#2 | Test#3 | Maj |
+|---|---|---|---|---|---|
+| C4 | 8.7 ms | 0 | 0 | 2 | 2 |
+| Ab3 | 10.2 ms | 0 | 0 | 2 | 3 |
+| E3 | 13.1 ms | 0 | 0 | 0 | 2 |
+| Db3 | 14.5 ms | 0 | 0 | 1 | 2 |
+| Ab2 | 20.3 ms | 0 | 0 | 1 | 1 |
+| **E2 (default)** | 24.7 ms | **0** | **0** | **0** | **0** |
+| B1 (era) | 33.4 ms | 0 | 0 | 0 | 0 |
+
+**Nessuna taratura dell'attesa salva le finestre corte**: provato fino a 25 ms di attesa
+assoluta (5.7 frame a C4), C4/Ab3/E3/Db3 restano con 1 corsa spuria. Non è l'attesa a essere
+breve, è il rilevatore a sbagliare. Da qui il default a **E2** invece del **Ab2** scelto
+inizialmente dall'utente: 12 ms di ritardo in più non valgono il rientro di B-13.
+
+**Limite da verificare, non da dare per buono** — quella tabella viene da **un solo file**, che
+suona C4-D4-E4: il registro **grave** per un flauto o un soprano sax. Quando quegli strumenti
+suonano nel proprio registro la finestra corta potrebbe comportarsi benissimo. Le voci acute
+restano quindi in lista, per decisione dell'utente, e **serve un export dedicato** (flauto o
+tromba nel loro registro) per misurarle davvero.
+
+**Prossima azione (utente)** — riesportare `exp#1_Test#1_V1_02` e `exp#1_Maj_V1_02` col
+default Voice Male (E2). La flem deve accorciarsi in modo percepibile, e Test#2/Test#3 devono
+**restare uguali fra loro** (nessuna regressione B-13).
+
+**Cosa resta comunque** — il ritardo non va a zero. Restano la convergenza del rilevatore e il
+confine di blocco. Azzerarlo richiede il **lookahead** (ritardare l'audio e dichiarare la
+latenza all'host), rimandato per scelta dell'utente in s.32: contrasta con PRD §1.3
+(≤ 15 ms nel modo più reattivo) e va aperto come decisione a sé.

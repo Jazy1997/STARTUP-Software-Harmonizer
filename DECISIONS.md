@@ -367,7 +367,62 @@ di controllo:
   cambio atterra (A-05) e il motore PSOLA, escluso su richiesta esplicita dell'utente
   (*"sono contento del timbro ora"*). `psola` e `voice` restano verdi identiche.
 
-**Stato** — Attiva, in attesa della conferma all'ascolto di B-13.
+**Stato** — Attiva. B-13 **confermato all'ascolto** in s.32.
+
+---
+
+## D-18 — La gamma d'analisi la sceglie l'utente, e si serializza la nota (non la posizione)
+
+**Contesto** (s.32) — Chiuso B-13, resta che l'offset giusto arriva **~85 ms dopo l'attacco**:
+la nota parte con l'offset di quella precedente. Il termine dominante non è nostro — Cycfi Q
+ricava la finestra d'analisi dalla frequenza minima che gli passiamo, e i **60 Hz** cablati
+fino a s.31 danno una finestra di 33.4 ms e una stima ogni 16.7 ms. 60 Hz è **B1**: molto più
+in basso di quanto serva a voce/sax/tromba (FR-14), e più in basso del **Trombone (Ab1 =
+51.9 Hz)**, che quindi nelle note gravi non veniva rilevato affatto.
+
+**Decisione**
+
+1. **La nota più grave d'analisi diventa un parametro utente**, presentato come scelta dello
+   strumento fra 10 voci (`src/ui/InstrumentRanges.h`) ordinate **dal più acuto al più grave**:
+   l'ordine è esso stesso l'informazione, scendendo cresce il ritardo. Note fornite
+   dall'utente, non da una tabella generica.
+2. **Si serializza la NOTA MIDI, non la posizione in lista** (`analysisLowestNote`,
+   `AudioParameterInt` 28..72). È l'opposto di **D-03**, dove il CC *è* la posizione, ed è
+   deliberato: la lista è ordinata per altezza, quindi uno strumento nuovo va **inserito** in
+   mezzo — con un `Choice` posizionale quell'ordine resterebbe congelato per sempre (regola 6).
+   Prezzo: due strumenti che condividono la nota (Voice Female e Bb Trumpet, entrambi E3) non
+   si distinguono nello stato salvato, e la UI evidenzia il primo. Accettato: per il suono
+   conta la nota, non l'etichetta.
+3. **Le attese della catena di controllo si esprimono in frame d'analisi del rilevatore**, non
+   in millisecondi fissi (estende D-17, che le voleva in ms invece che in blocchi). Il
+   transiente da cui ci si difende vive sulla scala del rilevatore: `kSettleFrames = 1.5`
+   riproduce a 60 Hz esattamente i 25 ms di s.31 e scala da solo con lo strumento scelto.
+4. **Il cambio si applica subito, non allo stop del transport.** Ricostruire il rilevatore
+   alloca, quindi si riusa lo schema di Stability (costruzione sul message thread → scambio di
+   puntatore in `processBlock` → distruzione in `collectGarbage`), ma **senza**
+   `canApplyStabilityChangeNow()`: qui la latenza dichiarata non cambia, FR-56 non si applica.
+5. **Default: E2 (Voice Male, 82.4 Hz), scelto misurando.** L'utente aveva indicato Bb Tenor
+   Sax (Ab2); la misura ha mostrato che Ab2 riapre in piccolo B-13, e l'utente ha scelto E2
+   alla luce del dato.
+
+**Conseguenze**
+- Ritardo del cambio d'offset, su materiale reale: **79.1 → 44.3 ms** a 1024 campioni,
+  93.6 → 55.9 a 128. Zero corse di passaggio su 24 configurazioni (4 tabelle × 6 block size).
+- **Il compromesso ha due facce**, ed è la scoperta che ha cambiato il default: una finestra
+  corta è più pronta ma anche più **rumorosa**, e su un preset con tutti i gradi compilati ogni
+  sbandata del rilevatore diventa un offset sbagliato udibile. Sopra Eb Alto Sax compaiono 1-3
+  corse spurie, e **nessuna taratura dell'attesa le elimina** (provato fino a 25 ms assoluti).
+  Le voci acute restano in lista per scelta dell'utente, con il limite annotato: la misura
+  viene da un solo file che suona C4-D4-E4, cioè il registro grave per quegli strumenti.
+- **Corretto un difetto di D-17**: l'attesa contava i campioni del *blocco*, quindi con un
+  blocco più lungo dell'attesa una stima vista una sola volta si vedeva accreditare un blocco
+  intero e l'attesa era un no-op. Ora l'aggancio si aggiorna a ogni stima nuova del rilevatore.
+- Parametri APVTS: **45 → 46**.
+- **Il lookahead resta fuori** (ritardare l'audio e dichiarare la latenza): è l'unica strada che
+  azzererebbe il ritardo, ma contrasta con PRD §1.3 (≤ 15 ms nel modo più reattivo) e con
+  *"progettato per il palco"*. Rimandato per scelta dell'utente, da aprire come decisione a sé.
+
+**Stato** — Attiva, in attesa della conferma all'ascolto di B-14.
 
 ---
 
