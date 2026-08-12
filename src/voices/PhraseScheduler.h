@@ -95,10 +95,24 @@ public:
                   float continuousInputMidiNote,
                   const std::array<harmony::Cell, harmony::numVoices>& currentOffsetsForTrigger,
                   int numRequestedVoices,
-                  bool applyStabilityChangeNow);
+                  bool applyStabilityChangeNow,
+                  // B-16 (sessione 35): "questo trigger NON e' un attacco di
+                  // nota". Un onset vero nasce dopo un silenzio, quindi il
+                  // motore puo' partire freddo senza che si senta (vedi
+                  // Phrase.h). Il rientro dell'Harmonizer all'uscita da Play
+                  // no: la sorgente sta gia' suonando a pieno livello e il
+                  // motore dello slot appena preso e' freddo, quindi la
+                  // dissolvenza degli 8 ms si consumerebbe dentro il suo
+                  // silenzio e la voce entrerebbe di netto — misurato: tempo
+                  // di salita 1.66 ms invece di kDeclickMs (MS-7). Con questo
+                  // flag le voci della frase nuova ricevono lo stesso
+                  // riscaldamento gia' usato per il late-binding di B-12.
+                  // Default false: il percorso dell'onset vero non cambia.
+                  bool triggerNeedsWarmup = false);
 
 private:
-    void triggerNewPhrase (const std::array<harmony::Cell, harmony::numVoices>& offsets, int numRequestedVoices);
+    void triggerNewPhrase (const std::array<harmony::Cell, harmony::numVoices>& offsets, int numRequestedVoices,
+                           bool warmEnginesFirst);
     void freeAllPhrases();
     // Sessione 12: due modi di "liberare" una frase, non piu' uno solo.
     // beginRelease() e' il caso normale (fine frase/silenzio/superata da un

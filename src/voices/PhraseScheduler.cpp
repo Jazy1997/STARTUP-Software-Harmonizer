@@ -174,7 +174,8 @@ int PhraseScheduler::allocateFreeSlot()
 }
 
 void PhraseScheduler::triggerNewPhrase (const std::array<harmony::Cell, harmony::numVoices>& offsets,
-                                         int numRequestedVoices)
+                                         int numRequestedVoices,
+                                         bool warmEnginesFirst)
 {
     Phrase* newPhrase = nullptr;
     for (auto& p : phrases)
@@ -207,6 +208,14 @@ void PhraseScheduler::triggerNewPhrase (const std::array<harmony::Cell, harmony:
             return; // pool esaurito anche dopo il furto: si rinuncia a questa voce
 
         newPhrase->slotIndices[(size_t) v] = slot;
+
+        // B-16 (sessione 35): questo trigger non viene da un attacco di nota
+        // ma dal rientro dopo Play, con la sorgente gia' in suono. Stesso
+        // riscaldamento del late-binding di B-12, e per la stessa ragione:
+        // senza, la dissolvenza si consuma nel silenzio del motore freddo.
+        // Vedi PhraseScheduler.h (triggerNeedsWarmup).
+        if (warmEnginesFirst)
+            newPhrase->warmupSamples[(size_t) v] = voicePool.getSlot (slot).getLatencySamples();
     }
 }
 
@@ -221,7 +230,8 @@ bool PhraseScheduler::process (const float* monoIn,
                                 float continuousInputMidiNote,
                                 const std::array<harmony::Cell, harmony::numVoices>& currentOffsetsForTrigger,
                                 int numRequestedVoices,
-                                bool applyStabilityChangeNow)
+                                bool applyStabilityChangeNow,
+                                bool triggerNeedsWarmup)
 {
     const bool appliedStabilityChange = voicePool.applyPendingStabilityChangeIfSafe (applyStabilityChangeNow);
     int lateBindingsThisBlock = 0;
@@ -256,7 +266,7 @@ bool PhraseScheduler::process (const float* monoIn,
                 beginRelease (p);
         }
 
-        triggerNewPhrase (currentOffsetsForTrigger, numRequestedVoices);
+        triggerNewPhrase (currentOffsetsForTrigger, numRequestedVoices, triggerNeedsWarmup);
     }
     else if (inputIsStable)
     {

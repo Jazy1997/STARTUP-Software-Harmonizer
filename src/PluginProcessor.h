@@ -174,6 +174,14 @@ private:
     int samplesSinceLatchUpdate = 0;
     bool onsetPendingForLatch = false;
     int lastLatchedNote = 0;
+    // B-17 (sessione 35): fronte dell'interruttore di modalita'. Una frase
+    // dell'Harmonizer nasce SOLO su un onset (PhraseScheduler: triggerNewPhrase
+    // ha un unico call site), e uscendo da Play a meta' di una nota tenuta
+    // quell'onset non arrivera' mai — il gate e' gia' aperto. Il fronte di
+    // discesa prende il posto dell'onset mancante; il flag lo trasporta fino al
+    // primo blocco in cui c'e' davvero di che fare una frase. Solo audio thread.
+    bool playModeEnabledLastBlock = false;
+    bool pendingHarmonizerRetrigger = false;
     PhraseScheduler phraseScheduler;
 
     // Sessione 12 (fix scricchiolii/click): dryLevel/wetLevel (e bypass, che

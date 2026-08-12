@@ -421,6 +421,34 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // non a un istante qualsiasi del blocco.
     const bool latchFollowsInput = ! playModeEnabled;
 
+    // B-17 (sessione 35): l'interruttore di modalita' e' un EVENTO, e va
+    // trattato come tale. Vedi PluginProcessor.h per il perche' serve.
+    if (playModeEnabled != playModeEnabledLastBlock)
+    {
+        if (playModeEnabled)
+        {
+            // Entrando in Play: un onset rilevato poco prima non deve
+            // sopravvivere alla parentesi e agganciare il latch all'uscita,
+            // dove non significherebbe piu' niente. Nessuno lo consumerebbe
+            // finche' Play e' attivo (il ramo qui sotto richiede
+            // latchFollowsInput), quindi va spento qui.
+            onsetPendingForLatch = false;
+        }
+        else
+        {
+            // Uscendo da Play: si riparte come da un attacco vero.
+            // onsetPendingForLatch fa saltare al latch l'attesa dell'isteresi,
+            // cosi' l'aggancio e' fresco alla prima stima utile invece di
+            // restare quello di prima della parentesi; il retrigger aspetta
+            // PROPRIO quell'aggancio (vedi sotto) — una frase creata prima
+            // nascerebbe sul grado sbagliato.
+            onsetPendingForLatch = true;
+            samplesSinceLatchUpdate = 0;
+            pendingHarmonizerRetrigger = true;
+        }
+    }
+    playModeEnabledLastBlock = playModeEnabled;
+
     bool onsetDetectedThisBlock = false;
     for (int i = 0; i < numSamples; ++i)
     {
@@ -598,12 +626,27 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const bool harmonizerSignalPresent = (! playModeEnabled) && signalPresent;
     const bool harmonizerInputIsStable = (! playModeEnabled) && inputIsStable;
 
+    // B-17: il retrigger armato dal fronte di discesa si consuma solo quando
+    // c'e' di che fare una frase sensata — segnale presente, pitch confidente,
+    // e latch GIA' riagganciato (onsetPendingForLatch consumato dal ciclo dei
+    // campioni qui sopra). Se il gate si chiude prima, il flag cade: al vero
+    // silenzio pensa il ramo ! signalPresent di PhraseScheduler, e il prossimo
+    // attacco e' un onset normale che non ha bisogno di aiuto.
+    const bool harmonizerRetriggerNow = pendingHarmonizerRetrigger
+                                     && harmonizerSignalPresent
+                                     && harmonizerInputIsStable
+                                     && ! onsetPendingForLatch;
+    if (harmonizerRetriggerNow || ! harmonizerSignalPresent)
+        pendingHarmonizerRetrigger = false;
+
     // FR-11/§8.1: mix wet STEREO (gain/pan per voce) — canale 0 = L, 1 = R.
     voicesMixScratch.setSize (2, numSamples, false, false, true);
     const bool appliedStabilityChangeHarmonizer = phraseScheduler.process (mono,
         voicesMixScratch.getWritePointer (0), voicesMixScratch.getWritePointer (1), numSamples,
-        onsetDetectedThisBlock, harmonizerSignalPresent, harmonizerInputIsStable, quantizedPlayedNote, continuousInputMidiNote,
-        offsets, numActiveVoices, canApplyStabilityChangeNow());
+        onsetDetectedThisBlock || harmonizerRetriggerNow, // B-17: il fronte dell'interruttore vale un onset
+        harmonizerSignalPresent, harmonizerInputIsStable, quantizedPlayedNote, continuousInputMidiNote,
+        offsets, numActiveVoices, canApplyStabilityChangeNow(),
+        harmonizerRetriggerNow); // B-16: il rientro non e' un attacco di nota — il motore va scaldato
 
     playVoicesMixScratch.setSize (2, numSamples, false, false, true);
     const bool appliedStabilityChangePlay = playModeInput.process (midiMessages, ccRouter.getMidiChannel(), playModeEnabled,
@@ -613,10 +656,36 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     if (appliedStabilityChangeHarmonizer || appliedStabilityChangePlay)
         setLatencySamples (phraseScheduler.getLatencySamples()); // stessa Stability, stessa latenza per entrambi i pool
 
-    // Le due modalita' sono mutuamente esclusive (FR-24): si sceglie l'una
-    // o l'altra, non si sommano.
-    const auto* voicesMixL = playModeEnabled ? playVoicesMixScratch.getReadPointer (0) : voicesMixScratch.getReadPointer (0);
-    const auto* voicesMixR = playModeEnabled ? playVoicesMixScratch.getReadPointer (1) : voicesMixScratch.getReadPointer (1);
+    // B-16/FR-28 (sessione 35): i due mix wet si SOMMANO, non si sceglie.
+    //
+    // Fino a s.34 qui si leggeva l'uno o l'altro secondo playModeEnabled. Ma
+    // entrambe le catene, quando escono di scena, sfumano per conto proprio —
+    // freeAllPhrases()/beginRelease() di qua (la catena Harmonizer riceve
+    // signalPresent=false, vedi sopra), setMuted(true) piu' la coda di
+    // kDeclickMs di la' (PlayModeInput, il cui commento cita gia' FR-28).
+    // Scegliendo, quella dissolvenza finiva in un buffer che da quel blocco in
+    // poi non leggeva piu' nessuno: il contributo wet andava a zero in UN
+    // campione, al confine di blocco. Misurato prima del fix (mode_switch_test):
+    // MS-1 e MS-2 entrambe 0.000, cioe' coda inesistente in tutte e due le
+    // direzioni.
+    //
+    // FR-24 ("le due modalita' sono mutuamente esclusive") resta soddisfatta:
+    // in REGIME una delle due e' muta, e la sovrapposizione dura al piu' i
+    // kDeclickMs della dissolvenza. Vedi D-22.
+    //
+    // Entrambi i buffer sono azzerati e riempiti ogni blocco e in ogni
+    // modalita' (PhraseScheduler::process e PlayModeInput::process cominciano
+    // con std::fill), e le due process() qui sopra sono chiamate
+    // incondizionatamente: non esiste il caso "sommo un buffer con dentro
+    // roba vecchia". FloatVectorOperations::add non alloca e non prende lock
+    // (PRD §9.4); i setSize qui sopra usano gia' avoidReallocating.
+    for (int ch = 0; ch < 2; ++ch)
+        juce::FloatVectorOperations::add (voicesMixScratch.getWritePointer (ch),
+                                          playVoicesMixScratch.getReadPointer (ch),
+                                          numSamples);
+
+    const auto* voicesMixL = voicesMixScratch.getReadPointer (0);
+    const auto* voicesMixR = voicesMixScratch.getReadPointer (1);
 
     // Bypass (FR-30): solo dry, esattamente come se Dry=1/Wet=0 — il
     // percorso dry e' gia' il segnale in ingresso non processato, quindi
