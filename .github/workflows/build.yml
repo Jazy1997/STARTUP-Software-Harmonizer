@@ -8,16 +8,42 @@ env:
   PLUGINVAL_VERSION: "1.0.4"
 
 jobs:
-  # Suite di verifica numerica del motore PSOLA (tests/psola_test.cpp).
-  # Deliberatamente senza JUCE: gira in pochi secondi su un runner minimo.
-  # Se il DSP e' rotto non ha senso aspettare venti minuti di build del
-  # plugin su due piattaforme (vedi CLAUDE.md, "non puoi ascoltare" —
-  # questo test e' il criterio numerico che sostituisce l'ascolto).
+  # CORSIA VELOCE — un SOTTOINSIEME, non la verifica.
+  #
+  # Le tre suite qui sotto sono le uniche compilabili con g++ nudo, senza JUCE:
+  # girano in pochi secondi su un runner minimo, cosi' se il DSP e' rotto non si
+  # aspettano venti minuti di build del plugin su due piattaforme (vedi CLAUDE.md,
+  # "non puoi ascoltare" — questi test sono il criterio numerico che sostituisce
+  # l'ascolto).
+  #
+  # La verifica vera sono le 11 suite di `ctest` nel job `build` (A-06, sessione 36).
+  # Questo job NON va esteso a mano aggiungendo altri g++: e' esattamente cosi' che
+  # 8 suite su 11 sono rimaste fuori dal gate. Un banco nuovo si registra con
+  # add_test() in CMakeLists.txt e viene raccolto da ctest — ci pensa il passo
+  # "Check every *_test target is registered with add_test" qui sotto a imporlo.
+  # Convertire QUESTO job a CMake richiederebbe le dipendenze Linux di JUCE
+  # (X11, freetype, ALSA) e ucciderebbe il vantaggio dei pochi secondi.
   dsp-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Guardia contro il ripetersi di A-06: la causa non era una CI sbagliata,
+      # era che un target nuovo restava fuori dal gate DA SOLO, in silenzio.
+      # Qui un banco dimenticato rompe la CI in due secondi invece di scivolare
+      # fuori inosservato. I probe (*_probe, sample_click_finder, voice_bench)
+      # sono esclusi apposta: vogliono file WAV non versionati e non sono add_test.
+      - name: Check every *_test target is registered with add_test
+        run: |
+          targets=$(grep -oE '^add_executable\([a-zA-Z0-9_]+_test' CMakeLists.txt | sed 's/^add_executable(//' | sort)
+          registered=$(grep -oE '^add_test\(NAME [a-zA-Z0-9_]+ COMMAND [a-zA-Z0-9_]+' CMakeLists.txt | awk '{print $NF}' | sort)
+          if [ "$targets" != "$registered" ]; then
+            echo "::error::Un target *_test non e' registrato con add_test() (o viceversa): non girerebbe mai in ctest."
+            diff <(echo "$targets") <(echo "$registered") || true
+            exit 1
+          fi
+          echo "OK: $(echo "$targets" | wc -l) target *_test, tutti registrati in ctest."
 
       - name: Compile and run PSOLA test suite
         run: |
@@ -58,6 +84,17 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release --parallel
+
+      # A-06 (sessione 36) — LA rete di regressione: tutte le suite registrate
+      # con add_test(), su Windows E macOS. Prima di questo passo la CI ne
+      # copriva 3 su 11, compilate a mano con g++ nel job dsp-tests, e ogni
+      # banco nuovo nasceva fuori dal gate (D-16: mode_switch_test linka il
+      # plugin intero, quindi con g++ nudo non e' proprio compilabile).
+      # Il passo "Build" qui sopra gira senza --target, quindi gli eseguibili
+      # di test sono gia' compilati: qui non si ricompila nulla.
+      # Misurato in locale (11/11 verdi): 3.2 s in tutto.
+      - name: Run test suites (ctest)
+        run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Download pluginval (Windows)
         if: runner.os == 'Windows'
