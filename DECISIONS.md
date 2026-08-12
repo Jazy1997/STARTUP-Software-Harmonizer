@@ -598,6 +598,47 @@ suono insieme **oltre** la finestra di dissolvenza: sarebbe un difetto a monte, 
 somma.
 
 ---
+
+## D-23 — La CI verifica con `ctest`; il gate a `g++` resta, ma è una corsia veloce
+
+**Contesto** (s.36) — Chiude A-06. `.github/workflows/build.yml` compilava a mano tre suite
+con `g++` nudo e non invocava mai `ctest`, mentre `CMakeLists.txt` ne registra **11**: fuori
+dal gate `glide`, `cell_input_parser`, `voice`, `empty_cell_hold`, `phrase_scheduler`,
+`play_mode_input`, `ui_scale`, `mode_switch` — **8 su 11**, fra cui i due banchi che in s.34/35
+hanno chiuso B-15, B-16 e B-17. Il divario si allargava da solo: per D-16 ogni banco nuovo
+tende a linkare JUCE (`mode_switch_test` linka il plugin intero) e quindi **non è compilabile**
+con un `g++` a mano.
+
+**Decisione** — La verifica è `ctest --test-dir build -C Release --output-on-failure`, eseguito
+nel job `build` **dopo** il passo di build e **prima** di `pluginval`. Gira sulla matrice già
+esistente, quindi copre le 11 suite su Windows **e** macOS — prima copertura automatica di
+macOS oltre a `pluginval`.
+
+**Perché il job `dsp-tests` non viene rimosso né convertito** — il suo valore non erano i test,
+era il **tempo**: gira su `ubuntu-latest` senza JUCE e fallisce in secondi invece che dopo la
+build completa su due piattaforme. Convertirlo a CMake richiederebbe le dipendenze Linux di
+JUCE (X11, freetype, ALSA) e ucciderebbe esattamente quel vantaggio. Resta quindi com'è, ma
+**dichiarato per quello che è**: un sottoinsieme, non la verifica. Il commento in testa al job
+lo dice, e vieta esplicitamente di estenderlo aggiungendo altri `g++`.
+
+**Nessun costo di build** — il passo *Build* gira senza `--target`, quindi gli eseguibili di
+test erano **già compilati** e buttati via senza essere eseguiti. Misurato in locale: 11/11
+verdi in **3.2 s** su un totale di build di parecchi minuti. Il rischio "la CI si allunga" era
+infondato; se un giorno mordesse, la leva è `ctest --parallel`, non togliere suite.
+
+**La guardia** — la causa di A-06 non era una CI sbagliata: era che un target nuovo restava
+fuori dal gate **da solo, in silenzio**. Un passo nel job `dsp-tests` confronta l'insieme dei
+target `add_executable(<nome>_test` con quello registrato da `add_test(` e fallisce se non
+coincidono, nominando il colpevole. Provato in entrambe le direzioni prima di committare: passa
+sugli 11 attuali, e togliendo la riga `add_test` di `mode_switch` scatta indicando
+`mode_switch_test`. I probe (`*_probe`, `sample_click_finder`, `voice_bench`) sono esclusi per
+costruzione dal suffisso `_test`: vogliono file WAV non versionati e non sono `add_test`.
+
+**Stato** — Attiva. Da rivedere se un banco futuro avesse bisogno di file di test non
+versionati: dovrebbe nascere `_probe`, non `_test`, oppure la guardia va estesa con una lista
+di eccezioni esplicita.
+
+---
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |
@@ -607,6 +648,6 @@ somma.
 | A-03 | **Tipo di licenza JUCE** | prima della beta | Indie vs commerciale, in funzione del fatturato previsto |
 | A-04 | **Certificati di firma e notarizzazione** | era M0 | Apple Developer ID + code signing Windows. Il lead time più lungo del progetto, mai avviato |
 | A-05 | **Sotto-blocchi in `processBlock`** | non pianificata | Diagnosi di s.13: la frequenza di controllo del motore è il reciproco del block size dell'host. Fix previsto (ciclo a sotto-blocchi 64–128 campioni) **mai scritto**. Intervento strutturale: da decidere **con l'utente** come trattare i messaggi MIDI, oggi consumati una volta per blocco. Misurare prima di implementare |
-| A-06 | **CI: `ctest` invece dei tre `g++` a mano** | non pianificata | Conseguenza di D-11: **5 suite su 8** sono fuori CI e ogni target nuovo resta fuori da solo. Aggravata da D-16 (s.30): `phrase_scheduler_test` linka `juce_core` e **non è compilabile** con i tre `g++` a mano, quindi passare a `ctest` non è più solo più comodo — è l'unico modo di coprirla |
+| ~~A-06~~ | ~~**CI: `ctest` invece dei tre `g++` a mano**~~ | **RISOLTA in s.36 → D-23** | Era: conseguenza di D-11, con 8 suite su 11 fuori dal gate e ogni target nuovo che restava fuori da solo. Ora la CI esegue `ctest` (11/11, Windows e macOS) e una guardia impedisce che un banco nuovo scivoli fuori in silenzio |
 | A-07 | **Preset di fabbrica** | — | Solo "Min" è verificato contro il prototipo M4L. Gli altri 6 sono voicing jazz generici. Contenuto oltre i 7 tipi base ancora da decidere |
 | A-08 | Prezzi dei tre tier · canale di vendita · consegna licenza nel bundle hardware | — | Non tecniche |
