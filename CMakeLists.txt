@@ -294,6 +294,59 @@ target_include_directories(degree_trace_probe PRIVATE
 )
 target_compile_features(degree_trace_probe PRIVATE cxx_std_20)
 
+# Banco di misura del passaggio Harmonizer<->Play (sessione 35, B-16/B-17).
+# TERZO livello di D-16: il passaggio di modalita' non esiste dentro nessun
+# modulo isolato — vive in HarmonizerAudioProcessor::processBlock — quindi
+# questo banco istanzia il PROCESSORE INTERO e muove il vero parametro
+# "playModeEnabled". Costa le stesse sorgenti del plugin piu' juce_audio_utils:
+# gira in ctest, non nel gate a g++ nudo della CI (A-06).
+add_executable(mode_switch_test
+    tests/mode_switch_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/dsp/PitchDetector.cpp
+    src/dsp/SpectralShifter.cpp
+    src/dsp/PsolaShifter.cpp
+    src/dsp/PitchShifterFactory.cpp
+    src/dsp/OnsetDetector.cpp
+    src/harmony/HarmonyEngine.cpp
+    src/harmony/PresetLibrary.cpp
+    src/harmony/CsvIo.cpp
+    src/voices/Voice.cpp
+    src/voices/VoicePool.cpp
+    src/voices/PhraseScheduler.cpp
+    src/midi/CcRouter.cpp
+    src/midi/OverrideManager.cpp
+    src/midi/PlayModeInput.cpp
+    src/ui/PresetTableEditor.cpp
+    src/ui/PresetListEditor.cpp
+    src/ui/RootNoteGrid.cpp
+)
+target_include_directories(mode_switch_test PRIVATE
+    src
+    tests
+    libs/q/q_lib/include
+    libs/q/infra/include
+    libs/signalsmith-stretch
+)
+target_compile_features(mode_switch_test PRIVATE cxx_std_20)
+# Stesse definizioni del target del plugin. JucePlugin_Name e' l'unico simbolo
+# del wrapper che le sorgenti usano (PluginProcessor::getName): qui non c'e'
+# nessun wrapper, quindi si fornisce a mano invece di trascinarsi dietro
+# juce_audio_plugin_client.
+target_compile_definitions(mode_switch_test PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+    JUCE_STANDALONE_APPLICATION=1
+    JucePlugin_Name="Harmonizer"
+)
+target_link_libraries(mode_switch_test PRIVATE
+    juce::juce_audio_utils
+    juce::juce_dsp
+)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
@@ -305,3 +358,4 @@ add_test(NAME empty_cell_hold COMMAND empty_cell_hold_test)
 add_test(NAME phrase_scheduler COMMAND phrase_scheduler_test)
 add_test(NAME play_mode_input COMMAND play_mode_input_test)
 add_test(NAME ui_scale COMMAND ui_scale_test)
+add_test(NAME mode_switch COMMAND mode_switch_test)
