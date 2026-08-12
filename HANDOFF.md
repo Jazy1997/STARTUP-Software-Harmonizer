@@ -1,6 +1,6 @@
 # HANDOFF — HARMONIZER
 
-> Ultimo aggiornamento: **2026-08-11**, sessione 34.
+> Ultimo aggiornamento: **2026-08-12**, sessione 35.
 > Questo file descrive **solo lo stato di oggi**. La storia sta in `LOG/`, i sintomi
 > aperti in `BUGS.md`, le decisioni durature in `DECISIONS.md`, la mappa dei moduli
 > in `MAPPA.md`. Fonte di verità del prodotto: `PRD-Harmonizer-v1.md` + `PRD-UI.md`.
@@ -22,41 +22,43 @@ Plugin armonizzatore per strumenti monofonici (VST3 / AU / Standalone). Calcola
 - Motore: PSOLA proprietario dietro `PitchShifter` astratto. **Chiuso** da D-19 (s.32).
   Riaperto in s.34 dall'unica condizione che D-19 prevede — un sintomo nuovo riportato
   all'ascolto — e con la forma della modifica ora vincolata da **D-21**.
-- **10** suite `ctest` verdi. `pluginval --strictness-level 10` SUCCESS su VST3 (Win).
+- **11** suite `ctest` verdi. `pluginval --strictness-level 10` SUCCESS su VST3 (Win).
 
-**Il lavoro di oggi (B-15)** — *"quando clicco una nota sulla tastiera midi ... sento un click
-all'inizio"*, in modalità **Play**, **a ogni tasto premuto**. Nuovo banco di misura
-(`tests/play_mode_input_test.cpp`, in `ctest`) che pilota il vero `PlayModeInput` con veri
-`MidiBuffer`. Due cause distinte, separate da un esperimento di controllo (PM-7, seconda nota
-alla stessa altezza — pulito già prima del fix, quindi il colpevole è il cambio di rapporto):
+**Sessione 35 — tre entry chiuse all'ascolto, nessuna aperta.** `B-15` (click a ogni nota in
+Play, da s.34), poi `B-16` e `B-17`, i due sintomi del **passaggio fra le modalità** trovati
+oggi. Con B-16 si chiude anche **FR-28** `[MUST]`, elencato come *"mai verificato all'ascolto"*
+dal s.9. Storie complete nelle entry; qui solo ciò che resta utile domani:
 
-1. Il motore di uno slot senza nota premuta restava **affamato**, e `goCold()` non era mai
-   chiamato in Play. Al note-on i primi ~20 ms uscivano dalla coda della nota precedente e gli
-   8 ms di `ampGlide` si consumavano lì dentro (è B-12, mai portato su Play).
-2. **La causa del sintomo riportato**: il riscaldamento alimentava il motore col rapporto di
-   trasposizione **vecchio**, e `synthesise()` riempie `outBuf` in anticipo — la dissolvenza
-   cadeva su ~10 ms già sintetizzati all'intonazione della nota precedente.
+- Il mix wet dei due pool si **somma**, non si sceglie (**D-22**): ogni catena sfuma già per
+  conto proprio uscendo di scena, e sceglierne una buttava via quella dissolvenza.
+- Il **fronte di discesa dell'interruttore vale un onset** per `PhraseScheduler`, altrimenti
+  uscendo da Play a metà di una nota tenuta nessuna frase nasce mai (`triggerNewPhrase` ha un
+  solo call site, nel ramo dell'onset).
+- Quel rientro chiede il **riscaldamento** del motore (`triggerNeedsWarmup`, default `false`):
+  non è un attacco di nota, la sorgente sta già suonando. È B-12 ricomparso su una terza strada.
+- Banco nuovo `tests/mode_switch_test.cpp`, **terzo livello di D-16**: istanzia il processore
+  intero e muove il vero parametro. 8 metriche, 6 cancelli, 3 scenari — copre tutti e quattro i
+  quadranti del passaggio (chi esce e chi entra, nei due versi).
 
-Salto d'ampiezza all'attacco, rapportato al regime: **2.07–5.08 → 0.94–1.03**. Tempo di salita
-sulla seconda nota: 2.15–5.24 ms → **7.71–8.59 ms**, cioè `kDeclickMs`. Corretta per strada
-anche la scivolata d'intonazione sulla nota ribattuta (−1219.8 → +2.3 cent a +30 ms).
+**Tre metriche corrette per strada** (regola 13), in entrambe le direzioni: il salto
+campione-campione era cieco sul **taglio** (1.08 su un wet azzerato di netto) e di nuovo
+sull'**attacco** del rientro (0.95 su una salita di 1.66 ms) — lì vede il tempo di salita; e
+MS-8, tarata a memoria su `kDeclickMs`, **accusava codice sano** finché non le si è messo
+accanto un controllo. Lezione: le soglie si tarano su una misura di riferimento, non su una
+costante letta nel sorgente.
 
 ---
 
 ## Prossimo passo
 
-**Uno solo: l'ascolto di B-15.** Tutto il resto è misurato, ma nessuna misura può chiudere un
-sintomo udito (regola 12) — e s.14 ha già insegnato quanto costi crederci prima. In Ableton,
-Play, con una sorgente audio sostenuta: nota singola dopo un silenzio lungo; **note a altezze
-diverse in sequenza** (il caso che era rotto, e quello che il solo riscaldamento non
-risolveva); note ripetute sulla stessa altezza e ribattute veloci; accordo di 4–8 note;
-passaggio Harmonizer↔Play con tasti premuti (FR-28, **mai verificato all'ascolto**). Se torna
-pulito, B-15 si chiude; se no, il banco di misura è in piedi e il prossimo giro parte da lì.
+**Uno solo: A-06 — la CI allineata a `ctest`.** Il workflow compila **3 suite su 11** con `g++`
+nudo e non invoca mai `ctest`; il divario è cresciuto in s.34 e ancora in s.35 (`mode_switch`
+linka l'intero plugin, quindi è ancora meno compilabile in quel modo di `play_mode_input` —
+D-16). Con B-15/B-16/B-17 tutti chiusi all'ascolto, è la rete di regressione a essere il
+rischio più grosso: 8 suite su 11 non le guarda nessuno automaticamente, e fra queste ci sono
+`psola`, `voice` e i due banchi che hanno appena chiuso tre sintomi.
 
-**Il prossimo passo di ingegneria, dopo**, resta **A-06: la CI allineata a `ctest`.** Il
-workflow compila 3 suite su 10 con `g++` nudo e non invoca mai `ctest`; il divario è cresciuto
-ancora oggi (`play_mode_input` linka JUCE, quindi come `phrase_scheduler` non è compilabile in
-quel modo — D-16).
+*(Tutti gli ascolti che erano in coda sono stati fatti: vedi § Stato.)*
 
 ---
 
@@ -64,9 +66,8 @@ quel modo — D-16).
 
 | Cosa | Dove | Stato |
 |---|---|---|
-| **B-15 — il click in Play** | vedi § Prossimo passo | Fix in codice e misurato su 5 livelli di Stability, **mai ascoltato**. L'entry resta `APERTO`. |
+| **MS-5: il dry al passaggio di modalità** | `mode_switch_test` | La metà *"senza interruzioni del dry"* di FR-28 è verificata **per calcolo**, non all'ascolto: il percorso dry non dipende dalla modalità, quindi il cancello è una guardia, non una prova. |
 | **FR-59: la conferma è stata GENERALE** | s.33 | *"Ok, funziona"*: la scala funziona a vista, **non** che i tre punti seguenti siano stati guardati. **HiDPI**: corretto per costruzione, ma il display della prova poteva essere a 100%; su Retina mai (serve macOS). **Keep Tails al 70%**: 562 px logici contro 528 richiesti, 34 px di margine — **calcolato**, da guardare su Edit. **Persistenza**: da provare riaprendo un progetto salvato, non cambiando scala a plugin aperto. |
-| **La conferma di B-14 fu dal vivo, non su export** | — | In `SAMPLE TEST/` non esiste alcun `_02`. I numeri (79.1 → 44.3 ms) restano verificati per calcolo. |
 | `kSettleFrames = 1.5` | `src/harmony/PitchLatch.h` | Attesa in frame d'analisi. **Misurata, non tarata all'ascolto**: prima manopola se l'armonia sembrasse in ritardo. |
 | Default **E2 (Voice Male)** | `PluginProcessor.h` | Scelto misurando: l'impostazione più pronta che resta pulita su tutte e quattro le tabelle. |
 | **B-10 con Keep Tails ON** | `PhraseScheduler.cpp` | Confermato in s.30 ma **in generale**, non su questa configurazione (tensione con FR-46). |
@@ -84,27 +85,24 @@ Da non scambiare per requisiti soddisfatti.
   probabilmente anche per celle vuote (B-04) e late-binding (B-12), che usano ancora
   `processWarmOnly` a 3 argomenti. **Deliberatamente non toccato**: va misurato sul percorso
   Harmonizer per conto proprio (D-21), e quella catena è oggi giudicata soddisfacente.
-- **In Play, 8 note rilasciate e ripremute entro 8 ms** non trovano nessuno slot `isSilent()`
-  e ricadono sulla scivolata d'intonazione. Limite dell'allocazione, non del motore.
-- **Nessun `ScopedNoDenormals`** in tutto `src/`. Trovato in s.34 esplorando, non corretto: non
-  è il sintomo riportato.
+- **In Play, 8 note rilasciate e ripremute entro 8 ms** non trovano nessuno slot `isSilent()` e
+  ricadono sulla scivolata d'intonazione (limite dell'allocazione, non del motore) · **nessun
+  `ScopedNoDenormals`** in tutto `src/` (trovato in s.34, non corretto: non era il sintomo).
 - **Le voci acute della lista strumenti non sono verificate nel loro registro.** Sopra Eb Alto
   Sax si misurano 1-3 offset di passaggio e nessuna taratura li elimina — ma il file di prova
   suona C4-D4-E4. **Serve un export dedicato.**
-- **Il ritardo del cambio d'offset non va a zero.** Restano la convergenza del rilevatore e il
-  confine di blocco. Azzerarlo richiede il **lookahead**, rimandato in s.32.
-- **La quantizzazione al blocco resta** (A-05), e in Play si somma al fatto che
-  `metadata.samplePosition` non viene letto: il note-on vale dal campione 0 del blocco, fino a
-  ~85 ms di anticipo a 4096. Non produce click, sposta l'attacco.
+- **Il ritardo del cambio d'offset non va a zero** (convergenza del rilevatore + confine di
+  blocco; azzerarlo richiede il **lookahead**, rimandato in s.32) · **la quantizzazione al
+  blocco resta** (A-05), e in Play si somma al fatto che `metadata.samplePosition` non viene
+  letto: fino a ~85 ms di anticipo a 4096. Non produce click, sposta l'attacco.
 - **La regola utente di D-15 non va scritta com'è.** *"Compilare tutte le celle"* è
   controproducente sugli attacchi (D-17).
 - **Formanti mai tarate**: `k = 0.3` non è mai passato per l'ascolto, e i due setter scrivono
   il float grezzo senza `Glide` — se si sentisse un click girandoli, è un'entry propria.
-- **CC mai provato con hardware reale**: il parsing MIDI di `CcRouter` è scoperto. Play sì, ora
-  (s.34), ma solo dalla tastiera dell'utente.
-- **A 200% la finestra è 1800×1320 fisici**, che non entra in un 1080p (lettura letterale di
+- **CC mai provato con hardware reale** (il parsing MIDI di `CcRouter` è scoperto; Play sì dalla
+  tastiera dell'utente) · **A 200% la finestra è 1800×1320 fisici**, che non entra in un 1080p (lettura letterale di
   FR-59, D-20) · **Preset di fabbrica**: dei 7 solo "Min" è confrontato col prototipo Max4Live
-  (A-07) · **CI copre 3 delle 10 suite** e non invoca mai `ctest` (A-06) · **B-11**: il tetto
+  (A-07) · **CI copre 3 delle 11 suite** e non invoca mai `ctest` (A-06) · **B-11**: il tetto
   voci ha lo stesso difetto di B-10, oggi non morde (32 su 32) · **la UI non riflette un
   override CC attivo** (FR-36/37) · **nessuna `LookAndFeel`** (D-10) · **FR-61 non esiste** ·
   **CPU mai profilata** contro il budget ≤15% del PRD §1.3 · **Catch2 mai adottato** ·
@@ -153,6 +151,7 @@ voce isolata; `REF_<nome>` è il riferimento fatto con Autoshift. Buffer 1024, F
 `Program Files` è atteso, D-12: filtrare `error C####`/`error LNK`) · **poi**
 `--target Harmonizer_Standalone`, che quel fallimento salta · `ctest --test-dir build -C Release`
 · `build/Release/play_mode_input_test.exe` stampa la tabella PM-1..PM-7 di B-15
+· `build/Release/mode_switch_test.exe` stampa la tabella MS-1..MS-8 di B-16/B-17
 · `build/Release/degree_trace_probe.exe "<dry.wav>" "<12 celle>" <root> <block> <notaMin>`
 
 **`pluginval` non è nel repo** e non è più su disco: si scarica come fa la CI —

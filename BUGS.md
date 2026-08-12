@@ -633,9 +633,10 @@ latenza all'host), rimandato per scelta dell'utente in s.32: contrasta con PRD �
 
 ## B-15 — Click a ogni attacco di nota in modalità Play
 
-**Stato: APERTO** (fix in codice, misurato) · Ultimo tocco: s.34 · Confermato
-all'ascolto: **non ancora** — serve la conferma dell'utente prima di `CHIUSO`
-(`CLAUDE.md` regola 12)
+**Stato: CHIUSO** (s.35, 2026-08-12) · Ultimo tocco: s.35 · Confermato all'ascolto
+dall'utente: **sì** — *"ho testato play mode ascoltando la nuova build fatta ieri alla fine
+della sessione e non ci sono più click"*. Un sintomo che tornasse riaprirebbe **questa**
+entry, non una nuova (`CLAUDE.md` regola 14).
 
 **Sintomo** (utente, s.34) — *"Quando clicco una nota sulla tastiera midi il plug in la
 armonizza correttamente, ma sento un click all'inizio."* Precisato su domanda:
@@ -741,10 +742,14 @@ motore). La catena Harmonizer non passa da nessuna delle righe nuove.
 **Post-fix** — `ctest` 10/10, `pluginval --strictness-level 10` SUCCESS su VST3/Win,
 Standalone costruito. AU non verificabile su questa macchina (limite già noto).
 
-**Prossima azione** — ascolto dell'utente in Ableton, modalità Play, sorgente audio sostenuta:
-nota singola dopo un silenzio lungo, note ripetute sulla stessa altezza, note a altezze
-diverse in sequenza, accordo di 4–8 note insieme. Finché non arriva, questa entry resta
-`APERTO`.
+**Chiusura (s.35)** — l'utente ha ascoltato la build di fine s.34 in modalità Play e riferisce
+che **il click non c'è più**. È la conferma che la regola 12 richiede, e chiude il sintomo:
+le misure PM-1..PM-7 qui sopra descrivevano il difetto giusto.
+
+**Cosa la conferma non copre** — l'utente ha riferito l'assenza di click, non l'esito dei
+singoli scenari. In particolare **FR-28** (passaggio Harmonizer↔Play con tasti premuti) resta
+**mai verificato all'ascolto**: non era il sintomo di B-15 ed era stato aggiunto alla lista di
+prova solo perché si sarebbe potuto verificare nella stessa sessione d'ascolto.
 
 **Limite noto che questo lavoro NON tocca** — lo stesso miglioramento del punto 2 è
 probabilmente disponibile anche per i rami di riscaldamento di `PhraseScheduler` (celle vuote
@@ -752,3 +757,221 @@ B-04, late-binding B-12), che continuano a usare la `processWarmOnly` a 3 argome
 scaldano il motore col rapporto vecchio. Deliberatamente fuori scope: va **misurato** sul
 percorso Harmonizer prima di cambiare qualcosa lì, e la catena Harmonizer è oggi giudicata
 soddisfacente all'ascolto (D-19).
+
+---
+
+## B-16 — Click nel passaggio fra modalità Harmonizer e Play
+
+**Stato: CHIUSO** (s.35) · Ultimo tocco: s.35 · Confermato all'ascolto dall'utente: **sì** —
+*"tutto corretto, ho verificato ascoltando su Ableton"*, dopo il fix della **seconda** causa.
+Ci sono voluti tre giri d'ascolto: il primo ha detto che il click c'era, il secondo che ne
+restava metà (l'accensione pulita, lo spegnimento no), il terzo ha chiuso. Un sintomo che
+tornasse riaprirebbe **questa** entry, non una nuova (regola 14).
+
+**Sintomo** (utente, s.35) — *"Se attivo Play Mode mentre sta suonando sento un click."*
+
+**Perché è entry propria e non B-15** — B-15 è il click all'attacco di **ogni nota** in Play,
+chiuso all'ascolto in questa stessa sessione. Questo è un evento diverso (il passaggio di
+modalità, non un note-on), su una riga di codice diversa, e si sente anche senza premere
+nessun tasto.
+
+**Requisito violato** — **FR-28** `[MUST]`, `PRD-Harmonizer-v1.md:162`: *"Il passaggio tra
+modalità Harmonizer e Play avviene senza click e senza interruzioni del segnale dry."* Era
+elencato fra i limiti noti come *"mai verificato all'ascolto"* fin da s.9; la verifica è
+arrivata ora, ed è negativa.
+
+**Causa** — `PluginProcessor.cpp`, mix wet: si leggeva il buffer dell'una **o** dell'altra
+catena secondo `playModeEnabled`. Entrambe sfumano correttamente quando escono di scena —
+`freeAllPhrases()` → `beginRelease()` da un lato (`PhraseScheduler.cpp`), `setMuted(true)` più
+la coda di `kDeclickMs` dall'altro (`PlayModeInput.cpp`, il cui commento cita FR-28
+esplicitamente da s.12) — ma quella dissolvenza veniva scritta in un buffer che dal blocco del
+passaggio in poi **non leggeva più nessuno**. Il contributo wet andava a zero in un campione,
+al confine di blocco. Difetto **simmetrico**: valeva in entrambe le direzioni, ma nel verso
+Play→Harmonizer era mascherato da B-17 (non c'era più niente da tagliare).
+
+**La metrica ovvia qui misura male, ed è una lezione ripetuta** — la prima passata del banco ha
+usato PM-3 di s.34 (massimo salto campione-campione rapportato al regime) e ha risposto
+**1.08**, cioè *"nessun click"*, nello stesso istante in cui il wet passava da pieno a zero
+esatto. Non è una contraddizione: il taglio vale `|x[b-1]|`, un campione qualsiasi dell'onda, e
+il mix wet dell'Harmonizer è granuloso alla cadenza dei grani PSOLA — i suoi salti naturali
+sono già di quell'ordine. Ciò che distingue un taglio da una dissolvenza non è il salto ma
+l'**inviluppo subito dopo**. I cancelli sono stati riscritti sull'energia della coda **prima**
+di toccare il codice (regola 13). Stesso esito di PM-2 in s.34: la misura ovvia non era quella
+giusta.
+
+**Banco di misura** — `tests/mode_switch_test.cpp`, nuovo, in `ctest`. **Terzo livello di
+D-16**: il passaggio di modalità non esiste dentro nessun modulo isolato, vive in
+`HarmonizerAudioProcessor::processBlock`, quindi il banco istanzia il **processore intero** e
+muove il vero parametro `playModeEnabled` a un confine di blocco, come farebbe un host.
+Sorgente tenuta a 220 Hz che **non si interrompe mai**. Scenario A senza tasti premuti,
+scenario B con una nota Play premuta e mai rilasciata (il caso "con tasti premuti" di FR-28).
+
+**Misure, prima → dopo**
+
+| | prima | dopo |
+|---|---|---|
+| MS-1 coda dell'Harmonizer negli 8 ms dopo il toggle **ON** | **0.000** | **0.547** |
+| MS-2 coda della voce Play negli 8 ms dopo il toggle **OFF** | **0.000** | **0.887** |
+| MS-4 salto campione-campione al toggle OFF (diagnostica) | 7.74 | **1.17** |
+| MS-5 salto sul percorso **dry**, entrambi i versi | 1.00 | 1.00 |
+
+0.547 è vicino allo 0.577 teorico di una dissolvenza lineare su tutta la finestra: la coda non
+è solo presente, ha la forma giusta. MS-4 è riportata ma **non** è un cancello, per la ragione
+detta sopra; è comunque scesa da 7.74 a 1.17 nello scenario in cui era sensibile.
+
+**Fix (s.35)** — `src/PluginProcessor.cpp`: i due mix wet si **sommano** invece di sceglierne
+uno. Vedi **D-22** per il ragionamento completo e per il rapporto con FR-24, che resta
+soddisfatta in regime (la sovrapposizione dura al più `kDeclickMs`).
+
+**Non tocca** — nessuna riga dentro `Voice`, `PsolaShifter`, `PhraseScheduler` o
+`PlayModeInput`: il difetto era interamente nel processore. `ctest` 11/11,
+`pluginval --strictness-level 10` SUCCESS su VST3/Win.
+
+### Secondo giro d'ascolto (s.35) — metà del sintomo era altrove
+
+L'utente ha provato la build: *"Non c'è più il click quando attivo Play Mode, ma c'è quando la
+disattivo e ricomincia a suonare la matrice."* Metà del sintomo risolta, metà no — e la metà
+rimasta non era la coda che se ne va (già coperta da MS-2) ma l'**attacco che rientra**. Nello
+stesso istante convivono due eventi distinti, e i primi cancelli ne guardavano uno solo.
+
+**Seconda causa** — `PhraseScheduler::triggerNewPhrase()` faceva
+`warmupSamples.fill (0)` con il commento *"attacco di nota: nessun riscaldamento, vedi B-12"*.
+Per un onset vero l'assunzione è giusta: prima c'era silenzio, quindi un motore che parte
+freddo non si sente. Per il rientro da Play è **falsa**: la sorgente sta già suonando a pieno
+livello e il motore dello slot appena preso è freddo (`goCold()` quando è tornato al pool), così
+gli 8 ms di `ampGlide` si consumano dentro il suo silenzio e la voce entra di netto quando il
+motore comincia a produrre. È B-12 alla lettera, mai portato su questo percorso — esattamente
+come la causa 1 di B-15 era B-12 mai portato su Play.
+
+**La metrica che l'ha vista, e quella che non l'ha vista** — MS-6 (salto d'ampiezza
+all'attacco, cioè PM-3 di s.34) ha dato **0.95**: pulito. È il **tempo di salita**, MS-7, ad
+aver nominato il difetto: **1.66 ms** invece di `kDeclickMs`. Notevole perché è l'inverso di
+s.34, dove PM-3 era il cancello buono e PM-2 quello cieco: la metrica giusta dipende dalla
+*forma* del difetto, non dal percorso. Qui l'inviluppo entra troppo in fretta ma senza gradini
+fra due campioni consecutivi, quindi solo la salita se ne accorge.
+
+**Secondo fix (s.35)** — parametro `triggerNeedsWarmup` su `PhraseScheduler::process`, **con
+default `false`**: il percorso dell'onset vero non cambia di una riga. Quando è vero, le voci
+della frase nuova ricevono lo stesso riscaldamento già usato dal late-binding di B-12
+(`warmupSamples[v] = getLatencySamples()`). `PluginProcessor` lo passa esattamente quando
+consuma il retrigger di B-17. Nessun meccanismo nuovo: un chiamante nuovo per una strada che
+esisteva già, nella forma prescritta da D-21.
+
+**Misure aggiornate, prima → dopo**
+
+| | prima | dopo |
+|---|---|---|
+| MS-7 tempo di salita al rientro della matrice | **1.66 ms** | **7.80 ms** (= `kDeclickMs`) |
+| MS-6 salto d'ampiezza sullo stesso attacco | 0.95 | 0.93 |
+| MS-3 ritorno del wet | 26.5 ms | 31.3 ms |
+
+MS-3 è salita di ~5 ms: è la latenza del riscaldamento, pagata apposta. Il wet arriva più tardi
+ma arriva **sfumato** invece che di netto — lo stesso baratto già accettato in B-15 (PM-1
+0.70 → 24.4 ms).
+
+**Limite noto** — il riscaldamento al rientro è incondizionato: se il motore dello slot fosse
+già caldo, quei ~5 ms sarebbero spesi per niente. Non è stato reso condizionale perché lo stato
+del motore non è interrogabile da `PhraseScheduler` senza aggiungere superficie a `Voice`
+(D-21), e 5 ms su un gesto manuale non si sentono.
+
+**Il verso simmetrico, verificato e non solo assunto (MS-8)** — richiesta esplicita dell'utente
+(*"controlla che le misure anti-click siano implementate sia in entrata che in uscita"*).
+Mancava lo scenario del tasto **già premuto quando Play si accende**: lì la voce Play entra, ed
+è l'altra metà del passaggio. Per costruzione doveva essere già coperto dal fix di B-15 (in
+`PlayModeInput` il riscaldamento è **derivato dallo stato del motore**, non registrato al
+note-on, quindi vale anche per una nota premuta da prima) — ma *"per costruzione"* non è una
+misura. Aggiunto lo scenario C: **è sano**, e non è stato toccato niente.
+
+**La soglia sbagliata, e come se n'è usciti** — il primo giro di MS-8 era un tempo assoluto con
+soglia 5 ms e ha **fallito** (4.56) su quel percorso sano. Invece di rincorrere un terzo fix, si
+è misurato il **controllo**: la stessa voce Play che entra da un note-on normale, cioè il
+percorso che l'utente ha appena confermato all'ascolto chiudendo B-15. Risultato **4.69** — lo
+stesso numero. La soglia era tarata a memoria su `kDeclickMs = 8` senza tener conto che (a) una
+rampa lineare di 8 ms attraversa 10%→90% in **6.4** ms, non in 8, e (b) un inviluppo RMS causale
+accorcia ancora la salita misurata. MS-8 è ora un **rapporto contro il controllo** (0.97,
+soglia ≥ 0.70), che è immune a entrambe le distorsioni. È la seconda metà della regola 13: un
+cancello che fallisce non accusa sempre il codice.
+
+**Copertura anti-click del passaggio, riassunto**
+
+| verso | chi esce di scena | chi entra |
+|---|---|---|
+| Harmonizer → Play | coda dell'Harmonizer — **MS-1** (0.547) | voce Play, se il tasto era già premuto — **MS-8** (0.97 del controllo) |
+| Play → Harmonizer | coda della voce Play — **MS-2** (0.887) | matrice che rientra — **MS-6** (0.93) e **MS-7** (7.80 ms) |
+
+**Chiusura (s.35)** — l'utente ha ascoltato in Ableton e conferma: il passaggio è pulito in
+entrambi i versi. È la conferma che la regola 12 richiede.
+
+**Con questa entry si chiude anche FR-28** (`[MUST]`), che era elencato fra i limiti noti come
+*"mai verificato all'ascolto"* fin da s.9: ora è verificato, ed è soddisfatto in entrambe le
+direzioni e con tasti premuti. La metà *"senza interruzioni del segnale dry"* resta coperta
+solo per calcolo (MS-5): il percorso dry non dipende dalla modalità, e il cancello lo sorveglia.
+
+---
+
+## B-17 — Uscendo da Play l'Harmonizer non riparte finché non si ferma l'audio
+
+**Stato: CHIUSO** (s.35) · Ultimo tocco: s.35 · Confermato all'ascolto dall'utente: **sì** —
+*"Ora si attiva di nuovo la matrice quando disattivo Play Mode"*, riferito alla build con il
+fix del retrigger.
+
+**Sintomo** (utente, s.35) — *"Se dopo aver attivato Play Mode la disattivo, il plug-in non si
+riattiva più e non armonizza più secondo la matrice; per farlo funzionare ancora devo stoppare
+l'audio e farlo ripartire."*
+
+**Causa** — `PhraseScheduler::triggerNewPhrase()` ha **un solo call site**, dentro il ramo
+`else if (onsetDetectedThisBlock)`: una frase dell'Harmonizer nasce **solo** su un onset.
+La sequenza del difetto:
+
+1. Play ON → `processBlock` forza `harmonizerSignalPresent = false` (la stessa via già usata
+   quando il segnale tace) → ramo `! signalPresent` → `freeAllPhrases()`: non resta nessuna
+   frase viva.
+2. Play OFF con la sorgente che sta ancora suonando → il gate di `OnsetDetector` è **già
+   aperto**, quindi `signalPresent` torna vero ma **non c'è nessun onset nuovo**: la nota non
+   si è mai interrotta, non c'è nessun attacco da rilevare.
+3. Si cade nel ramo `else if (inputIsStable)`, che sa solo aggiornare e completare frasi **già
+   attive** (late-binding, B-12). Non ce n'è nessuna → silenzio, a tempo indeterminato.
+
+L'unico modo di produrre un onset è chiudere e riaprire il gate: **fermare l'audio e farlo
+ripartire**, che è letteralmente il workaround riferito dall'utente. Il sintomo non è un blocco
+né uno stato corrotto: è il modello a frase (FR-43) applicato a un caso in cui l'attacco che
+presuppone non arriverà mai.
+
+**Trovato per strada** — `onsetPendingForLatch` veniva **armato** anche mentre Play era attivo,
+ma il suo consumatore gira solo quando `latchFollowsInput` (cioè a Play spento): un onset
+avvenuto durante la parentesi restava appeso e forzava l'aggancio immediato al primo blocco
+dopo l'uscita, saltando la conferma dell'isteresi (FR-16/17).
+
+**Misura** — MS-3 di `tests/mode_switch_test.cpp`: millisecondi dallo spegnimento di Play al
+ritorno del wet (10% del regime precedente), su una sorgente che non si interrompe mai e quindi
+non offre nessun onset. **Prima: MAI** (l'intero 1.5 s di cattura). **Dopo: 26.5 ms.**
+
+**Fix (s.35)** — `src/PluginProcessor.{h,cpp}`, due bool di stato, nessuna allocazione:
+- il **fronte di discesa** dell'interruttore arma `pendingHarmonizerRetrigger` e imposta
+  `onsetPendingForLatch` (si riparte come da un attacco vero: l'aggancio salta l'attesa
+  dell'isteresi ed è fresco alla prima stima utile, invece di restare quello di prima della
+  parentesi);
+- il **fronte di salita** spegne `onsetPendingForLatch`, che altrimenti sopravvivrebbe alla
+  parentesi senza più significare niente;
+- il retrigger si consuma quando c'è di che fare una frase sensata — segnale presente, pitch
+  confidente e **latch già riagganciato** — e allora vale come un onset per
+  `PhraseScheduler::process`. Se il gate si chiude prima, il flag cade: al vero silenzio pensa
+  il ramo `! signalPresent`, e il prossimo attacco è un onset normale.
+
+Nessun percorso nuovo dentro `PhraseScheduler`: si riusa il ramo di trigger esistente, incluso
+il late-binding che copre "frase nata prima che il pitch fosse affidabile".
+
+**Perché ri-armare e non aspettare il prossimo onset** — senza frase viva l'Harmonizer è muto,
+e nel caso riportato l'attacco non arriverà mai. Il fronte dell'interruttore è l'evento che
+prende il posto dell'onset mancante.
+
+**Non tocca** — nessuna riga del motore né di `PhraseScheduler`. `ctest` 11/11,
+`pluginval --strictness-level 10` SUCCESS su VST3/Win.
+
+**Chiusura (s.35)** — l'utente ha ascoltato e riferisce che la matrice **si riattiva**
+spegnendo Play, senza fermare il transport. È la conferma che la regola 12 richiede.
+
+**Nota** — lo stesso ascolto ha lasciato aperto **B-16**: il rientro funziona ma *si sente*, ed
+è un sintomo dell'altra entry (l'attacco della matrice che rientra su motore freddo). Le due
+cose sono state tenute separate apposta: qui si chiude *"non riparte"*, non *"riparte senza
+click"*.

@@ -561,6 +561,43 @@ per conto proprio e deciso con l'utente, non fatto di rimbalzo.
 **Stato** — Attiva. Emenda D-19 senza superarla: D-19 dice *quando*, questa dice *come*.
 
 ---
+
+## D-22 — I due mix wet si sommano, non si sceglie
+
+**Contesto** (s.35) — B-16: attivando Play mentre la sorgente suona si sente un click.
+`processBlock` leggeva il mix wet **dell'una o dell'altra** catena secondo `playModeEnabled`.
+Entrambe, quando escono di scena, sfumano già per conto proprio — `freeAllPhrases()` →
+`beginRelease()` da un lato, `setMuted(true)` più la coda di `kDeclickMs` dall'altro — ma
+quella dissolvenza finiva in un buffer che dal blocco del passaggio in poi non leggeva più
+nessuno. Il wet andava a zero in **un campione**. Misurato prima del fix: coda 0.000 in
+entrambe le direzioni (MS-1/MS-2 di `tests/mode_switch_test.cpp`).
+
+**Decisione** — I due buffer si **sommano** sempre, in ogni modalità. Nessuna scelta, nessun
+crossfade esplicito.
+
+**Perché non un crossfade** — sarebbe una seconda rampa sopra quella che ogni catena già
+applica a se stessa: la coda uscente verrebbe attenuata due volte e quindi accorciata, cioè si
+tornerebbe a tagliare la dissolvenza, solo più gentilmente. La somma non aggiunge nessuna
+rampa: si limita a non buttare via quella che c'è.
+
+**Rapporto con FR-24** (*"le due modalità sono mutuamente esclusive"*) — resta soddisfatta.
+L'esclusività vale **in regime**, ed è garantita a monte: mentre Play è attivo la catena
+Harmonizer riceve `signalPresent = false` e non genera nulla di nuovo; mentre Play è spento
+`PlayModeInput` mette in muto tutti gli slot. La sovrapposizione udibile esiste solo durante la
+dissolvenza e dura al più `kDeclickMs` = 8 ms. È una deviazione dalla **lettera** di FR-24
+scelta per soddisfare FR-28 (`[MUST]`, *"il passaggio avviene senza click"*), che sulla lettera
+di FR-24 era impossibile da soddisfare.
+
+**Sicurezza della somma** (verificato, non assunto) — entrambi i `process()` sono chiamati
+incondizionatamente ogni blocco e ognuno comincia azzerando il proprio buffer
+(`PhraseScheduler.cpp`, `PlayModeInput.cpp`): non esiste il caso "sommo un buffer con dentro
+contenuto vecchio". `FloatVectorOperations::add` non alloca e non prende lock (PRD §9.4).
+
+**Stato** — Attiva. Da rivedere solo se comparisse un caso in cui le due catene producono
+suono insieme **oltre** la finestra di dissolvenza: sarebbe un difetto a monte, non di questa
+somma.
+
+---
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |
