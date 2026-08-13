@@ -523,6 +523,36 @@ void HarmonizerAudioProcessorEditor::ScaledContent::paint (juce::Graphics& g)
     // sarebbe l'unica cosa a schermo a NON scalare insieme al resto.
     g.drawFittedText ("HARMONIZER - motore PSOLA",
                        getLocalBounds().removeFromTop (24), juce::Justification::centred, 1);
+
+    // Sessione 37 (D-26) — avviso della scadenza nelle build beta.
+    //
+    // Disegnato nella STESSA striscia del titolo, allineato a destra: non e' un
+    // componente, quindi non entra in resized() e non tocca l'aritmetica della
+    // scala di FR-59 (coperta da ui_scale_test) — scala per conto suo insieme a
+    // tutto il resto perche' sta dentro ScaledContent. In una build normale
+    // isBetaBuild() e' false a tempo di compilazione e non resta nulla.
+    //
+    // Serve al tester, non a noi: senza il conto alla rovescia la scadenza
+    // arriverebbe come un guasto e ci verrebbe segnalata come difetto, bruciando
+    // il feedback che questa beta esiste per raccogliere.
+    if constexpr (HarmonizerAudioProcessor::isBetaBuild())
+    {
+        const auto strip = getLocalBounds().removeFromTop (24).reduced (8, 0);
+        const bool expired = owner.processorRef.isBetaExpired();
+        const juce::String tester { HarmonizerAudioProcessor::betaTesterName() };
+
+        juce::String notice = expired
+            ? "BETA SCADUTA - solo dry"
+            : "BETA - " + juce::String (owner.processorRef.betaDaysRemaining()) + " gg";
+
+        // Il nome del tester rende tracciabile una copia che gira (D-25).
+        if (tester.isNotEmpty())
+            notice += " - " + tester;
+
+        g.setColour (expired ? juce::Colours::orangered : juce::Colours::grey);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawFittedText (notice, strip, juce::Justification::centredRight, 1);
+    }
 }
 
 void HarmonizerAudioProcessorEditor::resized()

@@ -1,6 +1,11 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#if defined (HARMONIZER_BETA_BUILD_EPOCH)
+ #include "licensing/BetaGate.h"
+ #include <ctime>
+#endif
+
 namespace ParamIDs
 {
     static const juce::String rootNote { "rootNote" };
@@ -247,6 +252,11 @@ void HarmonizerAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     // (STFT): dichiararla e' necessario perche' l'host possa compensarla.
     setLatencySamples (phraseScheduler.getLatencySamples());
 
+    // D-26: prima lettura dell'ora, qui e non in processBlock. Va fatta anche
+    // al caricamento e non solo dal timer, altrimenti il primo quarto di
+    // secondo di una sessione riaperta dopo la scadenza produrrebbe wet.
+    updateBetaGate();
+
     // Controlla i cambi di Stability (message thread, FR-56) e ripulisce gli
     // shifter ritirati dallo swap precedente (PRD §9.4) — mai sull'audio thread.
     startTimer (250);
@@ -285,11 +295,50 @@ void HarmonizerAudioProcessor::timerCallback()
         lastKnownAnalysisLowestNote = lowestNote;
     }
 
+    // D-26: la scadenza puo' cadere a sessione aperta (un tester che lavora a
+    // cavallo della mezzanotte del trentesimo giorno). Ricontrollare a 250 ms
+    // costa una std::time() sul message thread e niente sull'audio thread.
+    updateBetaGate();
+
     // Distrugge gli shifter ritirati dallo scambio precedente: mai sull'audio
     // thread (PRD §9.4).
     phraseScheduler.collectGarbage();
     playModeInput.collectGarbage();
     pitchDetector.collectGarbage();
+}
+
+// ===== Build beta con scadenza (sessione 37, D-26) =====
+// Tutte e tre girano SOLO sul message thread (prepareToPlay, timerCallback,
+// editor): std::time() e' una chiamata di sistema e in processBlock e' vietata
+// (CLAUDE.md regola 1). L'audio thread vede solo l'atomico betaExpired.
+// In una build normale i tre corpi sono vuoti/costanti e il linker li elimina.
+
+void HarmonizerAudioProcessor::updateBetaGate()
+{
+   #if defined (HARMONIZER_BETA_BUILD_EPOCH)
+    const auto now = (std::int64_t) std::time (nullptr);
+    betaExpired.store (licensing::BetaGate::isExpired (HARMONIZER_BETA_BUILD_EPOCH, now, HARMONIZER_BETA_DAYS),
+                       std::memory_order_relaxed);
+   #endif
+}
+
+int HarmonizerAudioProcessor::betaDaysRemaining() const
+{
+   #if defined (HARMONIZER_BETA_BUILD_EPOCH)
+    const auto now = (std::int64_t) std::time (nullptr);
+    return licensing::BetaGate::daysRemaining (HARMONIZER_BETA_BUILD_EPOCH, now, HARMONIZER_BETA_DAYS);
+   #else
+    return 0;
+   #endif
+}
+
+const char* HarmonizerAudioProcessor::betaTesterName() noexcept
+{
+   #if defined (HARMONIZER_BETA_TESTER)
+    return HARMONIZER_BETA_TESTER;
+   #else
+    return "";
+   #endif
 }
 
 int HarmonizerAudioProcessor::currentAnalysisLowestNote() const
@@ -691,7 +740,21 @@ void HarmonizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // percorso dry e' gia' il segnale in ingresso non processato, quindi
     // non serve un secondo percorso audio dedicato.
     const float effectiveDryLevel = effective.bypassed ? 1.0f : dryLevel;
-    const float effectiveWetLevel = effective.bypassed ? 0.0f : wetLevel;
+    float effectiveWetLevel = effective.bypassed ? 0.0f : wetLevel;
+
+    // D-26 (build beta scadute): si spegne il WET, non il plugin — il dry
+    // continua a passare esattamente come nel bypass qui sopra. E' il principio
+    // di FR-68 applicato in anticipo: un tester che riapre un progetto dopo la
+    // scadenza non trova una traccia muta, trova il suo segnale asciutto.
+    //
+    // Nessuna chiamata di sistema qui: solo la lettura di un flag atomico
+    // scritto dal message thread (CLAUDE.md regola 1). E nessuna dissolvenza da
+    // scrivere: il valore finisce in wetGlide qui sotto, che lo interpola
+    // campione per campione sulla rampa anti-click di 8 ms gia' esistente —
+    // la stessa che smorza il bypass, coperta da tests/glide_test.cpp.
+    if constexpr (isBetaBuild())
+        if (isBetaExpired())
+            effectiveWetLevel = 0.0f;
 
     // Sessione 12 (fix click): il target del parametro puo' saltare da un
     // blocco all'altro (automazione, CC bypass, il bottone Bypass stesso) —

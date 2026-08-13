@@ -141,10 +141,38 @@ public:
         uiScalePercent.store (ui::clampScalePercent (percent), std::memory_order_relaxed);
     }
 
+    // ===== Build beta con scadenza (sessione 37, D-26) =====
+    // Vedi src/licensing/BetaGate.h: NON e' il licensing di M6 (FR-63..70) e va
+    // cancellato quando quello arrivera'. In una build normale HARMONIZER_BETA
+    // e' OFF, isBetaBuild() e' false a tempo di compilazione e non resta niente.
+    static constexpr bool isBetaBuild() noexcept
+    {
+       #if defined (HARMONIZER_BETA_BUILD_EPOCH)
+        return true;
+       #else
+        return false;
+       #endif
+    }
+
+    // L'UNICO membro di questo gruppo che l'audio thread puo' chiamare: legge un
+    // flag atomico e nient'altro. L'ora di sistema (std::time, una chiamata di
+    // sistema) e' letta sul message thread da updateBetaGate() — CLAUDE.md
+    // regola 1 / PRD §9.4.
+    bool isBetaExpired() const noexcept { return betaExpired.load (std::memory_order_relaxed); }
+
+    // Solo message thread: leggono l'ora di sistema. Servono all'avviso
+    // nell'editor, cosi' la scadenza non arriva come una sorpresa che il tester
+    // segnala come difetto.
+    int betaDaysRemaining() const;
+    static const char* betaTesterName() noexcept;
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void timerCallback() override;
+    // Aggiorna betaExpired leggendo l'ora di sistema. SOLO message thread
+    // (prepareToPlay e timerCallback). In una build non-beta e' un corpo vuoto.
+    void updateBetaGate();
     bool canApplyStabilityChangeNow() const;
     bool isTransportPlaying() const;
     // B-14: valore corrente del parametro, gia' limitato alla gamma ammessa.
@@ -193,6 +221,12 @@ private:
     // rampa fissa anti-click delle voci (Voice::kDeclickMs), non il
     // glideTimeMs musicale dell'utente.
     Glide dryGlide, wetGlide;
+    // Sessione 37 (D-26): scritto sul message thread da updateBetaGate(), letto
+    // dall'audio thread in processBlock. In una build non-beta resta false per
+    // sempre e nessuno lo scrive. Parte da false di proposito: se l'ora di
+    // sistema fosse illeggibile, il plugin suona — non si blocca un tester per
+    // un dubbio.
+    std::atomic<bool> betaExpired { false };
     int lastKnownStabilityLevel = Stability::defaultLevel; // solo message thread (timerCallback)
     // B-14: come lastKnownStabilityLevel, per la nota piu' grave d'analisi.
     // Inizializzato a un valore impossibile cosi' il primo giro del timer

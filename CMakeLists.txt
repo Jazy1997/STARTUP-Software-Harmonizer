@@ -7,19 +7,66 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment target")
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS Universal binary architectures")
 
+# BUILD BETA CON SCADENZA (D-26, sessione 37) — vedi src/licensing/BetaGate.h.
+#
+# DEVE restare OFF per default: con ON le build di sviluppo di tutti i giorni
+# smetterebbero di produrre wet dopo 30 giorni, che sarebbe una trappola e
+# ucciderebbe lo standalone (CLAUDE.md regola 11). Si accende SOLO per
+# confezionare il pacchetto da mandare ai tester:
+#
+#   cmake -B build-beta -DHARMONIZER_BETA=ON
+#
+# HARMONIZER_BETA_DAYS=0 e' il gancio per verificare all'ascolto che il wet
+# scenda sulla rampa anti-click senza aspettare trenta giorni.
+#
+# NOTA: la data e' fissata al momento del CONFIGURE, non della compilazione.
+# E' voluto — la scadenza appartiene al pacchetto che si spedisce, non
+# all'ultima ricompilazione incrementale fatta sopra. Per rigenerarla, si
+# riconfigura da zero.
+option(HARMONIZER_BETA "Build beta: il wet si silenzia dopo HARMONIZER_BETA_DAYS giorni" OFF)
+set(HARMONIZER_BETA_DAYS "30" CACHE STRING "Giorni di validita' di una build beta")
+set(HARMONIZER_BETA_TESTER "" CACHE STRING "Nome del tester, mostrato nell'editor: rende tracciabile una copia che gira")
+
 add_subdirectory(libs/JUCE)
 
-# PLUGIN_MANUFACTURER_CODE / PLUGIN_CODE sono placeholder: nome prodotto e azienda
-# non sono ancora stati decisi (PRD §16). Vedi CLAUDE.md — vanno confermati prima
-# della beta pubblica perché non sono piu' modificabili dopo il rilascio.
+# IDENTITA' DEL PLUGIN — due gruppi con regole opposte (D-24, sessione 37).
+#
+# CONGELATI, PER SEMPRE. Non erano piu' "placeholder da confermare prima della
+# beta pubblica": dal momento in cui la prima build finisce in mano a un tester
+# che salva un progetto, questi valori sono pubblici di fatto, e cambiarli fa
+# perdere il plugin da DENTRO i progetti salvati degli artisti.
+#   - PLUGIN_MANUFACTURER_CODE + PLUGIN_CODE -> identita' VST3 e AU
+#   - AU_MAIN_TYPE                            -> CLAUDE.md regola 7
+# Verificato in JUCE: l'UID VST3 e' derivato SOLO da questi due codici a 4
+# lettere, non dal nome — libs/JUCE/modules/juce_audio_plugin_client/VST3/
+# juce_VST3ModuleInfo.h:61 (jucePluginId), e il ramo che usa JucePlugin_Name
+# (:58) e' dietro JUCE_VST3_CAN_REPLACE_VST2, che noi teniamo a 0 piu' sotto.
+# Per l'AU, JUCEUtils.cmake:1612 -> JucePlugin_AUSubType = JucePlugin_PluginCode.
+# Sono codici OPACHI: l'utente non li vede mai e non devono somigliare al nome
+# commerciale. Congelarli ora non anticipa nessuna decisione di marchio.
+#
+# LIBERI, si cambiano quando A-02 chiude (nome/marchio/dominio). Non finiscono
+# nei progetti salvati, quindi rinominare il prodotto NON rompe niente:
+#   - PRODUCT_NAME, COMPANY_NAME, BUNDLE_ID
+# COMPANY_NAME era "TBD", che i tester leggerebbero come nome del produttore nel
+# browser dell'host: sostituito col nome legale di chi distribuisce la beta.
 juce_add_plugin(Harmonizer
-    COMPANY_NAME "TBD"
-    BUNDLE_ID "com.tbd.harmonizer"
+    COMPANY_NAME "Giacomo Cazzaro"
+    BUNDLE_ID "com.giacomocazzaro.harmonizer"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    # Sessione 37: senza questo, da macOS 10.14 il target STANDALONE non riceve
+    # segnale in ingresso — e non lo dice, resta muto. Il plugin (VST3/AU) non
+    # e' interessato: l'ingresso glielo passa l'host, che ha il suo permesso.
+    # Riguarda solo lo standalone, che CLAUDE.md regola 11 impone di tenere
+    # sempre vivo perche' e' lo strumento di iterazione sul DSP.
+    # CORRETTO PER COSTRUZIONE, NON VERIFICATO: qui non c'e' un Mac. Vedi i
+    # limiti noti in HANDOFF.md.
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Harmonizer ha bisogno dell'ingresso audio per armonizzare cio' che suoni."
     # TRUE: copia il plugin compilato nelle cartelle di default dell'host dopo
     # ogni build (su Windows: VST3 in "C:\Program Files\Common Files\VST3", AU
     # in ~/Library/Audio/Plug-Ins/Components su macOS). Su Windows questa
@@ -70,6 +117,21 @@ target_compile_definitions(Harmonizer
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
 )
+
+# La scadenza esiste SOLO se HARMONIZER_BETA e' ON: in una build normale nessuna
+# di queste macro e' definita e il codice della scadenza non viene compilato
+# affatto (vedi gli #if in PluginProcessor.cpp/.h). Non e' un flag a runtime che
+# si puo' dimenticare acceso.
+if(HARMONIZER_BETA)
+    string(TIMESTAMP HARMONIZER_BUILD_EPOCH "%s" UTC)
+    message(STATUS "Harmonizer: BUILD BETA — scade ${HARMONIZER_BETA_DAYS} giorni dopo ${HARMONIZER_BUILD_EPOCH} (epoch UTC)")
+    target_compile_definitions(Harmonizer
+        PUBLIC
+            HARMONIZER_BETA_BUILD_EPOCH=${HARMONIZER_BUILD_EPOCH}
+            HARMONIZER_BETA_DAYS=${HARMONIZER_BETA_DAYS}
+            HARMONIZER_BETA_TESTER="${HARMONIZER_BETA_TESTER}"
+    )
+endif()
 
 # Cycfi Q (pitch detection, Boost License) e Signalsmith Stretch (pitch
 # shifting interinale, MIT) sono header-only: bastano gli include path.
@@ -210,6 +272,17 @@ target_include_directories(play_mode_input_test PRIVATE src tests libs/signalsmi
 target_compile_features(play_mode_input_test PRIVATE cxx_std_20)
 target_link_libraries(play_mode_input_test PRIVATE juce::juce_audio_basics)
 
+# Verifica numerica della scadenza delle build beta (sessione 37, D-26 — vedi
+# src/licensing/BetaGate.h): header-only, nessuna dipendenza JUCE. Copre
+# l'aritmetica della scadenza, incluso il caso dell'orologio spostato indietro;
+# che il wet scenda senza click e' invece coperto da glide_test (la rampa e' la
+# stessa) e resta da confermare all'ascolto.
+add_executable(beta_expiry_test
+    tests/beta_expiry_test.cpp
+)
+target_include_directories(beta_expiry_test PRIVATE src)
+target_compile_features(beta_expiry_test PRIVATE cxx_std_20)
+
 # Strumento diagnostico OFFLINE per il click "in mezzo alla nota" (sessione
 # 17, segnalato dopo aver riascoltato il fix di sessione 16): legge un file
 # WAV vero fornito dall'utente e cerca discontinuita' anomale con la stessa
@@ -347,6 +420,65 @@ target_link_libraries(mode_switch_test PRIVATE
     juce::juce_dsp
 )
 
+# Verifica che la scadenza beta faccia tacere il WET e lasciare passare il DRY
+# (sessione 37, D-26). QUARTO livello di D-16 come mode_switch_test: il cancello
+# vive in HarmonizerAudioProcessor::processBlock, non in un modulo isolato,
+# quindi servono le sorgenti del plugin intero.
+#
+# Il punto che rende questo banco diverso da tutti gli altri: le macro della
+# beta sono forzate QUI, non prese dall'option HARMONIZER_BETA. Epoch fisso nel
+# passato + DAYS=0 = build sempre scaduta, quindi la misura e' la stessa in
+# qualunque configurazione e in qualunque giorno la si esegua. Senza questo, il
+# cablaggio del cancello resterebbe scoperto in ctest (tutti gli altri banchi
+# girano in configurazione NON beta) e un cancello scollegato spedirebbe agli
+# artisti una versione illimitata senza che nulla lo segnali.
+add_executable(beta_gate_audio_test
+    tests/beta_gate_audio_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/dsp/PitchDetector.cpp
+    src/dsp/SpectralShifter.cpp
+    src/dsp/PsolaShifter.cpp
+    src/dsp/PitchShifterFactory.cpp
+    src/dsp/OnsetDetector.cpp
+    src/harmony/HarmonyEngine.cpp
+    src/harmony/PresetLibrary.cpp
+    src/harmony/CsvIo.cpp
+    src/voices/Voice.cpp
+    src/voices/VoicePool.cpp
+    src/voices/PhraseScheduler.cpp
+    src/midi/CcRouter.cpp
+    src/midi/OverrideManager.cpp
+    src/midi/PlayModeInput.cpp
+    src/ui/PresetTableEditor.cpp
+    src/ui/PresetListEditor.cpp
+    src/ui/RootNoteGrid.cpp
+)
+target_include_directories(beta_gate_audio_test PRIVATE
+    src
+    tests
+    libs/q/q_lib/include
+    libs/q/infra/include
+    libs/signalsmith-stretch
+)
+target_compile_features(beta_gate_audio_test PRIVATE cxx_std_20)
+target_compile_definitions(beta_gate_audio_test PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+    JUCE_STANDALONE_APPLICATION=1
+    JucePlugin_Name="Harmonizer"
+    # 1700000000 = un istante fisso del 2023: qualunque orologio ragionevole e'
+    # oltre, e con DAYS=0 la scadenza coincide con quell'istante.
+    HARMONIZER_BETA_BUILD_EPOCH=1700000000
+    HARMONIZER_BETA_DAYS=0
+)
+target_link_libraries(beta_gate_audio_test PRIVATE
+    juce::juce_audio_utils
+    juce::juce_dsp
+)
+
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
 add_test(NAME override_manager COMMAND override_manager_test)
@@ -359,3 +491,5 @@ add_test(NAME phrase_scheduler COMMAND phrase_scheduler_test)
 add_test(NAME play_mode_input COMMAND play_mode_input_test)
 add_test(NAME ui_scale COMMAND ui_scale_test)
 add_test(NAME mode_switch COMMAND mode_switch_test)
+add_test(NAME beta_expiry COMMAND beta_expiry_test)
+add_test(NAME beta_gate_audio COMMAND beta_gate_audio_test)
