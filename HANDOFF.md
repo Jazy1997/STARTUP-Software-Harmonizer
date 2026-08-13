@@ -14,47 +14,44 @@ Plugin armonizzatore per strumenti monofonici (VST3 / AU / Standalone). Calcola
 `d = (notaMIDI − fondamentale) mod 12` e legge gli offset delle 8 voci da una tabella
 12×8 editabile dall'utente.
 
-- **M5 (UI): il contenuto elencato in PRD §12 è completo** (FR-59 chiuso in s.33). Il
-  **criterio d'uscita** (*"un tester esterno usa il plugin senza documentazione"*) sta
-  per essere esercitato per la prima volta: vedi § Prossimo passo.
-- Il plugin **gira in VST3 su Ableton e l'utente lo giudica soddisfacente** (s.29), riferito
-  alla catena **Harmonizer**; il passaggio Harmonizer↔Play è confermato all'ascolto in s.35.
-- Motore: PSOLA proprietario dietro `PitchShifter` astratto. **Chiuso** da D-19, con la forma
-  di ogni modifica futura vincolata da **D-21**.
-- **M6 (licensing) non esiste.** `src/licensing/` contiene ora `BetaGate.h`, che **non è** il
-  `LicenseManager`: è un cancello temporaneo da cancellare quando A-01 arriverà (D-26).
-- **Nessun sintomo aperto in `BUGS.md`. Nessun ascolto in coda** — ma sei voci in attesa di
-  conferma (sotto) sono ora in mano ai tester.
+- **M5 (UI): il contenuto di PRD §12 è completo** (FR-59 chiuso in s.33); il **criterio d'uscita**
+  (*"un tester esterno usa il plugin senza documentazione"*) sta per essere esercitato per la
+  prima volta — vedi § Prossimo passo.
+- **Gira in VST3 su Ableton ed è giudicato soddisfacente** (s.29), riferito alla catena
+  **Harmonizer**; il passaggio Harmonizer↔Play è confermato all'ascolto in s.35.
+- Motore: PSOLA proprietario dietro `PitchShifter` astratto. **Chiuso** da D-19, forma di ogni
+  modifica futura vincolata da **D-21**.
+- **M6 (licensing) non esiste.** `src/licensing/` contiene `BetaGate.h`, che **non è** il
+  `LicenseManager`: cancello temporaneo, da cancellare quando arriverà A-01 (D-26).
+- **Nessun sintomo aperto in `BUGS.md`** — ma le sei voci in attesa di conferma (sotto) sono ora
+  in mano ai tester.
 
 **Sessione 37 — il pacchetto beta è pronto, A-04 rimandata con criterio** (per esteso in
-`LOG/sessione-37.md`). L'obiettivo reale era **far sentire il plugin a degli artisti**, non
-rilasciare: la beta si può fare **a costo zero** (D-25). Il rischio irreversibile non era la
-firma ma l'identità del plugin — `juce_VST3ModuleInfo.h:61` dimostra che l'UID VST3 dipende
-**solo dai codici a 4 lettere**, non dal nome: `Hzso`/`Hmz1`/`aumf` sono **congelati adesso**, il
-nome resta libero, **A-02 non blocca più la beta** (D-24).
-
-**Le build beta scadono a 30 giorni** (D-26): si spegne il **wet**, il dry continua a passare
-(FR-68 anticipato). L'innesto è una riga accanto al Bypass e scende sulla rampa anti-click di
-8 ms già esistente. **13/13 suite verdi in 2.2 s** (erano 11): `beta_expiry_test` copre *quando*
-scade, `beta_gate_audio_test` *cosa fa all'audio* — senza il secondo, un cancello scollegato
-spedirebbe una versione illimitata in silenzio.
+`LOG/sessione-37.md`). L'obiettivo era **far sentire il plugin a degli artisti**, non rilasciare:
+si fa **a costo zero** (D-25). Il rischio irreversibile non era la firma ma l'identità del plugin
+— `juce_VST3ModuleInfo.h:61`: l'UID VST3 dipende **solo dai codici a 4 lettere**, quindi
+`Hzso`/`Hmz1`/`aumf` sono **congelati**, il nome resta libero, **A-02 non blocca più la beta** (D-24).
+**Le build beta scadono a 30 giorni** (D-26): si spegne il **wet**, il dry passa (FR-68
+anticipato); una riga accanto al Bypass, sulla rampa anti-click già esistente. **13/13 suite verdi
+in 2.2 s** — `beta_expiry_test` copre *quando* scade, `beta_gate_audio_test` *cosa fa all'audio*.
 
 ---
 
 ## Prossimo passo
 
-**Uno solo: mandare la beta agli artisti.** Procedura in `BETA-consegna.md`.
+**Uno solo: mandare la beta agli artisti.** Procedura in `BETA-consegna.md`. Il repository **è
+privato** (lucchetto verificato il 13/08): quel timore è chiuso.
 
-**Prima, una cosa da verificare e che non riguarda la beta:** il remote è
-`github.com/Jazy1997/STARTUP-Software-Harmonizer` e **non è stato possibile controllare se è
-privato** (`gh` non installato). *Settings → Danger Zone*: deve offrire "Make public". Se invece
-offre "Make private", il sorgente è pubblico adesso e viene prima di tutto il resto.
+**Prima di spedire**, sulla pagina del run: devono comparire gli artefatti
+`Harmonizer-Windows-beta` / `Harmonizer-macOS-beta`, e il passo `Firma ad-hoc dei bundle` deve
+stampare `adhoc`. **I passi di pacchettizzazione non hanno mai completato con successo** (D-25):
+i percorsi macOS sono scritti dalla struttura di JUCE, non osservati.
 
-Poi: GitHub → Actions → *Build & validate* → **Run workflow** con `beta=true`, `beta_days=30`,
-`tester="Nome Cognome"`; una build per persona, e un link privato a testa.
+⚠️ **Un run costa ~3 ore di macOS** (A-09), e ogni push ne fa partire uno — `[skip ci]` nel
+messaggio per i commit che non toccano il codice. **Una sola build per tutti i tester**, non una
+per persona: il nome nel binario non vale tre ore.
 
-Da qui in avanti **il collo di bottiglia sono le orecchie degli artisti, non il codice.** Le sei
-voci della tabella qui sotto si chiudono con il loro feedback, non con altro lavoro.
+Da qui in avanti **il collo di bottiglia sono le orecchie degli artisti, non il codice.**
 
 ---
 
@@ -76,14 +73,13 @@ voci della tabella qui sotto si chiudono con il loro feedback, non con altro lav
 
 Da non scambiare per requisiti soddisfatti.
 
-- **Di macOS non è verificabile nulla da qui, e ora conta più di prima.** La CI valida
-  `Harmonizer.component` con `pluginval -strictness 10` a ogni push e passa (D-23), ma restano in
-  mano al **primo tester**: installazione, quarantena, **l'AU in Logic** (mai caricato in un host
-  vero — due tester lo useranno, scelta consapevole), il permesso microfono dello standalone
-  (aggiunto in s.37, corretto per costruzione e non provato) e la resa Retina.
-- **La fetta x86_64 non è mai stata eseguita da nessuno**: la CI compila universal
-  (`arm64;x86_64`) ma gira su runner arm64. Un tester su Mac Intel sarebbe la prima esecuzione in
-  assoluto di quel codice; le guide gli chiedono esplicitamente di dirlo.
+- **Di macOS non è verificabile nulla da qui, e ora conta più di prima.** Restano in mano al
+  **primo tester**: installazione, quarantena, **l'AU in Logic** (mai caricato in un host vero —
+  due tester lo useranno, scelta consapevole), il permesso microfono dello standalone (aggiunto in
+  s.37, corretto per costruzione e non provato) e la resa Retina.
+- **La fetta x86_64 non è mai stata eseguita da nessuno**: si compila universal ma la CI gira su
+  runner arm64. Un tester su Mac Intel sarebbe la prima esecuzione di quel codice — le guide
+  glielo chiedono. È anche metà della causa di A-09.
 - **La scadenza beta è un deterrente, non un DRM:** chi sposta indietro l'orologio riottiene il
   wet, e "ora prima della data di build" è **deliberatamente** non scaduto (D-26).
 - **I rami warm di `PhraseScheduler` scaldano col rapporto vecchio** — la causa 2 di B-15 vale
@@ -121,6 +117,9 @@ Nessuna di queste è tecnica. **Il collo di bottiglia è il feedback degli artis
   `.pkg`/`.exe` (FR-71, M8) · qualunque data di rilascio pubblico meno 8 settimane. Vincolo da
   sapere ora: **Apple non accetta ditte individuali** per gli account Organization; un account
   Individual si converte conservando Team ID e certificati.
+- **`[DECISION]` Costo della CI (A-09): job macOS ~3 h contro 15 min di Windows.** Due correzioni
+  a copertura invariata sono pronte e non applicate; la terza spetta all'utente — **job macOS solo
+  a richiesta**, che taglia quasi tutto ma riduce la copertura appena conquistata con D-23.
 - **La guida utente non esiste** — `BETA-Windows.md`/`BETA-macOS.md` sono fogli d'installazione,
   non la documentazione di prodotto. Deve ospitare il modello CC posizionale (D-03) e la scelta
   dello strumento (D-18).
@@ -143,9 +142,13 @@ Nessuna di queste è tecnica. **Il collo di bottiglia è il feedback degli artis
 | `LOG/archivio-s01-s28.md` · `LOG/sessione-NN.md` | Il racconto per esteso |
 
 **Materiale di test** (`SAMPLE TEST/`, non versionato): `Test 1 - Basic Silk Horns.wav`
-(C4-D4-E4-C4, ~2 s per nota) e `Test 2 - E-Piano.wav` sono i **dry sorgente**; `DBG Timbro/`
-contiene gli export dell'utente e le reference Autoshift (`REF_<nome>`). Convenzione dei nomi
-`exp#<N>_<Preset>_<Voce>_<Versione>.wav` e impostazioni di export: `LOG/sessione-31.md`.
+(C4-D4-E4-C4) e `Test 2 - E-Piano.wav` sono i **dry sorgente**; `DBG Timbro/` ha gli export e le
+reference Autoshift. Convenzione dei nomi e impostazioni di export: `LOG/sessione-31.md`.
+
+**Prima di pushare** · `git log --oneline origin/main..HEAD` — in questo repo capita che commit
+importanti restino solo in locale: `ctest` in CI (D-23, s.36) è arrivato su GitHub solo il 13/08,
+quindi i run verdi fino a #25 **non avevano mai eseguito le suite**. E ogni push fa partire un run
+da ~3 h: `[skip ci]` nel messaggio quando il commit non tocca il codice (A-09).
 
 **Comandi** · `cmake --build build --config Release` (il fallimento della copia in
 `Program Files` è atteso, D-12: filtrare **solo** `error C####`/`error LNK` — aggiungere
@@ -158,6 +161,5 @@ quel fallimento salta · `ctest --test-dir build -C Release --output-on-failure`
 · **build beta locale**: `cmake -B build-beta -DHARMONIZER_BETA=ON -DHARMONIZER_BETA_DAYS=0`
   (`DAYS=0` = scaduta subito, per sentire la dissolvenza del wet senza aspettare 30 giorni)
 
-**`pluginval` non è nel repo** e non è più su disco: si scarica come fa la CI —
-`curl -sL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip`
-poi `unzip`, e `pluginval.exe --strictness-level 10 --validate <path.vst3>`.
+**`pluginval` non è nel repo** e non è più su disco: si scarica come fa la CI (v1.0.4, il comando
+esatto è in `.github/workflows/build.yml`), poi `pluginval.exe --strictness-level 10 --validate`.

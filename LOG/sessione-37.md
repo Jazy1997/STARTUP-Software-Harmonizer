@@ -277,7 +277,74 @@ nessuno. Il filtro giusto era già scritto: bastava usarlo.
 
 ---
 
-## 10. Cosa resta aperto dopo questa sessione
+## 10. Dopo il push: due scoperte, entrambe costose
+
+### 10.1 Sei commit, non quattro — `ctest` in CI non era mai girato
+
+Il push ha portato `99a50ae..b18d0ce`, cioè **sei** commit: i quattro di oggi più
+`78c8e13 ci: ctest al posto dei tre g++ a mano — A-06` e `22d04ae docs: sessione 36`, che erano
+rimasti **solo in locale** dalla sessione precedente.
+
+Conseguenza da non sottovalutare: **il run #26 è il primo in assoluto in cui `ctest` è girato in
+CI.** Tutti i run verdi precedenti (#22-#25) compilavano e lanciavano solo `pluginval`. D-23 era
+scritto, committato e mai arrivato su GitHub. La frase "25 run verdi" dell'HANDOFF era vera del
+*build*, non delle suite — e l'ho ripetuta prima di accorgermene.
+
+**Lezione operativa:** `git log --oneline origin/main..HEAD` **prima** di affermare cosa la CI
+verifica. Il sintomo era in piena vista sulla pagina Actions: l'ultimo run mostrava un commit più
+vecchio di `HEAD`.
+
+### 10.2 Il job macOS costa ~3 ore (→ A-09)
+
+Misurato sul run #26: **macOS ~3 h, Windows 15 min**, stesso commit. Non è la CI in generale, è
+specificamente macOS.
+
+| Causa | Peso |
+|---|---|
+| `CMAKE_OSX_ARCHITECTURES "arm64;x86_64"` — **ogni sorgente compila due volte**, banchi compresi | grosso |
+| `mode_switch_test` e `beta_gate_audio_test` ricompilano l'**intero** elenco dei sorgenti del plugin, ciascuno × 2 architetture | grosso |
+| Nessuna cache di build; coda dei runner macOS su repo privato | variabile |
+
+**Una parte del costo l'ho introdotta io** in questa sessione: `beta_gate_audio_test` è il secondo
+target che ricompila tutto il plugin. In locale non si vedeva, perché è incrementale.
+
+Il repo è privato, quindi i minuti escono da un monte ore mensile con i minuti macOS
+moltiplicati. Il limite di spesa predefinito è 0, quindi **nessuna fattura a sorpresa**: Actions
+si ferma e basta.
+
+**Due correzioni a copertura invariata**, pronte e non applicate su richiesta dell'utente (il
+pacchetto beta era in volo):
+
+1. **Banchi compilati per una sola architettura.** La CI gira su runner arm64, quindi la fetta
+   x86_64 dei *test* viene compilata e **non eseguita mai da nessuno**: toglierla non riduce la
+   copertura di un millimetro. È il grosso del tempo.
+2. **`paths-ignore`** per i push di sola documentazione, **escludendo `BETA-Windows.md` e
+   `BETA-macOS.md`**, che la CI copia nel pacchetto e devono poterlo rigenerare.
+
+La terza — **job macOS solo a richiesta** — taglierebbe quasi tutto ma **è una decisione
+dell'utente**: ridurrebbe la copertura appena conquistata con D-23, e A-06 nasceva proprio da
+buchi di copertura.
+
+**Strada scartata, da non riproporre:** far condividere ai due banchi pesanti una libreria statica
+dei sorgenti del plugin. Hanno definizioni di compilazione diverse (`beta_gate_audio_test` forza
+le macro `HARMONIZER_BETA_*`), quindi quei sorgenti compilano in modo diverso e non sono
+condivisibili.
+
+**Trappola:** ogni push fa partire un run completo. `[skip ci]` nel messaggio di commit lo evita,
+ed è quello che serve per i commit di sola documentazione — che in questo progetto sono la
+maggioranza e finora hanno compilato tutto per niente.
+
+### 10.3 Ancora da verificare sul pacchetto beta
+
+I passi di pacchettizzazione di D-25 **non hanno mai completato con successo**: i percorsi degli
+artefatti macOS sono stati scritti dalla struttura di JUCE, non osservati. Alla fine del run:
+
+- devono comparire gli artefatti `Harmonizer-Windows-beta` e `Harmonizer-macOS-beta`;
+- il passo `Firma ad-hoc dei bundle` deve stampare due blocchi `codesign -dv` contenenti `adhoc`.
+
+---
+
+## 11. Cosa resta aperto dopo questa sessione
 
 - **Il repository è privato?** Da confermare (§7).
 - **Nessuna verifica su macOS è possibile da qui.** Installazione, quarantena, Logic, permesso
