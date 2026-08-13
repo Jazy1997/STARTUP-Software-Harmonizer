@@ -3,6 +3,26 @@ name: Build & validate
 on:
   push:
   pull_request:
+  # Sessione 37 (D-25) — il pulsante per confezionare un pacchetto da mandare a
+  # un tester. Su push normale questi input sono vuoti e la build e' identica a
+  # prima, riga per riga: la scadenza esiste SOLO quando beta=true.
+  #
+  # Actions -> Build & validate -> Run workflow, e si compila:
+  #   beta=true, beta_days=30, tester="Nome Cognome"
+  # Il nome del tester finisce nell'editor e nel nome dello zip: se una copia
+  # gira, si sa da chi e' passata.
+  workflow_dispatch:
+    inputs:
+      beta:
+        description: "Build beta con scadenza (altrimenti build normale, senza scadenza)"
+        type: boolean
+        default: false
+      beta_days:
+        description: "Giorni di validita'"
+        default: "30"
+      tester:
+        description: "Nome del tester (mostrato nell'editor, tracciabilita')"
+        default: ""
 
 env:
   PLUGINVAL_VERSION: "1.0.4"
@@ -79,8 +99,25 @@ jobs:
         with:
           submodules: recursive
 
+      # Su push/PR i tre input non esistono, EXTRA resta vuoto e il comando e'
+      # esattamente `cmake -B build -DCMAKE_BUILD_TYPE=Release` come prima.
+      # Gli input passano da env e non interpolati nello script: un nome di
+      # tester con spazi o virgolette non deve poter diventare codice shell.
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+        env:
+          BETA: ${{ github.event.inputs.beta }}
+          BETA_DAYS: ${{ github.event.inputs.beta_days }}
+          BETA_TESTER: ${{ github.event.inputs.tester }}
+        run: |
+          EXTRA=()
+          if [ "$BETA" = "true" ]; then
+            EXTRA=(-DHARMONIZER_BETA=ON
+                   "-DHARMONIZER_BETA_DAYS=${BETA_DAYS}"
+                   "-DHARMONIZER_BETA_TESTER=${BETA_TESTER}")
+            echo "::notice::BUILD BETA — scade fra ${BETA_DAYS} giorni, tester: ${BETA_TESTER:-(nessuno)}"
+          fi
+          cmake -B build -DCMAKE_BUILD_TYPE=Release "${EXTRA[@]}"
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -132,3 +169,87 @@ jobs:
           AU_PATH=$(find build -iname "Harmonizer.component" -print -quit)
           echo "Validating: $AU_PATH"
           ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate "$AU_PATH"
+
+      # =====================================================================
+      # PACCHETTO PER I TESTER (sessione 37, D-25)
+      #
+      # Prima di questi passi la CI compilava su due piattaforme e BUTTAVA VIA
+      # tutto: nessun upload-artifact. E' il motivo per cui non c'era modo di
+      # ottenere una build macOS senza possedere un Mac — mentre il runner
+      # macOS produce gia' un universal binary (CMakeLists.txt, arm64;x86_64).
+      #
+      # Nota utile anche per Windows: questi artefatti nascono da un albero
+      # pulito, quindi non contengono il residuo `Harmonizer (1).vst3` che vive
+      # nella build locale dell'utente (s.31). Conviene spedire QUESTI, non la
+      # cartella build di casa.
+      # =====================================================================
+      - name: Prepara il pacchetto (bundle + guida d'installazione)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p pkg
+          # -type d: su Windows "Harmonizer.vst3" e' sia la cartella del bundle
+          # sia la DLL che sta dentro (Contents/x86_64-win/) — senza questo si
+          # rischia di impacchettare la DLL nuda, che nessun host carica.
+          VST3_PATH=$(find build -iname "Harmonizer.vst3" -type d -print -quit)
+          echo "VST3: $VST3_PATH"
+
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            AU_PATH=$(find build -iname "Harmonizer.component" -type d -print -quit)
+            echo "AU:   $AU_PATH"
+            # ditto, non cp: e' lo strumento giusto per i bundle su macOS
+            # (preserva link e metadati).
+            ditto "$VST3_PATH" "pkg/Harmonizer.vst3"
+            ditto "$AU_PATH"   "pkg/Harmonizer.component"
+            cp BETA-macOS.md pkg/LEGGIMI.md
+          else
+            cp -R "$VST3_PATH" "pkg/Harmonizer.vst3"
+            cp BETA-Windows.md pkg/LEGGIMI.md
+          fi
+
+          # Lo standalone NON entra nel pacchetto, di proposito: e' un'altra
+          # copia dello stesso codice da proteggere e su macOS sembrerebbe
+          # rotto (il permesso microfono non e' mai stato verificato su un Mac
+          # vero — vedi i limiti noti in HANDOFF.md).
+          ls -la pkg/
+
+      # Firma ad-hoc: gratuita, nessun account Apple, nessun segreto. Su Apple
+      # Silicon il codice deve avere ALMENO una firma per essere eseguito, e
+      # questa lo soddisfa. NON e' notarizzazione (A-04, rimandato per
+      # decisione): il tester dovra' comunque togliere la quarantena a mano, ed
+      # e' scritto nella guida macOS.
+      - name: Firma ad-hoc dei bundle (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          for b in pkg/Harmonizer.vst3 pkg/Harmonizer.component; do
+            codesign --force --deep --sign - "$b"
+            codesign -dv "$b" 2>&1 | head -5
+          done
+
+      - name: Nome del pacchetto
+        id: pkgname
+        shell: bash
+        env:
+          BETA: ${{ github.event.inputs.beta }}
+          BETA_TESTER: ${{ github.event.inputs.tester }}
+        run: |
+          SUFFIX=""
+          if [ "$BETA" = "true" ]; then
+            SUFFIX="-beta"
+            # I nomi degli artefatti non ammettono spazi e caratteri speciali.
+            SAFE=$(echo "$BETA_TESTER" | tr -cs '[:alnum:]' '-' | sed 's/^-//;s/-$//')
+            [ -n "$SAFE" ] && SUFFIX="${SUFFIX}-${SAFE}"
+          fi
+          echo "name=Harmonizer-${{ runner.os }}${SUFFIX}" >> "$GITHUB_OUTPUT"
+
+      - name: Carica il pacchetto
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkgname.outputs.name }}
+          path: pkg
+          # Tanto quanto dura una beta: uno zip scaduto non deve restare in
+          # giro a farsi scaricare da chi non sa che non vale piu'.
+          retention-days: 30
+          if-no-files-found: error
