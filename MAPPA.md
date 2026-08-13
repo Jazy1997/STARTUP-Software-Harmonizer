@@ -37,7 +37,7 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 
 ---
 
-## `src/` — 46 file
+## `src/` — 47 file
 
 ### Radice
 | File | Ruolo |
@@ -95,9 +95,18 @@ a 8 voci dalle note MIDI ricevute. Il dry resta sempre udibile.
 | `InstrumentRanges.h` | **(s.32)** I 10 strumenti proposti e la nota più grave di ciascuno, **dal più acuto al più grave** — l'ordine è l'informazione. Solo dati, nessuna logica |
 | `UiScale.h` | **(s.33)** FR-59: dimensione logica 900×660, estremi 70–200%, conversioni percentuale ↔ pixel. JUCE-free, coperto da `ui_scale_test` |
 
+### `src/licensing/` — 1 file
+| File | Ruolo |
+|---|---|
+| `BetaGate.h` | **(s.37, D-26)** Aritmetica pura della scadenza delle build beta: `isExpired`/`expiryEpoch`/`daysRemaining`, `constexpr`, senza JUCE e **senza leggere l'ora** (arriva dal chiamante — è ciò che tiene `std::time()` fuori dall'audio thread). Coperto da `beta_expiry` e `beta_gate_audio` |
+
+> ⚠️ **`BetaGate.h` non è il `LicenseManager` di M6** (FR-63..70) e non va fatto evolvere per
+> diventarlo: **M6 non esiste**. È un cancello temporaneo, da cancellare quando A-01 arriverà,
+> insieme all'option `HARMONIZER_BETA` e ai due punti d'innesto in `PluginProcessor.cpp`.
+
 ### Cartelle vuote
-`src/state/` · `src/licensing/` · `resources/factory_presets/` (i preset di fabbrica sono
-generati in codice, non caricati da file)
+`src/state/` · `resources/factory_presets/` (i preset di fabbrica sono generati in codice,
+non caricati da file)
 
 ---
 
@@ -129,11 +138,15 @@ Tutti con version hint `1`. **Un ID pubblicato non cambia mai** (`CLAUDE.md` reg
 
 ---
 
-## `tests/` — 15 file
+## `tests/` — 17 file
 
-**In `ctest` (10)** — nessun Catch2 (D-11). Sette sono JUCE-free e compilabili con un `g++`
-nudo; `phrase_scheduler` (`juce_core`) e `play_mode_input` (`juce_audio_basics`) girano
-**solo** in `ctest` (D-16). `ui_scale` è la nona, elencata con le altre header-only
+**In `ctest` (13)** — nessun Catch2 (D-11). **Nove** sono JUCE-free e compilabili con un `g++`
+nudo (`psola`, `override_manager`, `pitch_latch`, `glide`, `cell_input_parser`, `ui_scale`,
+`empty_cell_hold`, `voice`, `beta_expiry`); le altre **quattro** linkano JUCE e girano **solo**
+in `ctest` (D-16): `phrase_scheduler` (`juce_core`), `play_mode_input` (`juce_audio_basics`),
+`mode_switch` e `beta_gate_audio` (`juce_audio_utils`, entrambe istanziano il processore intero).
+Tutte e 13 girano anche in CI su Windows e macOS (D-23), e una guardia impedisce che un banco
+nuovo resti fuori dal gate in silenzio
 
 | Nome | Cosa verifica |
 |---|---|
@@ -146,6 +159,9 @@ nudo; `phrase_scheduler` (`juce_core`) e `play_mode_input` (`juce_audio_basics`)
 | `empty_cell_hold` | 12 verifiche |
 | `phrase_scheduler` | **Linka `juce_core`** (D-16). P-1..P-4 (s.30, FR-19/B-10): il conteggio voci scende col selettore, l'ampiezza scende al livello giusto, la risalita non regredisce, la voce si spegne sfumando e non tagliata. P-1/P-2 verificati falliti sul codice pre-fix. **P-5/P-6** (B-12): P-5 distingue per costruzione se un click in aggiunta è preesistente o introdotto da B-10; **P-6 isola la sola voce aggiunta per differenza fra due rig** e ne misura il tempo di salita — è la metrica che ha trovato B-12 dove `maxJump` sul mix non vedeva nulla |
 | `play_mode_input` | **Linka `juce_audio_basics`** (s.34, B-15). Pilota il vero `PlayModeInput` con veri `MidiBuffer`: l'unico livello a cui esistono note-on e allocazione degli slot. PM-1 ritardo, PM-2 salita, **PM-3 salto d'ampiezza all'attacco** (il cancello), PM-4 intonazione nella dissolvenza, PM-5 seconda nota, PM-6 ribattuto, **PM-7 controllo a parità di altezza** — è PM-7 a isolare il cambio di rapporto come causa. **PM-2 scartata come cancello**: misura la profondità dello shift, non il difetto |
+| `mode_switch` | **(s.35, B-16/B-17)** Istanzia il **processore intero** e muove il vero parametro `playModeEnabled`: il passaggio di modalità non vive in nessun modulo isolato. Tabella MS-1..MS-8 |
+| `beta_expiry` | **(s.37, D-26)** 20 verifiche sull'aritmetica di `BetaGate`: confini a ±1 s, `days=0`, conto alla rovescia con arrotondamento per eccesso, **orologio spostato indietro** (non scaduto, per scelta). Le proprietà portanti sono anche `static_assert`: una regressione non arriva a produrre un eseguibile |
+| `beta_gate_audio` | **(s.37, D-26)** Il **cablaggio**, non l'aritmetica: processore intero con le macro forzate a "sempre scaduta" nel `CMakeLists.txt` (epoch fisso + `DAYS=0`), quindi la misura non dipende dalla configurazione né dal giorno. Verifica che il wet sia silenzio digitale (4.3e-9 — il residuo è il dry a `cos(π/2)` in `float`) **e** che il dry passi a livello pieno (FR-68). Senza questo banco un cancello scollegato spedirebbe una versione illimitata in silenzio |
 
 **Sonde diagnostiche, NON in ctest** — dipendono da `SAMPLE TEST/`, non versionato (5)
 
@@ -167,12 +183,22 @@ findClicks, HNR) · `TestSignals.h` (generatori, measureF0, formantPeak, goertze
 - **Formati**: VST3, AU (`aumf`), Standalone. macOS 11+ `arm64;x86_64`, Windows 10+ x64.
 - **Submodule**: `libs/JUCE` (8.0.15), `libs/q` (Cycfi Q, MIT), `libs/signalsmith-stretch` (MIT).
   Q e Signalsmith sono header-only.
-- **CI** (`.github/workflows/build.yml`): job `dsp-tests` su ubuntu come gate rapido, poi
-  build su windows-latest e macos-latest con `pluginval --strictness-level 10` su VST3
-  (entrambe) e AU (solo macOS).
-  ⚠️ Il gate ricompila a mano **3 suite su 8** e non invoca mai `ctest` — vedi A-06.
-  `phrase_scheduler` non è nemmeno compilabile con quei `g++` (linka `juce_core`, D-16).
-- **Locale**: `tools/pluginval.exe`. Il fallimento di copia post-build è atteso (D-12).
+- **CI** (`.github/workflows/build.yml`): job `dsp-tests` su ubuntu come **corsia veloce**
+  (3 suite a `g++` nudo — un sottoinsieme dichiarato, **da non estendere**), più una **guardia**
+  che confronta i target `*_test` con quelli registrati in `add_test` e rompe la build se un
+  banco resta fuori. Poi `build` su windows-latest e macos-latest: `ctest` (**13/13**, D-23 —
+  chiude A-06) e `pluginval --strictness-level 10` su VST3 (entrambe) e AU (solo macOS).
+- **Artefatti** (s.37, D-25): il job `build` **carica** il `.vst3` (e il `.component` su macOS)
+  con la guida d'installazione dentro come `LEGGIMI.md`, `retention-days: 30`. Su macOS i bundle
+  ricevono una **firma ad-hoc** (`codesign -s -`: gratuita, nessun account, e su Apple Silicon
+  serve *una* firma perché il codice giri). Prima di s.37 la CI compilava su due piattaforme e
+  buttava via tutto — è la ragione per cui non c'era modo di ottenere una build macOS senza un Mac.
+- **`workflow_dispatch`** con input `beta` / `beta_days` / `tester`: è il pulsante che confeziona
+  il pacchetto di un tester (`option(HARMONIZER_BETA)`, **OFF per default**). Su push normale gli
+  input non esistono e il configure è identico a prima.
+- **Locale**: `tools/pluginval.exe`. Il fallimento di copia post-build è atteso (D-12): filtrare
+  **solo** `error C####`/`error LNK`, perché `error MSB3073` è l'eco di quel passo e fa sembrare
+  rotta una build sana.
 
 ---
 

@@ -639,14 +639,134 @@ versionati: dovrebbe nascere `_probe`, non `_test`, oppure la guardia va estesa 
 di eccezioni esplicita.
 
 ---
+
+## D-24 — L'identità del plugin dipende solo dai codici a 4 lettere: `Hzso`/`Hmz1`/`aumf` sono congelati
+
+**Contesto** (s.37) — `CMakeLists.txt` marcava `PLUGIN_MANUFACTURER_CODE Hzso` e
+`PLUGIN_CODE Hmz1` come *"placeholder … da confermare prima della beta pubblica"*, in attesa di
+A-02 (nome, marchio, dominio). Con la decisione di dare il plugin ad artisti beta quella formula
+diventa pericolosa: **dal primo progetto salvato da un tester quei codici sono pubblici di
+fatto**, e cambiarli fa perdere il plugin da *dentro* i progetti degli artisti — la stessa classe
+di rottura del tipo AU (regola 7, D-01).
+
+**Il fatto verificato** — l'UID VST3 è derivato **solo** dai due codici a 4 lettere, non dal
+nome: `libs/JUCE/modules/juce_audio_plugin_client/VST3/juce_VST3ModuleInfo.h:61` →
+`VST3Interface::jucePluginId (JucePlugin_ManufacturerCode, JucePlugin_PluginCode, …)`. Il ramo
+che usa `JucePlugin_Name` (`:58`) è dietro `JUCE_VST3_CAN_REPLACE_VST2`, che teniamo a `0`. Per
+l'AU, `JUCEUtils.cmake:1612` → `JucePlugin_AUSubType = JucePlugin_PluginCode`.
+
+**Decisione** — Due gruppi con regole opposte, scritte nel commento in `CMakeLists.txt`:
+
+| | Nei progetti salvati | Cambiabile |
+|---|---|---|
+| `PLUGIN_MANUFACTURER_CODE`, `PLUGIN_CODE`, `AU_MAIN_TYPE` | **sì** | **mai** |
+| `PRODUCT_NAME`, `COMPANY_NAME`, `BUNDLE_ID` | no | sì |
+| Certificato di firma / Developer ID / Team ID | no | sì |
+
+**Conseguenza: A-02 non blocca più la beta.** I codici sono opachi — l'utente non li vede mai e
+non devono somigliare al nome commerciale — quindi congelarli non anticipa nessuna decisione di
+marchio. `COMPANY_NAME` è passato da `"TBD"` (che i tester leggerebbero come nome del produttore
+nel browser dell'host) a `"Giacomo Cazzaro"`, e `BUNDLE_ID` da `com.tbd.harmonizer` a
+`com.giacomocazzaro.harmonizer`: entrambi si cambiano di nuovo a costo zero.
+
+**Stato** — Attiva. I tre valori congelati non si toccano più. Da rivedere solo se si volesse
+attivare `JUCE_VST3_CAN_REPLACE_VST2`, che tirerebbe `JucePlugin_Name` dentro l'identità VST3 e
+congelerebbe anche il nome — motivo in più per lasciarlo a `0`.
+
+---
+
+## D-25 — Beta a costo zero: VST3+AU, firma ad-hoc, A-04 rimandato con un grilletto
+
+**Contesto** (s.37) — `HANDOFF.md` indicava A-04 (firma e notarizzazione) come unico prossimo
+passo. Studiandolo, la premessa si è rivelata troppo stretta: l'intento reale è **raccogliere
+feedback all'ascolto da artisti beta**, non rilasciare. L'utente ha obiettato che €99/anno
+ricorrenti sono presto per un prodotto senza nome né data di rilascio. Obiezione accolta.
+
+**Decisione** — Beta gratuita:
+
+- **VST3 + AU**, nessuno standalone (è un'altra copia dello stesso codice da proteggere, e su
+  macOS il permesso microfono non è mai stato verificato: sembrerebbe rotto).
+- **macOS: firma ad-hoc** (`codesign -s -`, nessun account). Su Apple Silicon serve *una* firma
+  perché il codice giri, e ad-hoc basta. Resta la quarantena: una riga di Terminale a carico del
+  tester, scritta in `BETA-macOS.md`.
+- **Windows: nessun certificato.** SmartScreen gate gli `.exe` scaricati, non una cartella
+  `.vst3` copiata a mano. In più, dal **15 febbraio 2026 i certificati di code signing durano al
+  massimo 1 anno**: comprarne uno adesso ne brucerebbe la vita su una beta.
+- La CI **carica gli artefatti** (prima li buttava via: nessun `upload-artifact`), così le build
+  macOS si producono **senza possedere un Mac** — il runner macOS compila già universal.
+
+**L'AU entra pur non essendo mai stato caricato in un host vero** (`HANDOFF.md`): due tester
+usano Logic, e l'utente ha deciso esplicitamente che servono a questo. Registrato come scelta
+consapevole, non come svista.
+
+**Il grilletto che riapre A-04** — FR-72 chiede di avviare le pratiche in M0 proprio perché il
+lead time morde tardi, e rimandare senza una condizione di risveglio ripeterebbe il ritardo di
+cinque milestone. A-04 torna urgente al **primo** di questi:
+
+1. un tester si blocca sulla quarantena e non riesce a caricare il plugin;
+2. serve un **installer** (`.pkg`/`.exe`) invece di uno `.zip` — cioè FR-71, M8;
+3. **qualunque data di rilascio pubblico meno 8 settimane**.
+
+**Da sapere fin d'ora** — Apple **non accetta ditte individuali né DBA** per gli account
+Organization: quando si costituirà dovrà essere una società di capitali. Un account Individual
+aperto ora si converte più tardi **conservando Team ID e certificati**, quindi iscriversi come
+persona fisica non sarà lavoro buttato.
+
+**Stato** — Attiva. Scade al primo dei tre grilletti.
+
+---
+
+## D-26 — Le build beta scadono: si spegne il wet, non il plugin
+
+**Contesto** (s.37) — Senza licensing (`src/licensing/` era vuota, M6 non esiste) una copia data
+a un artista è una versione completa e illimitata per sempre. Il rischio reale non è che rubino
+il codice — un `.vst3` è codice macchina — è la **redistribuzione**.
+
+**Decisione** — `src/licensing/BetaGate.h`: aritmetica pura, l'ora arriva dal chiamante.
+`HARMONIZER_BETA` in `CMakeLists.txt`, **OFF per default** (con ON le build di sviluppo
+morirebbero dopo 30 giorni: trappola, e ucciderebbe lo standalone contro la regola 11).
+
+**Il wet, non il plugin** — a scadenza il plugin continua a caricarsi e il dry continua a
+passare: è il principio di **FR-68** applicato in anticipo. Un tester che riapre un progetto
+dopo la scadenza ritrova il suo segnale asciutto, non una traccia muta.
+
+**Dove si innesta** — `processBlock` forza `effectiveWetLevel = 0.0f` accanto al Bypass, che fa
+già la stessa cosa (`PluginProcessor.cpp`). Il valore finisce in `wetGlide`, che lo interpola
+campione per campione sulla rampa anti-click di 8 ms **già esistente**: nessuna dissolvenza
+nuova da scrivere, nessun rischio di click. L'ora si legge in `prepareToPlay` e in
+`timerCallback` (che gira già a 250 ms sul message thread); `processBlock` legge **solo** un
+flag atomico — il pattern che la regola 1 consente esplicitamente.
+
+**Due banchi, perché sono due difetti diversi** — `beta_expiry_test` copre *quando* scade;
+`beta_gate_audio_test` copre *cosa fa all'audio*, istanziando il processore intero con le macro
+forzate a "sempre scaduta". Senza il secondo, un'aritmetica giusta collegata male spedirebbe una
+versione illimitata senza che nulla lo segnali. Misurato: wet a **4.3e-9** (il residuo è il dry
+a `cos(π/2)` in virgola singola, non wet che sfugge) e dry a **0.0992 contro 0.0992** della
+sorgente. 13/13 suite verdi in 2.2 s.
+
+**Il limite, esplicito** — chiunque sposti indietro l'orologio di sistema riottiene il wet, e il
+caso "orologio prima della data di build" è trattato **deliberatamente come non scaduto**:
+bloccare un tester dall'orologio sbagliato costa più del pirata ingenuo, e per questi
+destinatari spostare l'orologio rompe iLok e mezzo parco plugin installato. È un deterrente fra
+persone che si conoscono, non un DRM. La protezione vera è M6/A-01 e non esiste.
+
+**Stato** — Attiva e **temporanea**. Quando arriverà il licensing (A-01), `BetaGate.h`,
+l'option e i due punti d'innesto **vanno cancellati**, non fatti evolvere: FR-64 chiede la
+verifica offline di una licenza firmata, che è un altro problema con un'altra forma.
+
+*(Nota: `PRD` §10.1 chiede per il trial futuro un fade ≥20 ms. Qui si riusano gli 8 ms del
+declick esistente, che è la rampa provata del plugin. Se FR-62 vorrà i 20 ms, avrà la sua rampa
+— divergenza segnalata, non silenziosa.)*
+
+---
 # Decisioni aperte
 
 | ID | Decisione | Scadenza | Nota |
 |---|---|---|---|
 | A-01 | **Backend di licensing** | M5 (scaduta) | Criteri: IVA/MOSS UE, subscription native, qualità dell'SDK C++, costo per transazione. Costruirlo in proprio è sconsigliato. `LicenseManager` va comunque dietro interfaccia astratta. `src/licensing/` è **vuota** |
-| A-02 | **Nome prodotto, marchio, dominio** | prima della beta | Bloccano `PLUGIN_MANUFACTURER_CODE` (`Hzso`), `PLUGIN_CODE` (`Hmz1`), `COMPANY_NAME` (`"TBD"`), `BUNDLE_ID`. Cambiarli dopo il rilascio rompe i progetti salvati, come D-01 |
+| A-02 | **Nome prodotto, marchio, dominio** | prima della **vendita** (non più della beta) | **Ridimensionata da D-24**: non blocca più la beta. `PLUGIN_MANUFACTURER_CODE` (`Hzso`) e `PLUGIN_CODE` (`Hmz1`) sono **congelati** e indipendenti dal nome; `PRODUCT_NAME`/`COMPANY_NAME`/`BUNDLE_ID` si cambiano senza rompere i progetti salvati. Resta da decidere per marchio, dominio e canale di vendita |
 | A-03 | **Tipo di licenza JUCE** | prima della beta | Indie vs commerciale, in funzione del fatturato previsto |
-| A-04 | **Certificati di firma e notarizzazione** | era M0 | Apple Developer ID + code signing Windows. Il lead time più lungo del progetto, mai avviato |
+| A-04 | **Certificati di firma e notarizzazione** | **rimandata per decisione → D-25** | Apple Developer ID + code signing Windows. Non più "mai avviata" per dimenticanza: rimandata sapendo cosa costa. Torna urgente al **primo** di questi tre — (1) un tester si blocca sulla quarantena, (2) serve un installer `.pkg`/`.exe` (FR-71, M8), (3) qualunque data di rilascio meno 8 settimane. Vincolo da sapere ora: Apple non accetta ditte individuali per gli account Organization; un account Individual si converte conservando Team ID e certificati |
 | A-05 | **Sotto-blocchi in `processBlock`** | non pianificata | Diagnosi di s.13: la frequenza di controllo del motore è il reciproco del block size dell'host. Fix previsto (ciclo a sotto-blocchi 64–128 campioni) **mai scritto**. Intervento strutturale: da decidere **con l'utente** come trattare i messaggi MIDI, oggi consumati una volta per blocco. Misurare prima di implementare |
 | ~~A-06~~ | ~~**CI: `ctest` invece dei tre `g++` a mano**~~ | **RISOLTA in s.36 → D-23** | Era: conseguenza di D-11, con 8 suite su 11 fuori dal gate e ogni target nuovo che restava fuori da solo. Ora la CI esegue `ctest` (11/11, Windows e macOS) e una guardia impedisce che un banco nuovo scivoli fuori in silenzio |
 | A-07 | **Preset di fabbrica** | — | Solo "Min" è verificato contro il prototipo M4L. Gli altri 6 sono voicing jazz generici. Contenuto oltre i 7 tipi base ancora da decidere |
