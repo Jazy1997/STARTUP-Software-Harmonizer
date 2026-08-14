@@ -712,6 +712,17 @@ Organization: quando si costituirà dovrà essere una società di capitali. Un a
 aperto ora si converte più tardi **conservando Team ID e certificati**, quindi iscriversi come
 persona fisica non sarà lavoro buttato.
 
+**Verificato in run #27** (14/08/2026, dai log): `codesign -dv` restituisce `Signature=adhoc` su
+entrambi i bundle, `pkg/` contiene i bundle più `LEGGIMI.md`, gli artefatti sono stati caricati
+col nome del tester ripulito. `ctest` **13/13 su Windows e macOS**. La pacchettizzazione non ha
+più niente di non verificato.
+
+⚠️ **Da non ripetere quando A-04 si riaprirà:** il passo di firma usa `codesign --force --deep`.
+Per una firma ad-hoc è innocuo, ma **Apple ha deprecato `--deep` per firmare** (resta valido per
+verificare): con un Developer ID vero il codice annidato va firmato singolarmente dall'interno
+verso l'esterno, altrimenti la notarizzazione può rifiutare o produrre firme fragili. Da
+ricontrollare sulla documentazione Apple al momento di usarlo davvero, non da dare per scontato.
+
 **Stato** — Attiva. Scade al primo dei tre grilletti.
 
 ---
