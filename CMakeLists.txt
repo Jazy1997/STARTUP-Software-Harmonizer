@@ -283,6 +283,22 @@ add_executable(beta_expiry_test
 target_include_directories(beta_expiry_test PRIVATE src)
 target_compile_features(beta_expiry_test PRIVATE cxx_std_20)
 
+# -----------------------------------------------------------------------------
+# SONDE DIAGNOSTICHE — tutte EXCLUDE_FROM_ALL (A-09, sessione 37).
+#
+# Nessuna di queste puo' girare in CI: vogliono i file WAV di `SAMPLE TEST/`, che
+# non sono versionati. Fino a s.37 venivano comunque COMPILATE a ogni run, perche'
+# `cmake --build` senza `--target` costruisce tutto — e ognuna si trascina dietro
+# PSOLA/Voice/PitchDetector, moltiplicato per due architetture su macOS. Lavoro
+# buttato, confermato nei log del run #27.
+#
+# Con EXCLUDE_FROM_ALL restano a disposizione ma vanno chieste per nome:
+#   cmake --build build --config Release --target degree_trace_probe
+#
+# Non sono in `ctest` e non lo saranno: un banco che dipende da file esterni
+# nasce `_probe`, non `_test` (D-23).
+# -----------------------------------------------------------------------------
+
 # Strumento diagnostico OFFLINE per il click "in mezzo alla nota" (sessione
 # 17, segnalato dopo aver riascoltato il fix di sessione 16): legge un file
 # WAV vero fornito dall'utente e cerca discontinuita' anomale con la stessa
@@ -291,7 +307,7 @@ target_compile_features(beta_expiry_test PRIVATE cxx_std_20)
 # PitchDetector reale del plugin (Cycfi Q, nessuna dipendenza JUCE). NON in
 # ctest: dipende da file WAV esterni non versionati nel repo, si lancia a
 # mano con il percorso del file come argomento.
-add_executable(sample_click_finder
+add_executable(sample_click_finder EXCLUDE_FROM_ALL
     tests/sample_click_finder.cpp
     src/voices/Voice.cpp
     src/dsp/PsolaShifter.cpp
@@ -314,7 +330,7 @@ target_compile_features(sample_click_finder PRIVATE cxx_std_20)
 # PsolaShifter (per la latenza dichiarata) oltre a SampleAnalysis.h/
 # TestSignals.h, entrambi header-only: nessuna dipendenza JUCE. NON in
 # ctest: dipende da file WAV esterni forniti dall'utente, non versionati.
-add_executable(real_export_probe
+add_executable(real_export_probe EXCLUDE_FROM_ALL
     tests/real_export_probe.cpp
     src/dsp/PsolaShifter.cpp
 )
@@ -331,7 +347,7 @@ target_compile_features(real_export_probe PRIVATE cxx_std_20)
 # real_export_probe (solo PsolaShifter, per SampleAnalysis.h/TestSignals.h
 # header-only). NON in ctest: dipende da file WAV esterni forniti
 # dall'utente, non versionati (SAMPLE TEST/DBG Timbro/).
-add_executable(voice_reference_probe
+add_executable(voice_reference_probe EXCLUDE_FROM_ALL
     tests/voice_reference_probe.cpp
     src/dsp/PsolaShifter.cpp
 )
@@ -342,7 +358,7 @@ target_compile_features(voice_reference_probe PRIVATE cxx_std_20)
 # dump dell'inviluppo RMS fine di UN SOLO file WAV, per misurare con
 # precisione buchi gia' individuati a occhio in un DAW. Vedi
 # tests/envelope_probe.cpp. NON in ctest: dipende da file WAV esterni.
-add_executable(envelope_probe
+add_executable(envelope_probe EXCLUDE_FROM_ALL
     tests/envelope_probe.cpp
 )
 target_include_directories(envelope_probe PRIVATE src)
@@ -354,7 +370,7 @@ target_compile_features(envelope_probe PRIVATE cxx_std_20)
 # serve a dire se il difetto nasce PRIMA della sintesi o dentro. Gira i moduli
 # veri (PitchDetector, OnsetDetector, PitchLatch, stepEmptyCellHold). Vedi
 # tests/degree_trace_probe.cpp. NON in ctest: dipende da WAV esterni.
-add_executable(degree_trace_probe
+add_executable(degree_trace_probe EXCLUDE_FROM_ALL
     tests/degree_trace_probe.cpp
     src/dsp/PitchDetector.cpp
     src/dsp/OnsetDetector.cpp
@@ -478,6 +494,28 @@ target_link_libraries(beta_gate_audio_test PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
 )
+
+# COSTO DELLA BUILD SU macOS (A-09, sessione 37) — misurato nel run #27: il job
+# macOS ha impiegato 3h 13m contro i 15m di Windows, e le tre ore sono TUTTE nel
+# passo di compilazione.
+#
+# Il plugin resta universal (arm64;x86_64): e' cio' che si spedisce, e deve girare
+# sia su Apple Silicon sia su Intel. Ma i BANCHI e le SONDE vengono eseguiti solo
+# sulla macchina che li compila, e la CI gira su runner arm64: la loro fetta
+# x86_64 viene compilata e non eseguita MAI DA NESSUNO. E' lavoro buttato al 100%,
+# e toglierlo non riduce la copertura di un millimetro.
+#
+# La lista dei target NON e' scritta a mano di proposito: si ricava dal
+# buildsystem, cosi' un banco nuovo eredita la regola da solo. Scriverla a mano
+# ripeterebbe la causa di A-06 — qualcosa che resta indietro in silenzio.
+if(APPLE)
+    get_property(_harmonizer_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_t IN LISTS _harmonizer_targets)
+        if(_t MATCHES "_(test|probe)$" OR _t STREQUAL "sample_click_finder")
+            set_target_properties(${_t} PROPERTIES OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+        endif()
+    endforeach()
+endif()
 
 enable_testing()
 add_test(NAME psola COMMAND psola_test)
