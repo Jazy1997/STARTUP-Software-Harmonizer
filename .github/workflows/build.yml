@@ -99,6 +99,48 @@ jobs:
         with:
           submodules: recursive
 
+      # ===================================================================
+      # CACHE DI COMPILAZIONE (A-09, sessione 37) — solo macOS.
+      #
+      # Perche' serve: JUCE, col suo CMake, NON condivide i moduli compilati fra
+      # target — ogni consumatore ricompila juce_gui_basics, juce_graphics,
+      # juce_audio_processors... per conto proprio. Misurato nel run #28: 45
+      # unita' JUCE compilate in un solo run, 14 per il plugin e 14 CIASCUNO per
+      # mode_switch_test e beta_gate_audio_test. Su macOS sono unity build in
+      # Objective-C++, le piu' pesanti che ci siano.
+      #
+      # LIMITE DA CONOSCERE: ccache si arrende (in silenzio, tornando al
+      # compilatore vero) quando vede piu' di un -arch nella stessa invocazione,
+      # perche' il preprocessore ne accetta uno solo. Quindi il PLUGIN, che e'
+      # universal e va spedito tale, NON viene messo in cache. Vengono messi in
+      # cache i BANCHI, che dalla stessa sessione 37 sono a una sola
+      # architettura: cioe' esattamente la parte duplicata.
+      #
+      # Windows non lo usa: sta a 15 minuti e ccache con MSVC ha complicazioni
+      # che non valgono quel guadagno.
+      # ===================================================================
+      - name: Prepara ccache (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          which ccache || brew install ccache
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          # Tetto basso di proposito: la cache viene caricata e scaricata a ogni
+          # run, e il repo ha un limite complessivo. Meglio piccola e calda.
+          echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
+
+      - name: Cache di compilazione (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # Chiave nuova a ogni commit, con ripiego sulla piu' recente: e' lo
+          # schema giusto per una cache di compilatore, dove un riuso parziale
+          # vale comunque.
+          key: ccache-macos-${{ github.sha }}
+          restore-keys: |
+            ccache-macos-
+
       # Su push/PR i tre input non esistono, EXTRA resta vuoto e il comando e'
       # esattamente `cmake -B build -DCMAKE_BUILD_TYPE=Release` come prima.
       # Gli input passano da env e non interpolati nello script: un nome di
@@ -117,10 +159,33 @@ jobs:
                    "-DHARMONIZER_BETA_TESTER=${BETA_TESTER}")
             echo "::notice::BUILD BETA — scade fra ${BETA_DAYS} giorni, tester: ${BETA_TESTER:-(nessuno)}"
           fi
+          # OBJC/OBJCXX non sono un di piu': su macOS i moduli JUCE sono .mm, ed
+          # e' li' che sta il costo. Senza queste due righe la cache non
+          # toccherebbe proprio cio' per cui l'abbiamo messa.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ccache -z
+            EXTRA+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache
+                    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                    -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache
+                    -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache)
+          fi
           cmake -B build -DCMAKE_BUILD_TYPE=Release "${EXTRA[@]}"
 
       - name: Build
         run: cmake --build build --config Release --parallel
+
+      # Senza questo, del prossimo run si saprebbe solo il tempo totale e non se
+      # la cache abbia davvero agito. Il numero da guardare e' il rapporto di
+      # colpi: al primo run sara' ~0% (cache vuota), dal secondo in poi deve
+      # salire. Se resta a zero, ccache non sta intercettando niente e la strada
+      # e' sbagliata — vedi A-09.
+      - name: Statistiche ccache (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ccache -s
+          HITS=$(ccache -s | grep -iE "cache hit rate" | head -1)
+          echo "::notice::ccache — ${HITS:-nessuna statistica disponibile}"
 
       # A-06 (sessione 36) — LA rete di regressione: tutte le suite registrate
       # con add_test(), su Windows E macOS. Prima di questo passo la CI ne
